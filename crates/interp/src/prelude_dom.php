@@ -101,3 +101,7 @@ class DOMEntityReference extends DOMNode
 class DOMProcessingInstruction extends DOMNode
 {
 }
+
+class DOMXPath
+{
+}

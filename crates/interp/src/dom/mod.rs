@@ -11,6 +11,7 @@ mod save;
 mod tables;
 mod tree;
 mod xml_parse;
+mod xpath;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -62,6 +63,8 @@ pub enum ListKind {
     /// getElementsByTagName(NS): namespace filter (None: any), local or
     /// qualified name ("*": any).
     Tag { root: Id, ns: Option<Option<String>>, name: String },
+    /// A fixed result (DOMXPath).
+    Static(Vec<Id>),
     Attrs(Id),
     Empty,
 }
@@ -103,6 +106,7 @@ impl ListData {
         let ids: Vec<Id> = match &self.kind {
             ListKind::Children(p) => d.children(*p).collect(),
             ListKind::Attrs(el) => d.n(*el).attrs.clone(),
+            ListKind::Static(v) => v.clone(),
             ListKind::Empty => vec![],
             ListKind::Tag { root, ns, name } => d
                 .descendants(*root)
@@ -327,6 +331,7 @@ pub fn natives() -> Vec<(&'static str, &'static str, NativeMethod)> {
         ("domnamednodemap", "getnameditem", map_named_item),
         ("domnamednodemap", "getnameditemns", map_named_item_ns),
     ];
+    v.extend(xpath_natives());
     v.extend(node::natives());
     v.extend(document::natives());
     v.extend(props::natives());
@@ -393,6 +398,139 @@ fn map_named_item_ns(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<crate::class::C
         n.local() == local && n.ns == ns
     });
     wrap_opt(it, &d, found)
+}
+
+// ---- DOMXPath -------------------------------------------------------------------
+
+struct XPathData {
+    doc: DocRef,
+    /// The DOMDocument object (->document).
+    obj: Rc<Obj>,
+    ns: RefCell<HashMap<String, String>>,
+    register_node_ns: bool,
+}
+
+impl NativeData for XPathData {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    fn clone_data(&self) -> Option<Box<dyn NativeData>> {
+        None
+    }
+    fn view_props(&self) -> Vec<(Rc<str>, Value)> {
+        vec![(Rc::from("document"), Value::str("(object value omitted)")), (Rc::from("registerNodeNamespaces"), Value::Bool(self.register_node_ns))]
+    }
+}
+
+fn xpath_of<T>(it: &Interp, this: Option<&Rc<Obj>>, f: impl FnOnce(&XPathData) -> T) -> R<T> {
+    let o = this.ok_or_else(|| it.error("Error", "Non-static method called statically"))?;
+    match &*o.internal() {
+        Internal::Data(d) => match d.as_any().downcast_ref::<XPathData>() {
+            Some(x) => Ok(f(x)),
+            None => Err(it.error("Error", "Invalid DOMXPath object")),
+        },
+        _ => Err(it.error("Error", "Invalid DOMXPath object")),
+    }
+}
+
+fn xpath_construct(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<crate::class::Class>, a: Vec<Value>) -> R<Value> {
+    let (doc, id, obj) = node_arg(it, &a, 0, "DOMXPath::__construct", "document", "DOMDocument")?;
+    if id != 0 {
+        return Err(it.error("TypeError", &format!("DOMXPath::__construct(): Argument #1 ($document) must be of type DOMDocument, {} given", obj.class.name)));
+    }
+    let register_node_ns = a.get(1).is_none_or(|v| v.truthy());
+    this.unwrap().set_internal(Internal::Data(Box::new(XPathData { doc, obj, ns: RefCell::new(HashMap::new()), register_node_ns })));
+    Ok(Value::Null)
+}
+
+/// evaluate() / query(): (is_query).
+fn xpath_run(it: &Interp, this: Option<&Rc<Obj>>, a: Vec<Value>, query: bool) -> R<Value> {
+    let func = if query { "DOMXPath::query" } else { "DOMXPath::evaluate" };
+    let expr = text(it, &a, 0)?;
+    let (doc, mut ns, reg) = xpath_of(it, this, |x| (x.doc.clone(), x.ns.borrow().clone(), x.register_node_ns))?;
+    let ctx = match a.get(1).map(|v| v.deref()) {
+        Some(Value::Object(o)) => match node_of(&o) {
+            Some((d, id)) if Rc::ptr_eq(&d, &doc) => id,
+            Some(_) => return Err(dom_error(it, WRONG_DOCUMENT_ERR)),
+            None => return Err(it.error("TypeError", &format!("{func}(): Argument #2 ($contextNode) must be of type ?DOMNode, {} given", o.class.name))),
+        },
+        // PHP's default context is the root element.
+        _ => doc.borrow().document_element().unwrap_or(0),
+    };
+    let reg = a.get(2).map_or(reg, |v| v.truthy());
+    let result = {
+        let d = doc.borrow();
+        if reg {
+            // Namespaces in scope at the context node (or the root
+            // element) are usable by their prefixes.
+            let mut cur = if ctx == 0 { d.document_element() } else { Some(ctx) };
+            while let Some(c) = cur {
+                for (p, u) in &d.n(c).ns_defs {
+                    if let Some(p) = p {
+                        ns.entry(p.clone()).or_insert_with(|| u.clone());
+                    }
+                }
+                cur = d.n(c).parent;
+            }
+        }
+        xpath::evaluate(&d, &ns, &expr, ctx)
+    };
+    match result {
+        Ok(xpath::XValue::Nodes(ids)) => new_list(it, Some(doc), ListKind::Static(ids), "DOMNodeList"),
+        Ok(_) if query => new_list(it, Some(doc), ListKind::Static(vec![]), "DOMNodeList"),
+        Ok(xpath::XValue::Num(n)) => Ok(Value::Float(n)),
+        Ok(xpath::XValue::Str(s)) => Ok(Value::str(&s)),
+        Ok(xpath::XValue::Bool(b)) => Ok(Value::Bool(b)),
+        Err(xpath::Error::Syntax) => {
+            it.warn(&format!("{func}(): Invalid expression"));
+            Ok(Value::Bool(false))
+        }
+        Err(xpath::Error::Eval(msg)) => {
+            it.warn(&format!("{func}(): {msg}"));
+            Ok(Value::Bool(false))
+        }
+    }
+}
+
+fn xpath_natives() -> Vec<(&'static str, &'static str, NativeMethod)> {
+    vec![
+        ("domxpath", "__construct", xpath_construct as NativeMethod),
+        ("domxpath", "query", |it, this, _, a| xpath_run(it, this, a, true)),
+        ("domxpath", "evaluate", |it, this, _, a| xpath_run(it, this, a, false)),
+        ("domxpath", "registernamespace", |it, this, _, a| {
+            let (p, u) = (text(it, &a, 0)?, text(it, &a, 1)?);
+            xpath_of(it, this, |x| x.ns.borrow_mut().insert(p, u))?;
+            Ok(Value::Bool(true))
+        }),
+        ("domxpath", "registerphpfunctions", |_, _, _, _| Ok(Value::Null)),
+        ("domxpath", "registerphpfunctionns", |_, _, _, _| Ok(Value::Null)),
+        ("domxpath", "__get", |it, this, _, a| {
+            let name = text(it, &a, 0)?;
+            match name.as_str() {
+                "document" => xpath_of(it, this, |x| Value::Object(x.obj.clone())),
+                "registerNodeNamespaces" => xpath_of(it, this, |x| Value::Bool(x.register_node_ns)),
+                _ => {
+                    it.warn(&format!("Undefined property: DOMXPath::${name}"));
+                    Ok(Value::Null)
+                }
+            }
+        }),
+        ("domxpath", "static quote", |it, _, _, a| {
+            let s = text(it, &a, 0)?;
+            Ok(Value::str(&if !s.contains('\'') {
+                format!("'{s}'")
+            } else if !s.contains('"') {
+                format!("\"{s}\"")
+            } else {
+                // concat('...', "'", '...')
+                let parts: Vec<String> = s.split('\'').map(|p| format!("'{p}'")).collect();
+                format!("concat({})", parts.join(", \"'\", "))
+            }))
+        }),
+    ]
 }
 
 pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {

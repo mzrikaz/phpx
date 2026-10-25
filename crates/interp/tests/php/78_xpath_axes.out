@@ -1,0 +1,66 @@
+/lib/shelf/book                              book@2001 book@1999 book@2010
+//book[@year > 2000]                         book@2001 book@2010
+//book[last()]                               book@1999 book@2010
+//book[1]                                    book@2001 book@2010
+(//book)[1]                                  book@2001
+//book[position() = 2]                       book@1999
+//title/text()                               #text=A #text=B #text=C
+//book/@year                                 year=2001 year=1999 year=2010
+//shelf[@id="s2"]/book/title                 title
+//book[price < 10]/title                     title
+count(//book)                                float(3)
+sum(//price)                                 float(35.5)
+//book/ancestor::shelf                       shelf shelf
+//title[.="C"]/ancestor::*                   lib shelf book@2010
+//book[2]/preceding-sibling::book            book@2001
+//title[.="A"]/following::title              title title
+//title[.="C"]/preceding::title              title title
+//book[title="B"]/following-sibling::*       
+//shelf[1]/descendant::*                     book@2001 title price book@1999 title price
+//shelf[2]/node()                            book@2010 #comment=note pi=data
+//comment()                                  #comment=note
+//processing-instruction()                   pi=data
+//processing-instruction("pi")               pi=data
+//book[lang("en")]                           book@2010
+//title | //price                            title price title price title price
+//price | //title                            title price title price title price
+string(//book[2]/@year)                      string(4) "1999"
+number("12.50")                              float(12.5)
+number("abc")                                float(NAN)
+concat("a", "b", 3)                          string(3) "ab3"
+normalize-space("  a  b ")                   string(3) "a b"
+string-length("héllo")                      float(5)
+substring("hello", 2)                        string(4) "ello"
+substring-before("a-b", "-")                 string(1) "a"
+starts-with("phpx", "ph")                    bool(true)
+boolean(//nothing)                           bool(false)
+not(//book)                                  bool(false)
+floor(2.7)                                   float(2)
+ceiling(2.1)                                 float(3)
+round(2.5)                                   float(3)
+round(-2.5)                                  float(-2)
+10 mod 3                                     float(1)
+-10 mod 3                                    float(-1)
+7 div 2                                      float(3.5)
+1 = 1.0                                      bool(true)
+"1" = 1                                      bool(true)
+//book/@year = 1999                          bool(true)
+//book/@year != 1999                         bool(true)
+true() and false()                           bool(false)
+local-name(//book[1]/*)                      string(5) "title"
+name(/*)                                     string(3) "lib"
+//*[local-name()="price"][. > 6]             price price
+//book[title][price > 1][2]                  book@1999
+//shelf/book[1]                              book@2001 book@2010
+//*[@*]                                      shelf book@2001 book@1999 shelf book@2010
+//@*                                         id=s1 year=2001 lang=en year=1999 id=s2 year=2010 xml:lang=en-GB
+id("s2")                                     
+/                                            #document=
+/*                                           lib
+//book[../@id="s1"]                          book@2001 book@1999
+//book[not(@lang)]                           book@1999 book@2010
+.                                            lib
+..                                           #document=
+title                                        title
+../../@id                                    id=s1
+./following::book                            book@1999 book@2010
