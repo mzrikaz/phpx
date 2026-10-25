@@ -276,7 +276,9 @@ pub(crate) fn register_io(fd: BorrowedFd<'_>) -> io::Result<()> {
 }
 
 pub(crate) fn deregister_io(fd: BorrowedFd<'_>) {
-    let _ = POLLER.with(|p| p.delete(fd));
+    // During thread exit the poller may already be gone (a socket held by
+    // a thread-local dropped later); closing the fd unregisters it anyway.
+    let _ = POLLER.try_with(|p| p.delete(fd));
 }
 
 /// Park until one of `fds` (each with its read / write interest) is ready
