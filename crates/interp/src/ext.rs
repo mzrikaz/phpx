@@ -1135,7 +1135,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             h.update(&key.iter().map(|b| b ^ 0x36).collect::<Vec<_>>());
         }
         let cls = it.find_class("HashContext")?.expect("prelude HashContext");
-        let o = Obj::new(cls, Internal::Data(Box::new(HashState { h, hmac_key })));
+        let o = Obj::new(cls, Internal::Data(Box::new(Box::new(HashState { h, hmac_key }))));
         Ok(Value::Object(o))
     });
     t.insert("hash_copy", |it, _, a| match arg(a, 0) {

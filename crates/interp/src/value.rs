@@ -565,7 +565,8 @@ pub enum Internal {
     Promise(phpx_runtime::Promise<crate::interp::Outcome>),
     Generator(Rc<crate::generator::GenHandle>),
     /// Native state of built-in classes (HashContext, ...).
-    Data(Box<dyn std::any::Any>),
+    /// Double-boxed so `Internal` stays two words.
+    Data(Box<Box<dyn std::any::Any>>),
 }
 
 // ---- conversions -------------------------------------------------------------

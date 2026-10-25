@@ -19,6 +19,10 @@ use crate::value::Value;
 pub struct Shape {
     pub names: Vec<Rc<str>>,
     index: FxHashMap<Rc<str>, u32>,
+    /// Shared shapes live as long as their root (a class, or the empty
+    /// shape) and may be cached by address in generated code. Private
+    /// ("dictionary mode") shapes belong to one object and are never cached.
+    pub shared: bool,
     /// The first `declared` names are class-declared properties: unsetting
     /// one keeps its slot (it returns to its declared position when set
     /// again, as in PHP). Later names are dynamic.
@@ -26,20 +30,25 @@ pub struct Shape {
     transitions: RefCell<FxHashMap<Rc<str>, Rc<Shape>>>,
 }
 
+/// Beyond this many properties, or this many distinct successor shapes,
+/// objects get private shapes (e.g. stdClass used as a dictionary).
+const MAX_SHARED_PROPS: usize = 64;
+const MAX_TRANSITIONS: usize = 64;
+
 thread_local! {
-    static EMPTY: Rc<Shape> = Rc::new(Shape::new(vec![], 0));
+    static EMPTY: Rc<Shape> = Rc::new(Shape::new(vec![], 0, true));
 }
 
 impl Shape {
-    pub fn new(names: Vec<Rc<str>>, declared: usize) -> Shape {
+    pub fn new(names: Vec<Rc<str>>, declared: usize, shared: bool) -> Shape {
         let index = names.iter().enumerate().map(|(i, n)| (n.clone(), i as u32)).collect();
-        Shape { names, index, declared, transitions: RefCell::new(FxHashMap::default()) }
+        Shape { names, index, declared, shared, transitions: RefCell::new(FxHashMap::default()) }
     }
 
-    /// Shape for a class's declared properties.
+    /// Shape for a class's declared properties (lives with the class).
     pub fn declared(names: Vec<Rc<str>>) -> Rc<Shape> {
         let n = names.len();
-        Rc::new(Shape::new(names, n))
+        Rc::new(Shape::new(names, n, true))
     }
 
     #[inline]
@@ -51,27 +60,57 @@ impl Shape {
         self.index.get(name).map(|&i| i as usize)
     }
 
-    fn child(self: &Rc<Shape>, name: Rc<str>) -> Rc<Shape> {
-        if let Some(s) = self.transitions.borrow().get(&name) {
-            return s.clone();
+    /// Shared child shape with `name` appended, or None when the tree
+    /// should stop growing (many properties or many different successors:
+    /// the object switches to a private shape).
+    fn child(self: &Rc<Shape>, name: &Rc<str>) -> Option<Rc<Shape>> {
+        if let Some(s) = self.transitions.borrow().get(name) {
+            return Some(s.clone());
+        }
+        if self.names.len() >= MAX_SHARED_PROPS || self.transitions.borrow().len() >= MAX_TRANSITIONS {
+            return None;
         }
         let mut names = self.names.clone();
         names.push(name.clone());
-        let s = Rc::new(Shape::new(names, self.declared));
-        self.transitions.borrow_mut().insert(name, s.clone());
-        s
+        let s = Rc::new(Shape::new(names, self.declared, true));
+        self.transitions.borrow_mut().insert(name.clone(), s.clone());
+        Some(s)
+    }
+
+    fn push_private(&mut self, name: Rc<str>) {
+        self.index.insert(name.clone(), self.names.len() as u32);
+        self.names.push(name);
+    }
+
+    fn private_copy(&self) -> Shape {
+        Shape::new(self.names.clone(), self.declared, false)
     }
 }
 
-#[derive(Clone)]
+/// `#[repr(C)]`: generated code reads `shape` (offset 0) and `data`
+/// (offset 8) directly for inline-cached property access.
+#[repr(C)]
 pub struct Props {
     shape: Rc<Shape>,
+    /// Always `vals.as_mut_ptr()`; refreshed after anything that can move
+    /// the buffer.
+    data: *mut Option<Value>,
     vals: Vec<Option<Value>>,
+}
+
+impl Clone for Props {
+    fn clone(&self) -> Self {
+        let mut p = Props { shape: self.shape.clone(), data: std::ptr::null_mut(), vals: self.vals.clone() };
+        p.sync();
+        p
+    }
 }
 
 impl Default for Props {
     fn default() -> Self {
-        Props { shape: EMPTY.with(Rc::clone), vals: vec![] }
+        let mut p = Props { shape: EMPTY.with(Rc::clone), data: std::ptr::null_mut(), vals: vec![] };
+        p.sync();
+        p
     }
 }
 
@@ -80,7 +119,14 @@ impl Props {
     /// uninitialized).
     pub fn with_shape(shape: Rc<Shape>, vals: Vec<Option<Value>>) -> Props {
         debug_assert_eq!(shape.names.len(), vals.len());
-        Props { shape, vals }
+        let mut p = Props { shape, data: std::ptr::null_mut(), vals };
+        p.sync();
+        p
+    }
+
+    #[inline]
+    fn sync(&mut self) {
+        self.data = self.vals.as_mut_ptr();
     }
 
     pub fn shape(&self) -> &Rc<Shape> {
@@ -125,8 +171,27 @@ impl Props {
         match self.shape.slot(&name) {
             Some(i) => self.vals[i].replace(v),
             None => {
-                self.shape = self.shape.child(name);
+                if self.shape.shared {
+                    self.shape = match self.shape.child(&name) {
+                        Some(c) => c,
+                        None => {
+                            let mut p = self.shape.private_copy();
+                            p.push_private(name);
+                            Rc::new(p)
+                        }
+                    };
+                } else {
+                    match Rc::get_mut(&mut self.shape) {
+                        Some(sh) => sh.push_private(name),
+                        None => {
+                            let mut p = self.shape.private_copy();
+                            p.push_private(name);
+                            self.shape = Rc::new(p);
+                        }
+                    }
+                }
                 self.vals.push(Some(v));
+                self.sync();
                 None
             }
         }
@@ -156,7 +221,8 @@ impl Props {
             let mut names = self.shape.names.clone();
             names.remove(i);
             self.vals.remove(i);
-            self.shape = Rc::new(Shape::new(names, self.shape.declared));
+            self.sync();
+            self.shape = Rc::new(Shape::new(names, self.shape.declared, false));
         }
         old
     }
@@ -194,5 +260,11 @@ mod tests {
         // Guard against layout regressions: objects must stay small.
         assert!(std::mem::size_of::<crate::value::Obj>() <= 96);
         assert_eq!(std::mem::size_of::<Option<crate::value::Value>>(), 16);
+        let mut p = super::Props::default();
+        p.insert(std::rc::Rc::from("a"), crate::value::Value::Int(1));
+        p.insert(std::rc::Rc::from("b"), crate::value::Value::Int(2));
+        let q = p.clone();
+        assert_eq!(q.data, q.vals.as_ptr() as *mut _);
+        assert_eq!(p.data, p.vals.as_ptr() as *mut _);
     }
 }
