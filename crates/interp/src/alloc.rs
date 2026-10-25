@@ -49,42 +49,147 @@ fn charge(size: usize) {
     }
 }
 
+// Small blocks (most values: strings, arrays, objects) come from per-thread
+// free lists of 16-byte size classes, carved from larger chunks, like PHP's
+// zend_mm bins: no per-block header, no rounding beyond 16 bytes, and a
+// push/pop instead of a general-purpose malloc. Freed blocks go to the
+// freeing thread's list (memory is interchangeable between threads); chunks
+// are kept for reuse, as PHP keeps its heap for the request.
+const CLASSES: usize = 16;
+const MAX_SMALL: usize = CLASSES * 16;
+const CHUNK: usize = 32 * 1024;
+
+thread_local! {
+    static FREE: std::cell::Cell<[*mut u8; CLASSES]> = const { std::cell::Cell::new([std::ptr::null_mut(); CLASSES]) };
+}
+
+#[inline]
+fn class_of(l: &Layout) -> Option<usize> {
+    (l.size() <= MAX_SMALL && l.align() <= 16).then(|| (l.size().max(1) + 15) / 16 - 1)
+}
+
+#[inline]
+unsafe fn small_alloc(c: usize) -> *mut u8 {
+    let mut heads = FREE.with(|f| f.get());
+    let mut p = heads[c];
+    if p.is_null() {
+        p = refill(c);
+        if p.is_null() {
+            return p;
+        }
+    }
+    heads[c] = *(p as *mut *mut u8);
+    FREE.with(|f| f.set(heads));
+    p
+}
+
+/// Carve a new chunk into blocks of class `c`; returns the list head.
+#[cold]
+unsafe fn refill(c: usize) -> *mut u8 {
+    let size = (c + 1) * 16;
+    let base = System.alloc(Layout::from_size_align_unchecked(CHUNK, 16));
+    if base.is_null() {
+        return base;
+    }
+    let n = CHUNK / size;
+    for i in 0..n {
+        let b = base.add(i * size);
+        let next = if i + 1 < n { base.add((i + 1) * size) } else { std::ptr::null_mut() };
+        *(b as *mut *mut u8) = next;
+    }
+    base
+}
+
+#[inline]
+unsafe fn small_free(p: *mut u8, c: usize) {
+    let mut heads = FREE.with(|f| f.get());
+    *(p as *mut *mut u8) = heads[c];
+    heads[c] = p;
+    FREE.with(|f| f.set(heads));
+}
+
+/// Bytes a block really takes (small blocks: their size class).
+#[inline]
+fn block_size(l: &Layout) -> usize {
+    match class_of(l) {
+        Some(c) => (c + 1) * 16,
+        None => l.size(),
+    }
+}
+
+#[inline]
+fn uncharge(size: usize) {
+    USED_C.with(|c| c.set(c.get() - size as isize));
+}
+
 unsafe impl GlobalAlloc for Counting {
     #[inline]
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-        let p = System.alloc(l);
+        let p = match class_of(&l) {
+            Some(c) => small_alloc(c),
+            None => System.alloc(l),
+        };
         if !p.is_null() {
-            charge(l.size());
+            charge(block_size(&l));
         }
         p
     }
 
     #[inline]
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
-        let p = System.alloc_zeroed(l);
+        let p = match class_of(&l) {
+            Some(c) => {
+                let p = small_alloc(c);
+                if !p.is_null() {
+                    std::ptr::write_bytes(p, 0, l.size());
+                }
+                p
+            }
+            None => System.alloc_zeroed(l),
+        };
         if !p.is_null() {
-            charge(l.size());
+            charge(block_size(&l));
         }
         p
     }
 
     #[inline]
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
-        System.dealloc(p, l);
-        USED_C.with(|c| c.set(c.get() - l.size() as isize));
+        match class_of(&l) {
+            Some(c) => small_free(p, c),
+            None => System.dealloc(p, l),
+        }
+        uncharge(block_size(&l));
     }
 
     #[inline]
     unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
-        let q = System.realloc(p, l, new);
-        if !q.is_null() {
-            if new >= l.size() {
-                charge(new - l.size());
-            } else {
-                USED_C.with(|c| c.set(c.get() - (l.size() - new) as isize));
+        let nl = Layout::from_size_align_unchecked(new, l.align());
+        match (class_of(&l), class_of(&nl)) {
+            // Still fits its block.
+            (Some(a), Some(b)) if a == b => p,
+            (None, None) => {
+                let q = System.realloc(p, l, new);
+                if !q.is_null() {
+                    if new >= l.size() {
+                        charge(new - l.size());
+                    } else {
+                        uncharge(l.size() - new);
+                    }
+                }
+                q
+            }
+            _ => {
+                // Moving between a size class and the system allocator
+                // (alloc and dealloc do the accounting).
+                let q = self.alloc(nl);
+                if !q.is_null() {
+                    std::ptr::copy_nonoverlapping(p, q, l.size().min(new));
+                    self.dealloc(p, l);
+                }
+                q
             }
         }
-        q
     }
 }
 
