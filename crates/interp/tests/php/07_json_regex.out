@@ -1,0 +1,161 @@
+{"name":"Ann \"A\" \/ \u00e9","age":30,"score":9.5,"ok":true,"tags":["a","b"],"none":null,"empty":[],"obj":{},"f":1}
+{
+    "name": "Ann \"A\" / é",
+    "age": 30,
+    "score": 9.5,
+    "ok": true,
+    "tags": [
+        "a",
+        "b"
+    ],
+    "none": null,
+    "empty": [],
+    "obj": {},
+    "f": 1
+}
+{"1":"a","2":"b"}["a","b"]"\ud83d\ude00"3.0
+array(5) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    array(1) {
+      ["c"]=>
+      NULL
+    }
+  }
+  ["d"]=>
+  float(1.5)
+  ["e"]=>
+  string(6) "é😀"
+  ["big"]=>
+  float(1.2345678901234567E+19)
+}
+int(2)
+NULL
+int(4)
+string(12) "Syntax error"
+string(3) "str"
+NULL
+JsonException: Syntax error
+[{"id":1,"type":"p"},{"id":2,"type":"p"}]
+int(1)
+array(3) {
+  [0]=>
+  string(7) "2024-05"
+  [1]=>
+  string(4) "2024"
+  [2]=>
+  string(2) "05"
+}
+int(1)
+array(5) {
+  [0]=>
+  string(7) "2024-05"
+  ["year"]=>
+  string(4) "2024"
+  [1]=>
+  string(4) "2024"
+  ["mon"]=>
+  string(2) "05"
+  [2]=>
+  string(2) "05"
+}
+int(3)
+array(3) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(5) "hello"
+    [1]=>
+    string(3) "big"
+    [2]=>
+    string(5) "world"
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    string(1) "h"
+    [1]=>
+    string(1) "b"
+    [2]=>
+    string(1) "w"
+  }
+  [2]=>
+  array(3) {
+    [0]=>
+    string(4) "ello"
+    [1]=>
+    string(2) "ig"
+    [2]=>
+    string(4) "orld"
+  }
+}
+int(2)
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "1"
+    [1]=>
+    string(1) "1"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "2"
+    [1]=>
+    string(1) "2"
+  }
+}
+string(12) "world hello!"
+string(5) "a b c"
+string(2) "cc"
+string(11) "a2 b44 c666"
+array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+  [3]=>
+  string(1) "d"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+array(5) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "-"
+  [2]=>
+  string(1) "b"
+  [3]=>
+  string(1) "-"
+  [4]=>
+  string(1) "c"
+}
+string(22) "Hello\.World\?\(1\+1\)"
+int(1)
+int(1)
+string(2) "42"
+array(2) {
+  [0]=>
+  string(1) "1"
+  [2]=>
+  string(2) "22"
+}
+int(1)
+string(4) "me@X"

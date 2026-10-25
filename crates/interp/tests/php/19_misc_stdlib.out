@@ -1,0 +1,66 @@
+12324kfalse 143
+<p> café &amp; — A … "q" 's' &bogus;
+&lt;caf&eacute;&gt; &quot;q&quot; &#039;s&#039; &amp; &copy; &trade;
+["a","b,c","d\"\"e","f\"g","","h"]
+x,"y z","q""t",,"a,b"
+Array
+(
+    [0] => x
+    [1] => y z
+    [2] => q"t
+    [3] => 
+    [4] => a,b
+)
+int(123)
+bool(false)
+bool(true)
+string(6) "a@b.co"
+bool(false)
+string(18) "http://x.com/p?q=1"
+bool(false)
+bool(false)
+float(1.5)
+bool(false)
+int(60)
+bool(true)
+bool(false)
+string(7) "$2y$12$"
+bool(true)
+$2y$10$.vGA1O9wmRjrwAVXD98HNOgsNpDczlqm3Jq7KnEd1rVAGv3Fykk1a
+cb48cdc9c957c8409000 round trip zz gz
+3488.89R163T522
+Array
+(
+    [0] => 25
+    [1] => Bob
+)
+2 12 apples
+Array
+(
+    [0] => d
+    [1] => t
+    [2] => a
+    [3] => c
+)
+Array
+(
+    [P] => P
+)
+Array
+(
+    [T] => T
+)
+Array
+(
+    [x] => 1
+    [s] => 3
+)
+'it'\''s' true
+Array
+(
+)
+6 8.5.10
+v-7
+003.1
+end
+shutdown arg

@@ -1,0 +1,11 @@
+in f
+~local
+after f
+~x
+x nulled
+~a1
+unset a1
+caught boom
+end
+~global
+~a2

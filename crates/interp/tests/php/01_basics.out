@@ -1,0 +1,99 @@
+float(9.223372036854776E+18)
+float(-9.223372036854776E+18)
+float(1.8446744073709552E+19)
+float(3.5)
+int(2)
+int(1)
+int(-1)
+int(1024)
+float(1.8446744073709552E+19)
+float(0.5)
+int(3)
+float(0.30000000000000004)
+float(1000000000000000)
+float(100000000000000)
+float(1.0E-5)
+float(-0)
+float(1.5E-7)
+float(100)
+float(0.3333333333333333)
+int(8)
+float(2.5)
+float(1000)
+int(42)
+int(1)
+int(-1)
+int(12)
+int(3)
+int(-3)
+float(100)
+string(1) "1"
+bool(false)
+bool(true)
+bool(false)
+int(1)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+int(-1)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+int(3)
+int(15)
+int(5)
+int(-6)
+int(8)
+int(-4)
+string(6) "a12.51"
+int(81)
+string(3) "ab1"
+string(7) "default"
+string(2) "aa"
+string(2) "Ba"
+int(1)
+NULL
+string(1) "
+"
+int(8)
+float(3.141592653589793)
+string(3) "yes"
+string(5) "elvis"
+string(4) "last"
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+string(7) "integer"
+string(6) "double"
+string(6) "string"
+string(4) "NULL"
+string(5) "array"
+string(5) "float"
+int(26)
+int(10)
+int(5)
+int(511)
+int(255)
+int(10)
+float(3)
+float(-3)
+float(1.96)
+float(1200)
+float(-2)
+float(-1)
+int(5)
+float(5.5)
+string(1) "3"
+int(2)
+string(6) "banana"
+float(6.5)
+int(24)

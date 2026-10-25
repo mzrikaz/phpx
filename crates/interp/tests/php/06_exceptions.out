@@ -1,0 +1,23 @@
+ok
+finally 0
+InvalidArgumentException: bad arg
+finally 1
+App: app failed code=42 extra=ctx
+finally 2
+DivisionByZeroError: Division by zero
+finally 3
+1
+finally 4
+inner finally
+outer <- inner
+cleanup
+try
+finally wins
+loop 0
+f0
+f1
+loop 2
+f2
+f3
+thrown in expr
+before uncaught

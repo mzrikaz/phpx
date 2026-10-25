@@ -1,0 +1,104 @@
+int(12)
+string(12) "HELLO, WORLD"
+string(12) "hello, world"
+string(3) "Abc"
+string(3) "aBC"
+string(23) "Hello Big-world Foo_bar"
+string(5) "World"
+string(3) "Wor"
+string(6) "lo, Wo"
+string(0) ""
+string(0) ""
+int(4)
+int(8)
+int(7)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+string(12) "Hell0, W0rld"
+string(12) "Jello, Vorld"
+string(1) "x"
+string(1) "x"
+string(2) "12"
+string(3) "abc"
+string(1) "x"
+string(3) "005"
+string(7) "-=ab-=-"
+string(6) "ababab"
+string(3) "cba"
+array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(0) ""
+  [3]=>
+  string(1) "c"
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(3) "b,c"
+}
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+string(5) "1-2-3"
+string(2) "12"
+array(3) {
+  [0]=>
+  string(2) "ab"
+  [1]=>
+  string(2) "cd"
+  [2]=>
+  string(1) "e"
+}
+string(19) "The quick
+brown fox"
+string(9) "a<br />
+b"
+string(51) "03.14|ab    |    cd|ff|FF|10|101|A|%|+7|1.234500e+3"
+string(27) "*********x|42        |0|z y"
+string(3) "abc"
+string(5) "-0042"
+string(9) "1,234,568"
+string(12) "1,234,567.89"
+string(8) "1.234,50"
+string(1) "1"
+string(8) "-1,234.6"
+string(59) "&lt;a href=&#039;x&#039;&gt;T&amp;C &quot;q&quot;&lt;/a&gt;"
+string(9) "bold text"
+string(9) "O\'Re\"il"
+int(-1)
+int(1)
+int(0)
+int(0)
+int(1)
+int(65)
+string(1) "B"
+string(2) "ff"
+string(6) "616263"
+string(8) "SGVsbG8h"
+string(6) "Hello!"
+string(32) "ec3d26c08b2ed3b3c7ea7a398bc0ada7"
+int(2103338464)
+string(20) "a+b%26c%3Dd%2F%C3%A9"
+string(5) "a%20b"
+string(5) "a b c"
+string(31) "a=1&b%5B0%5D=1&b%5B1%5D=2&c=x+y"
+string(14) "Hello everyone"
+string(3) "xyc"
+int(2)
+int(5)
+int(6)
+string(5) "éllo"
+string(6) "HÉLLO"
+int(3)
+string(16) "O'neil Mc-Donald"
+string(3) "end"

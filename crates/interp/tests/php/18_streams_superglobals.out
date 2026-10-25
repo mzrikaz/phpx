@@ -1,0 +1,13 @@
+3 0 a1 3 a2
+{"x":1,"y":2}
+[line1][line2][end] eof
+bool(true)
+string(6) "stream"
+bool(false)
+string(17) "resource (closed)"
+ab|c
+|4|"f\n"
+bool(false)
+dir ok
+to stdout
+yy

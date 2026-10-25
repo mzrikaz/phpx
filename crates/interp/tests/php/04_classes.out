@@ -1,0 +1,130 @@
+[Circle] created circle
+[Rect] created rect
+[Square] created rect
+circle with area 3.14 | sides=1 | Circle
+rect with area 6.00 | sides=4 | Rect
+rect with area 4.00 | sides=4 | Square
+int(3)
+bool(true)
+bool(true)
+bool(false)
+int(0)
+Error: Cannot modify readonly property Rect::$w
+object(Rect)#2 (3) {
+  ["name":protected]=>
+  string(4) "rect"
+  ["w"]=>
+  float(2)
+  ["h"]=>
+  float(3)
+}
+Hi from Person (person) | HI FROM PERSON (PERSON) | LOUD | 2
+set foo
+get foo
+1
+bool(true)
+bool(false)
+string(12) "doThing(1,2)"
+string(11) "static stat"
+int(42)
+string(1) "v"
+string(4) "none"
+bool(true)
+int(2)
+k=v
+0=pushed
+string(1) "b"
+string(2) "b'"
+bool(true)
+bool(false)
+bool(false)
+3
+s3
+enum(Suit::Hearts)
+string(1) "H"
+string(6) "Hearts"
+enum(Suit::Spades)
+NULL
+string(3) "Red"
+bool(true)
+array(2) {
+  [0]=>
+  enum(Suit::Hearts)
+  [1]=>
+  enum(Suit::Spades)
+}
+bool(true)
+bool(true)
+bool(true)
+array(2) {
+  [0]=>
+  enum(Status::On)
+  [1]=>
+  enum(Status::Off)
+}
+"Z" is not a valid backing value for enum Suit
+10
+object(stdClass)#15 (2) {
+  ["a"]=>
+  int(1)
+  ["list"]=>
+  array(1) {
+    [0]=>
+    string(1) "x"
+  }
+}
+array(2) {
+  ["a"]=>
+  int(1)
+  ["list"]=>
+  array(1) {
+    [0]=>
+    string(1) "x"
+  }
+}
+object(stdClass)#16 (1) {
+  ["p"]=>
+  int(1)
+}
+[Circle] created circle
+Circle Object
+(
+    [name:protected] => circle
+    [r:Circle:private] => 2
+)
+
+Array
+(
+    [nested] => Array
+        (
+            [a] => 1
+            [b] => Array
+                (
+                    [0] => 1
+                    [1] => 
+                )
+
+        )
+
+    [obj] => stdClass Object
+        (
+            [a] => 1
+            [list] => Array
+                (
+                    [0] => x
+                )
+
+        )
+
+)
+
+array (
+  0 => 1,
+  'a' => 
+  array (
+    'b' => true,
+    'c' => NULL,
+  ),
+  2 => 1.0,
+  'str' => 'it\'s',
+)

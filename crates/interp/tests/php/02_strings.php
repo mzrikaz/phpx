@@ -1,0 +1,20 @@
+<?php
+$s = "Hello, World";
+var_dump(strlen($s), strtoupper($s), strtolower($s), ucfirst("abc"), lcfirst("ABC"), ucwords("hello big-world foo_bar"));
+var_dump(substr($s, 7), substr($s, -5, 3), substr($s, 3, -3), substr("abc", 5), substr("abc", 1, 0));
+var_dump(strpos($s, "o"), strrpos($s, "o"), stripos($s, "WORLD"), strpos($s, "z"), str_contains($s, "World"));
+var_dump(str_starts_with($s, "Hell"), str_ends_with($s, "ld"), str_replace("o", "0", $s), str_replace(["H", "W"], ["J", "V"], $s));
+var_dump(trim("  x  "), rtrim("xyy", "y"), ltrim("0012", "0"), trim("[abc]", "[]"), trim("abcxcba", "a..c"));
+var_dump(str_pad("5", 3, "0", STR_PAD_LEFT), str_pad("ab", 7, "-=", STR_PAD_BOTH), str_repeat("ab", 3), strrev("abc"));
+var_dump(explode(",", "a,b,,c"), explode(",", "a,b,c", 2), explode(",", "a,b,c", -1), implode("-", [1, 2, 3]), implode([1, 2]));
+var_dump(str_split("abcde", 2), wordwrap("The quick brown fox", 10, "\n", true), nl2br("a\nb"));
+var_dump(sprintf("%05.2f|%-6s|%6s|%x|%X|%o|%b|%c|%%|%+d|%e", 3.14159, "ab", "cd", 255, 255, 8, 5, 65, 7, 1234.5));
+var_dump(sprintf("%'*10s|%-10d|%u|%4\$s %3\$s", "x", 42, "y", "z"), sprintf("%.3s", "abcdef"), sprintf("%05d", -42));
+var_dump(number_format(1234567.891), number_format(1234567.891, 2), number_format(1234.5, 2, ',', '.'), number_format(0.5), number_format(-1234.567, 1));
+var_dump(htmlspecialchars("<a href='x'>T&C \"q\"</a>"), strip_tags("<b>bold</b> text"), addslashes("O'Re\"il"));
+var_dump(strcmp("a", "b"), strcmp("b", "a"), strcasecmp("HELLO", "hello"), strncmp("abcd", "abef", 2), strnatcmp("img12", "img10"));
+var_dump(ord("A"), chr(66), dechex(255), bin2hex("abc"), base64_encode("Hello!"), base64_decode("SGVsbG8h"), md5("phpx"), crc32("phpx"));
+var_dump(urlencode("a b&c=d/é"), rawurlencode("a b"), urldecode("a%20b+c"), http_build_query(["a" => 1, "b" => [1, 2], "c" => "x y"]));
+var_dump(strtr("Hi all", ["Hi" => "Hello", "all" => "everyone"]), strtr("abc", "ab", "xy"), substr_count("hello hello", "ll"));
+var_dump(mb_strlen("héllo"), strlen("héllo"), mb_substr("héllo wörld", 1, 4), mb_strtoupper("héllo"), str_word_count("Hello big world"));
+var_dump(ucwords("o'neil mc-donald", " -"), "end");

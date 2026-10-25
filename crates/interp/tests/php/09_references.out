@@ -1,0 +1,121 @@
+int(12)
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+array(2) {
+  ["k"]=>
+  int(2)
+  ["new"]=>
+  int(1)
+}
+int(6)
+array(1) {
+  [0]=>
+  string(1) "x"
+}
+array(2) {
+  ["app"]=>
+  array(1) {
+    ["name"]=>
+    string(4) "phpx"
+  }
+  ["db"]=>
+  array(1) {
+    ["connections"]=>
+    array(1) {
+      ["mysql"]=>
+      array(1) {
+        ["host"]=>
+        string(9) "localhost"
+      }
+    }
+  }
+}
+array(3) {
+  [0]=>
+  int(10)
+  [1]=>
+  int(20)
+  [2]=>
+  &int(30)
+}
+array(3) {
+  [0]=>
+  int(10)
+  [1]=>
+  int(20)
+  [2]=>
+  &int(20)
+}
+array(2) {
+  [0]=>
+  array(2) {
+    ["q"]=>
+    int(1)
+    ["seen"]=>
+    bool(true)
+  }
+  [1]=>
+  array(2) {
+    ["q"]=>
+    int(3)
+    ["seen"]=>
+    bool(true)
+  }
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(10)
+  [2]=>
+  int(11)
+}
+int(2)
+array(1) {
+  ["x"]=>
+  array(1) {
+    ["y"]=>
+    &string(7) "changed"
+  }
+}
+string(5) "again"
+string(5) "again"
+string(5) "again"
+string(9) "only copy"
+string(3) "ONE"
+array(2) {
+  [0]=>
+  &string(3) "ONE"
+  [1]=>
+  &string(3) "two"
+}
+int(99)
+int(6)
+int(2)
+string(1) "R"
+string(1) "L"
+array(5) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+  [3]=>
+  int(4)
+  [4]=>
+  int(5)
+}
+int(42)
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  &int(3)
+}

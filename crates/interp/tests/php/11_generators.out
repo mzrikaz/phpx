@@ -1,0 +1,43 @@
+0=>1 1=>2 2=>3 
+counted
+a:1 b:2 10:x 11:y 
+int(0)
+int(1)
+int(2)
+bool(false)
+array(2) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+}
+0=1 1=2 0=3 x=arr 1=4 
+01234
+12[gen cleanup]
+1 caught: gen broke
+inside caught x
+string(9) "recovered"
+1 9 25 49 
+array(4) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  int(2)
+  [10]=>
+  string(1) "x"
+  [11]=>
+  string(1) "y"
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+v=1
+got 
+Exception: Cannot rewind a generator that was already run
+arrow
+Generator traversable

@@ -1,0 +1,87 @@
+float(9.223372036854776E+18)
+float(3.5)
+int(5)
+float(1.8446744073709552E+19)
+int(59049)
+float(7.178979876918526E+23)
+int(-1)
+int(0)
+int(1)
+DivisionByZeroError: Modulo by zero
+int(-9223372036854775808)
+int(0)
+int(0)
+int(-4)
+int(-1)
+int(0)
+ArithmeticError: Bit shift by negative number
+float(0.3333333333333333)
+array(4) {
+  [0]=>
+  bool(true)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(true)
+  [3]=>
+  bool(false)
+}
+array(4) {
+  [0]=>
+  bool(false)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(true)
+  [3]=>
+  bool(false)
+}
+array(4) {
+  [0]=>
+  bool(false)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(true)
+  [3]=>
+  bool(false)
+}
+DivisionByZeroError: Division by zero
+int(3)
+int(-3)
+int(-8446744073709551616)
+int(0)
+float(9.223372036854776E+18)
+float(0)
+int(-5)
+int(2432902008176640000)
+float(5.109094217170944E+19)
+float(1.5511210043330986E+25)
+int(10000)
+float(6)
+float(3)
+bool(true)
+bool(true)
+bool(false)
+int(10)
+float(1.5)
+float(12)
+float(2.5)
+int(-1)
+int(255)
+int(-4)
+int(147)
+int(30)
+int(10)
+int(42)
+int(7)
+int(42)
+int(4)
+float(4.5)
+float(1.8446744073709552E+19)
+int(6)
+int(2)
+int(1)
+float(1.5)
+int(2)
+int(1)

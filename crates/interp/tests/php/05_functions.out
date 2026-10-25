@@ -1,0 +1,70 @@
+Hi, World!
+Hi, Bob!
+Hi, Bob! +x,y
+Yo, Ann!
+Hey, Zed!
+Hola, Ana!
+6 9 0
+6
+12
+11
+2
+05
+int(4)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(4)
+}
+array(1) {
+  [0]=>
+  int(8)
+}
+array(1) {
+  [0]=>
+  int(9)
+}
+string(4) "abab"
+int(27)
+8 1 n
+2432902008176640000
+610
+int(42)
+int(3)
+int(1)
+float(5)
+float(1.5)
+string(2) "12"
+string(3) "1.5"
+bool(true)
+bool(false)
+NULL
+NULL
+int(5)
+string(1) "x"
+int(5)
+TypeError
+float(1)
+array(2) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(1) {
+    [0]=>
+    int(2)
+  }
+}
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  string(3) "two"
+}
+NULL
+string(1) "u"
+NULL
+medium
+seven-ish
+Unhandled match case 7
+Unhandled match case 'str'

@@ -1,0 +1,58 @@
+ok 2
+fin
+end
+caught big 2
+fin
+end
+fin-b 1
+1
+fin-b 5
+outer big 5
+i=0
+f0
+f1
+i=2
+f2
+f3
+3
+inner fin
+InvalidArgumentException inner
+no var
+wrapped<-re
+D1 D1 v11,E,v11,E
+x still keep
+keep
+g fin
+got from g line 49
+h1 h2
+5
+ok 2
+fin
+end
+caught big 2
+fin
+end
+fin-b 1
+1
+fin-b 5
+outer big 5
+i=0
+f0
+f1
+i=2
+f2
+f3
+3
+inner fin
+InvalidArgumentException inner
+no var
+wrapped<-re
+D1 D1 v11,E,v11,E
+x still keep
+keep
+g fin
+got from g line 49
+h1 h2
+5
+top caught
+top fin
