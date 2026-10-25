@@ -53,6 +53,7 @@ mod zsort;
 mod dom;
 mod xmlwriter;
 mod xml_ext;
+mod redis;
 mod db;
 mod pdo;
 mod process;
