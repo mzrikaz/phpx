@@ -27,7 +27,7 @@ fn crypto_algo(it: &Interp, func: &str, algo: &str) -> R<usize> {
     }
 }
 
-fn pbkdf2(algo: &str, pass: &[u8], salt: &[u8], iters: u64, want: usize) -> Vec<u8> {
+pub(crate) fn pbkdf2(algo: &str, pass: &[u8], salt: &[u8], iters: u64, want: usize) -> Vec<u8> {
     let mut out = vec![];
     let mut block = 1u32;
     while out.len() < want {
