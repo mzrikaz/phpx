@@ -41,6 +41,26 @@ pub fn basename(p: &str, suffix: &str) -> String {
     }
 }
 
+thread_local! {
+    /// realpath() results (PHP keeps a realpath cache too): resolving a
+    /// path costs a readlink per component.
+    static REALPATH: std::cell::RefCell<rustc_hash::FxHashMap<std::path::PathBuf, std::path::PathBuf>> = Default::default();
+}
+
+pub fn clear_realpath_cache() {
+    REALPATH.with(|c| c.borrow_mut().clear());
+}
+
+/// Canonical path of an existing file, cached per thread.
+pub fn realpath_cached(p: &Path) -> Option<std::path::PathBuf> {
+    if let Some(r) = REALPATH.with(|c| c.borrow().get(p).cloned()) {
+        return Some(r);
+    }
+    let r = std::fs::canonicalize(p).ok()?;
+    REALPATH.with(|c| c.borrow_mut().insert(p.to_path_buf(), r.clone()));
+    Some(r)
+}
+
 pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("dirname", |it, _, a| {
         let levels = if has(a, 1) { int(it, a, 1)?.max(1) as usize } else { 1 };
@@ -80,7 +100,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::array(out))
     });
     t.insert("realpath", |it, _, a| {
-        Ok(std::fs::canonicalize(path(it, a, 0)?).map(|p| Value::str(&p.display().to_string())).unwrap_or(Value::Bool(false)))
+        Ok(realpath_cached(std::path::Path::new(&path(it, a, 0)?)).map(|p| Value::str(&p.display().to_string())).unwrap_or(Value::Bool(false)))
     });
     t.insert("file_exists", |it, _, a| Ok(Value::Bool(Path::new(&path(it, a, 0)?).exists())));
     t.insert("is_file", |it, _, a| Ok(Value::Bool(Path::new(&path(it, a, 0)?).is_file())));
@@ -257,7 +277,12 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::str(&name))
     });
     t.insert("fopen", |it, _, _| Err(it.error("Error", "phpx: stream functions (fopen & co) are not supported yet")));
-    t.insert("clearstatcache", |_, _, _| Ok(Value::Null));
+    t.insert("clearstatcache", |_, _, a| {
+        if a.first().is_some_and(|v| v.truthy()) {
+            crate::fs::clear_realpath_cache();
+        }
+        Ok(Value::Null)
+    });
 }
 
 fn io_reason(e: &std::io::Error) -> &'static str {

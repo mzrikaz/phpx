@@ -3,7 +3,6 @@
 
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
@@ -1558,7 +1557,7 @@ pub fn join_display(parts: &[String], sep: &str) -> String {
 
 /// Interned lowercase names, to avoid re-lowercasing on every lookup.
 #[derive(Default)]
-pub struct Lower(RefCell<HashMap<String, Rc<str>>>);
+pub struct Lower(RefCell<rustc_hash::FxHashMap<String, Rc<str>>>);
 
 impl Lower {
     pub fn get(&self, s: &str) -> Rc<str> {

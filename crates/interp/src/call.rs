@@ -1976,7 +1976,7 @@ impl Interp {
             self.warn(&format!("{func}({path}): Failed to open stream: No such file or directory"));
             return Ok(Value::Bool(false));
         };
-        let canon = found.canonicalize().unwrap_or(found.clone());
+        let canon = crate::fs::realpath_cached(&found).unwrap_or(found.clone());
         if matches!(kind, IncludeOnce | RequireOnce) && self.included.borrow().contains(&canon) {
             return Ok(Value::Bool(true));
         }

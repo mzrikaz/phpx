@@ -896,7 +896,12 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(std::fs::read_link(&p).map(|t| Value::str(&t.to_string_lossy())).unwrap_or(Value::Bool(false)))
     });
     t.insert("fnmatch", |it, _, a| Ok(Value::Bool(fnmatch(&s(it, a, 0)?, &s(it, a, 1)?))));
-    t.insert("clearstatcache", |_, _, _| Ok(Value::Null));
+    t.insert("clearstatcache", |_, _, a| {
+        if a.first().is_some_and(|v| v.truthy()) {
+            crate::fs::clear_realpath_cache();
+        }
+        Ok(Value::Null)
+    });
     t.insert("realpath_cache_size", |_, _, _| Ok(Value::Int(0)));
 }
 
