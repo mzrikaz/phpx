@@ -188,6 +188,10 @@ impl Stream {
                     break;
                 }
                 if self.rbuf.is_empty() && self.fill(1) == 0 {
+                    // A read hit the end: now feof() is true (not before).
+                    if matches!(self.backend, Backend::File(_)) {
+                        self.eof = true;
+                    }
                     break;
                 }
                 if self.rbuf.is_empty() {
@@ -204,10 +208,6 @@ impl Stream {
                         out.extend(self.rbuf.take(n));
                     }
                 }
-            }
-            // PHP reports EOF once a read hits the end.
-            if matches!(self.backend, Backend::File(_)) && self.fill(1) == 0 {
-                self.eof = true;
             }
             return (!out.is_empty()).then_some(out);
         }
