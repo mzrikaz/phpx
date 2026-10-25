@@ -1,0 +1,7 @@
+B:x29|B:x29
+object(B)#2 (2) {
+  ["output":"A":private]=>
+  string(5) "B:x29"
+  ["output":"B":private]=>
+  string(5) "B:x29"
+}

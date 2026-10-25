@@ -1039,7 +1039,9 @@ impl Interp {
             };
             if p.promote.is_some() {
                 if let Some(o) = &inv.this {
-                    o.set_prop(pname, v.clone());
+                    // (Mangled when a subclass redeclared it privately.)
+                    let key = self.prop_key(&f, o, pname);
+                    o.set_prop(&key, v.clone());
                 }
             }
             f.vars.insert(pname, slot(v));

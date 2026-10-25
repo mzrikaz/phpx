@@ -268,7 +268,10 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
         };
         if p.promote.is_some() {
             if let Some(o) = &f.this {
-                o.set_prop(&p.name.name, v.clone());
+                // A private promoted property shadowed by a subclass lives
+                // under its mangled key.
+                let key = it.prop_key(f, o, &p.name.name);
+                o.set_prop(&key, v.clone());
             }
         }
         ptr::drop_in_place(locals.add(i));
