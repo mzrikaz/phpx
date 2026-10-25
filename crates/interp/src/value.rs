@@ -138,7 +138,14 @@ pub type FxIndexMap<K, V> = IndexMap<K, V, std::hash::BuildHasherDefault<rustc_h
 /// order) is stored "packed" as a plain vector: no hashing, 16 bytes per
 /// element. Anything else is an insertion-ordered hash map. A packed array
 /// converts to a hash the first time a key breaks the shape.
+/// `#[repr(C)]`: generated code reads `pk` (offset 0) and `pk_len` (offset
+/// 8) to index packed arrays without a call.
+#[repr(C)]
 pub struct PhpArray {
+    /// Packed storage's buffer and length, mirrored after every change
+    /// (null when the array is a hash).
+    pk: *mut Value,
+    pk_len: usize,
     store: Store,
     next_free: i64,
     /// Internal pointer (current()/next()/reset()), as an index.
@@ -200,13 +207,13 @@ impl Clone for PhpArray {
             Store::Packed(v) => Store::Packed(v.iter().map(copy_elem).collect()),
             Store::Hash(m) => Store::Hash(m.iter().map(|(k, v)| (k.clone(), copy_elem(v))).collect()),
         };
-        PhpArray { store, next_free: self.next_free, pos: self.pos.clone() }
+        PhpArray::make(store, self.next_free, self.pos.get())
     }
 }
 
 impl Default for PhpArray {
     fn default() -> Self {
-        PhpArray { store: Store::Packed(Vec::new()), next_free: i64::MIN, pos: Cell::new(0) }
+        PhpArray::make(Store::Packed(Vec::new()), i64::MIN, 0)
     }
 }
 
@@ -215,14 +222,36 @@ impl PhpArray {
         Self::default()
     }
 
+    fn make(store: Store, next_free: i64, pos: usize) -> Self {
+        let mut a = PhpArray { pk: std::ptr::null_mut(), pk_len: 0, store, next_free, pos: Cell::new(pos) };
+        a.sync();
+        a
+    }
+
+    /// Refresh the packed mirror; called after anything that can change the
+    /// storage's shape, length or buffer.
+    #[inline]
+    fn sync(&mut self) {
+        match &mut self.store {
+            Store::Packed(v) => {
+                self.pk = v.as_mut_ptr();
+                self.pk_len = v.len();
+            }
+            Store::Hash(_) => {
+                self.pk = std::ptr::null_mut();
+                self.pk_len = 0;
+            }
+        }
+    }
+
     pub fn with_capacity(n: usize) -> Self {
-        PhpArray { store: Store::Packed(Vec::with_capacity(n)), next_free: i64::MIN, pos: Cell::new(0) }
+        PhpArray::make(Store::Packed(Vec::with_capacity(n)), i64::MIN, 0)
     }
 
     pub fn from_list(vals: impl IntoIterator<Item = Value>) -> Self {
         let v: Vec<Value> = vals.into_iter().collect();
         let n = v.len() as i64;
-        PhpArray { store: Store::Packed(v), next_free: if n == 0 { i64::MIN } else { n }, pos: Cell::new(0) }
+        PhpArray::make(Store::Packed(v), if n == 0 { i64::MIN } else { n }, 0)
     }
 
     pub fn len(&self) -> usize {
@@ -302,6 +331,12 @@ impl PhpArray {
     /// array_pop(): like PHP, the next free index drops back if the popped
     /// key was the last one handed out.
     pub fn pop(&mut self) -> Option<Value> {
+        let r = self.pop_inner();
+        self.sync();
+        r
+    }
+
+    fn pop_inner(&mut self) -> Option<Value> {
         let (k, v) = match &mut self.store {
             Store::Packed(v) => {
                 let x = v.pop()?;
@@ -331,6 +366,11 @@ impl PhpArray {
     }
 
     pub fn insert(&mut self, k: Key, v: Value) {
+        self.insert_inner(k, v);
+        self.sync();
+    }
+
+    fn insert_inner(&mut self, k: Key, v: Value) {
         if let Key::Int(n) = k {
             self.bump_next(n);
         }
@@ -366,6 +406,7 @@ impl PhpArray {
             if n as usize == vec.len() {
                 vec.push(v);
                 self.next_free = n + 1;
+                self.sync();
                 return Key::Int(n);
             }
         }
@@ -375,6 +416,13 @@ impl PhpArray {
 
     /// Entry for `$a[k]` writes, created as null if missing.
     pub fn entry(&mut self, k: Key) -> &mut Value {
+        let p: *mut Value = self.entry_inner(k);
+        self.sync();
+        // SAFETY: sync() only reads the storage; the element didn't move.
+        unsafe { &mut *p }
+    }
+
+    fn entry_inner(&mut self, k: Key) -> &mut Value {
         if let Key::Int(n) = k {
             self.bump_next(n);
         }
@@ -395,6 +443,12 @@ impl PhpArray {
     }
 
     pub fn remove(&mut self, k: &Key) -> Option<Value> {
+        let r = self.remove_inner(k);
+        self.sync();
+        r
+    }
+
+    fn remove_inner(&mut self, k: &Key) -> Option<Value> {
         if let Store::Packed(vec) = &mut self.store {
             match Self::packed_index(vec.len(), k) {
                 None => return None,
