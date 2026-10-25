@@ -1,0 +1,136 @@
+Array
+(
+    [foo] => 1
+    [bar] => 4
+    [3] => x
+)
+Array
+(
+    [FOO] => 1
+    [BAR] => 2
+)
+Array
+(
+)
+Array
+(
+    [a] => 1
+)
+Array
+(
+    [a] => green
+)
+Array
+(
+    [b] => brown
+)
+Array
+(
+    [a] => green
+    [b] => brown
+)
+Array
+(
+    [a] => green
+    [c] => blue
+    [0] => red
+)
+Array
+(
+    [b] => brown
+    [c] => blue
+    [0] => red
+)
+Array
+(
+    [c] => blue
+    [0] => red
+)
+Array
+(
+    [0] => 1
+    [1] => 1
+    [2] => 2
+    [3] => 3
+)
+Array
+(
+    [0] => a
+    [1] => z
+    [2] => b
+    [3] => c
+)
+array(4) {
+  [0]=>
+  int(0)
+  [1]=>
+  int(10)
+  [2]=>
+  int(100)
+  [3]=>
+  int(100)
+}
+array(4) {
+  [0]=>
+  int(4)
+  [1]=>
+  int(1)
+  [2]=>
+  int(2)
+  [3]=>
+  int(3)
+}
+array(2) {
+  [0]=>
+  array(5) {
+    [0]=>
+    string(2) "10"
+    [1]=>
+    int(100)
+    [2]=>
+    int(100)
+    [3]=>
+    int(11)
+    [4]=>
+    string(1) "a"
+  }
+  [1]=>
+  array(5) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(3)
+    [2]=>
+    string(1) "2"
+    [3]=>
+    int(2)
+    [4]=>
+    int(1)
+  }
+}
+Array
+(
+    [z] => 98
+    [y] => 86
+    [0] => 86
+    [1] => 85
+    [x] => 67
+    [w] => 67
+)
+Array
+(
+    [z] => 2
+    [y] => 1
+    [0] => 6
+    [1] => 6
+    [x] => 2
+    [w] => 7
+)
+Array
+(
+    [0] => Apple
+    [1] => apple
+    [2] => banana
+    [3] => cherry
+)
+Array sizes are inconsistent

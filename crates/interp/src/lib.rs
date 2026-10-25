@@ -8,6 +8,7 @@ mod alloc;
 mod arginfo;
 mod arginfo_table;
 mod arrays;
+mod arrays_more;
 mod builtins;
 mod callback;
 mod call;

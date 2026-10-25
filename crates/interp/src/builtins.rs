@@ -113,6 +113,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::xmlwriter::register(&mut t);
     crate::xml_ext::register(&mut t);
     crate::process::register(&mut t);
+    crate::arrays_more::register(&mut t);
     crate::errors::register(&mut t);
     t
 }

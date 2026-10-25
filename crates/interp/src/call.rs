@@ -16,7 +16,7 @@ const BY_REF: &[(&str, usize)] = &[
     ("sort", 0), ("rsort", 0), ("usort", 0), ("uasort", 0), ("uksort", 0), ("ksort", 0), ("krsort", 0),
     ("asort", 0), ("arsort", 0), ("shuffle", 0), ("array_push", 0), ("array_pop", 0), ("array_shift", 0),
     ("array_unshift", 0), ("array_splice", 0), ("array_walk", 0), ("preg_match", 2), ("preg_match_all", 2),
-    ("settype", 0), ("natsort", 0), ("natcasesort", 0), ("array_multisort", 0),
+    ("settype", 0), ("natsort", 0), ("natcasesort", 0), ("array_multisort", 0), ("array_multisort", 1), ("array_multisort", 2), ("array_multisort", 3), ("array_multisort", 4), ("array_multisort", 5), ("array_multisort", 6), ("array_multisort", 7), ("array_multisort", 8), ("array_multisort", 9), ("array_multisort", 10), ("array_multisort", 11),
     ("preg_replace", 4), ("parse_str", 1), ("sscanf", 2), ("sscanf", 3), ("sscanf", 4), ("sscanf", 5), ("sscanf", 6), ("sscanf", 7), ("next", 0), ("prev", 0), ("reset", 0), ("end", 0), ("headers_sent", 0), ("headers_sent", 1), ("similar_text", 2), ("openssl_random_pseudo_bytes", 1), ("preg_replace_callback", 4), ("str_replace", 3), ("str_ireplace", 3),
 ];
 
@@ -570,6 +570,11 @@ impl Interp {
         let mut places = vec![];
         for (i, a) in args.iter().enumerate() {
             if idxs.contains(&i) {
+                // array_multisort() takes its flags by value ("prefer-ref").
+                if !a.value.is_lvalue() && name == "array_multisort" {
+                    vals.push(self.eval(f, &a.value)?);
+                    continue;
+                }
                 if !a.value.is_lvalue() {
                     return Err(self.error("Error", &format!("{name}(): Argument #{} could not be passed by reference", i + 1)));
                 }

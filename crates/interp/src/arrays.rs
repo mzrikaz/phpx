@@ -28,7 +28,7 @@ fn by_ref_array(it: &Interp, a: &mut [Value], fname: &str) -> R<PhpArray> {
 }
 
 /// Comparison used by sort() & co for a given flag.
-fn sort_cmp(it: &Interp, flags: i64) -> impl Fn(&Value, &Value) -> Ordering + '_ {
+pub(crate) fn sort_cmp(it: &Interp, flags: i64) -> impl Fn(&Value, &Value) -> Ordering + '_ {
     move |x, y| match flags & !8 {
         1 => it.to_float(x).unwrap_or(0.0).partial_cmp(&it.to_float(y).unwrap_or(0.0)).unwrap_or(Ordering::Equal),
         2 => {
