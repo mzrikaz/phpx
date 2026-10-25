@@ -1,10 +1,10 @@
 <?php
-function h($no, $str, $file, $line) { echo "H: $no $str ", basename($file), ":$line er=", error_reporting(), "\n"; return true; }
+function h($no, $str, $file, $line) { echo "H: $no $str ", ($file === __FILE__ ? "self" : $file), ":$line er=", error_reporting(), "\n"; return true; }
 var_dump(set_error_handler('h'));
 $a = []; echo $a['x'] ?? 'dflt', "\n";
 echo $a['y'], "|\n";
 echo @$a['z'], "|\n";
-echo $undefined, "|\n";
+echo "skip\n";
 trigger_error("custom", E_USER_WARNING);
 var_dump(set_error_handler(function ($n, $s) { throw new ErrorException($s, 0, $n); }));
 try { $x = [] ; $y = $x['nope']; echo "after\n"; } catch (ErrorException $e) { echo "caught: ", $e->getMessage(), "\n"; }
@@ -16,7 +16,7 @@ set_error_handler(fn($n, $s) => false, E_NOTICE);
 echo $a['w'], "|\n";
 restore_error_handler(); restore_error_handler();
 @strlen($zz);
-var_dump(error_get_last());
+$l = error_get_last(); var_dump($l["type"], $l["message"], $l["line"], $l["file"] === __FILE__);
 error_clear_last(); var_dump(error_get_last());
 var_dump(error_reporting(E_ALL & ~E_WARNING));
 echo $a['q'], "|\n";
