@@ -903,17 +903,42 @@ fn from_radix(it: &Interp, a: &[Value], radix: u32) -> R<Value> {
     })
 }
 
-/// PHP's round(): half away from zero, after pre-rounding to 15
-/// significant digits so 1.005 rounds to 1.01 like PHP.
+/// PHP's round() (half away from zero), the same algorithm as PHP 8.4+'s
+/// `_php_math_round`: take the integral part at the requested precision,
+/// correct it when the next integer is exactly the value, and round up
+/// when the value reaches the half-way edge computed back in the value's
+/// own scale (so 0.285 rounds to 0.29 despite 0.285 * 100 = 28.4999...).
 pub fn php_round(v: f64, places: i64) -> f64 {
-    if !v.is_finite() {
+    if !v.is_finite() || v == 0.0 {
         return v;
     }
-    let f = 10f64.powi(places.clamp(-300, 300) as i32);
-    let x = v * f;
-    let pre: f64 = format!("{x:.15e}").parse().unwrap_or(x);
-    let r = pre.round();
-    let out = r / f;
+    let places = places.clamp(i32::MIN as i64 + 1, i32::MAX as i64);
+    let exponent = 10f64.powi(places.unsigned_abs().min(400) as i32);
+    let scale = |x: f64| if places > 0 { x / exponent } else { x * exponent };
+    let scaled = if places > 0 { v * exponent } else { v / exponent };
+    let (mut integral, next) = if v >= 0.0 {
+        let t = scaled.floor();
+        (t, t + 1.0)
+    } else {
+        let t = scaled.ceil();
+        (t, t - 1.0)
+    };
+    if scale(next) == v {
+        integral = next;
+    }
+    // Beyond a double's precision: rounding changes nothing.
+    if integral.abs() >= 1e16 {
+        return v;
+    }
+    let edge = scale(integral + 0.5f64.copysign(integral)).abs();
+    if v.abs() >= edge {
+        integral += 1f64.copysign(integral);
+    }
+    let out = if places.unsigned_abs() < 23 {
+        scale(integral)
+    } else {
+        format!("{integral:15.6}e{}", -places).trim().parse().unwrap_or(f64::NAN)
+    };
     if out.is_finite() { out } else { v }
 }
 
