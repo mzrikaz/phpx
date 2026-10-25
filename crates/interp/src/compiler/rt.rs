@@ -1033,11 +1033,23 @@ unsafe fn mark_by_ref(locals: *const *mut Value, n: usize, i: usize) {
 
 unsafe fn with_refs(
     params: Option<&'static [ast::Param]>,
-    mut pos: Vec<Value>,
+    pos: Vec<Value>,
     locals: *const *mut Value,
     call: impl FnOnce(Vec<Value>) -> R<Value>,
 ) -> R<Value> {
     let n = pos.len();
+    with_refs_masked(params, pos, locals, n, call)
+}
+
+/// `with_refs` where the generated code passed `n` arguments in all (the
+/// by-reference mask follows the `n` local pointers).
+unsafe fn with_refs_masked(
+    params: Option<&'static [ast::Param]>,
+    mut pos: Vec<Value>,
+    locals: *const *mut Value,
+    n: usize,
+    call: impl FnOnce(Vec<Value>) -> R<Value>,
+) -> R<Value> {
     let mut cells = vec![];
     if let Some(ps) = params {
         for i in 0..pos.len() {
@@ -1277,8 +1289,8 @@ pub unsafe extern "C" fn rt_call(
     if !meta.is_null() {
         // Spread / named arguments: the general path.
         let r = it.resolve_call(f, (*site).name).and_then(|callable| {
-            let (pos, named) = expand_args(it, take_args(args, n), meta)?;
-            it.call_callable(&callable, pos, named)
+            let params = crate::call::callable_params(&callable);
+            call_expanded(it, take_args(args, n), meta, params, locals, |pos, named| it.call_callable(&callable, pos, named))
         });
         return status(it, r, |v| put(dst, v));
     }
@@ -1574,12 +1586,34 @@ unsafe fn method_call_general(
                 let params = o.class.find_method_from(&name.to_ascii_lowercase(), f.class.as_deref()).and_then(|m| crate::call::method_params(m));
                 with_refs(params, vals, locals, |pos| it.method_call(f, &o, name, pos, vec![]))
             } else {
-                expand_args(it, vals, meta).and_then(|(pos, named)| it.method_call(f, &o, name, pos, named))
+                let params = o.class.find_method_from(&name.to_ascii_lowercase(), f.class.as_deref()).and_then(|m| crate::call::method_params(m));
+                call_expanded(it, vals, meta, params, locals, |pos, named| it.method_call(f, &o, name, pos, named))
             }
         }
         other => Err(it.error("Error", &format!("Call to a member function {name}() on {}", other.type_name()))),
     };
     status(it, r, |v| put(dst, v))
+}
+
+/// A call with named (or spread) arguments. Positional arguments still
+/// bind by reference where the callee takes them so (they come first, so
+/// their indices match the generated code's local pointers).
+unsafe fn call_expanded(
+    it: &Interp,
+    vals: Vec<Value>,
+    meta: *const ast::Arg,
+    params: Option<&'static [ast::Param]>,
+    locals: *const *mut Value,
+    call: impl FnOnce(Vec<Value>, Vec<(Rc<str>, Value)>) -> R<Value>,
+) -> R<Value> {
+    let ast_args = std::slice::from_raw_parts(meta, vals.len());
+    if locals.is_null() || ast_args.iter().any(|a| a.spread) {
+        let (pos, named) = expand_args(it, vals, meta)?;
+        return call(pos, named);
+    }
+    let n = ast_args.len();
+    let (pos, named) = expand_args(it, vals, meta)?;
+    with_refs_masked(params, pos, locals, n, |pos| call(pos, named))
 }
 
 /// Spread and named arguments, expanded like the interpreter's eval_args.
@@ -1879,8 +1913,8 @@ unsafe fn static_call_general(
     let pos = take_args(args, n);
     let r = (|| {
         if !meta.is_null() {
-            let (pos, named) = expand_args(it, pos, meta)?;
-            return it.static_call(f, cref, cls.clone(), name, pos, named);
+            let params = cls.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m));
+            return call_expanded(it, pos, meta, params, locals, |pos, named| it.static_call(f, cref, cls.clone(), name, pos, named));
         }
         let params = cls.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m));
         with_refs(params, pos, locals, |pos| it.static_call(f, cref, cls.clone(), name, pos, vec![]))
@@ -1913,8 +1947,8 @@ pub unsafe extern "C" fn rt_new(
             return Ok(Value::Object(it.new_instance(&cls)?));
         }
         if !meta.is_null() {
-            let (pos, named) = expand_args(it, pos, meta)?;
-            return it.instantiate(f, &cls, pos, named).map(Value::Object);
+            let params = cls.find_method("__construct").and_then(|m| crate::call::method_params(m));
+            return call_expanded(it, pos, meta, params, locals, |pos, named| it.instantiate(f, &cls, pos, named).map(Value::Object));
         }
         let params = cls.find_method("__construct").and_then(|m| crate::call::method_params(m));
         with_refs(params, pos, locals, |pos| it.instantiate(f, &cls, pos, vec![]).map(Value::Object))
