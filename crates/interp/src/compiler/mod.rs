@@ -69,6 +69,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_bind_args: 5 => true,
     rt_check_ret: 3 => true,
     rt_site_reset: 1 => false,
+    rt_destruct_now: 1 => true,
     rt_store_locals: 3 => false,
     rt_bind_slots: 4 => true,
     rt_unbind_slots: 2 => false,

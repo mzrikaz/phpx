@@ -470,6 +470,19 @@ impl<'a> Lower<'a> {
         self.stmt_body(s)
     }
 
+    /// Queued destructors only (after releasing a temporary object).
+    fn destruct_check(&mut self) {
+        let flag = self.iconst(&crate::value::DESTRUCT_PENDING as *const _ as i64);
+        let pending = self.b.ins().load(types::I8, flags(), flag, 0);
+        let (run, cont) = (self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(pending, run, &[], cont, &[]);
+        self.b.set_cold_block(run);
+        self.b.switch_to_block(run);
+        self.call_checked("rt_destruct_now", &[self.cx]);
+        self.b.ins().jump(cont, &[]);
+        self.b.switch_to_block(cont);
+    }
+
     /// Statement boundary: queued destructors, cycle collection, memory and
     /// time limits (one load + branch when nothing is pending).
     fn boundary_check(&mut self) {
@@ -1439,7 +1452,13 @@ impl<'a> Lower<'a> {
                     let meta = self.arg_meta(args);
                     self.helper_value("rt_method_call", |l| vec![l.cx, oa, sp, aa, n_, la, meta])?
                 };
-                self.release(o);
+                if matches!(o, Op::Ptr(_, Some(_))) {
+                    // A temporary (`(new C)->m()`) dies right after the call.
+                    self.release(o);
+                    self.destruct_check();
+                } else {
+                    self.release(o);
+                }
                 r
             }
             StaticCall { class, name, args } => {

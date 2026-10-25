@@ -818,7 +818,13 @@ impl Interp {
         };
         let (pos, named) = self.eval_args_for(f, args, params)?;
         match base {
-            Value::Object(o) => self.method_call(f, &o, &name, pos, named).map(Some),
+            Value::Object(o) => {
+                let r = self.method_call(f, &o, &name, pos, named)?;
+                // A temporary (`(new C)->m()`) dies right after the call.
+                drop(o);
+                self.destruct_now()?;
+                Ok(Some(r))
+            }
             other => Err(self.error("Error", &format!("Call to a member function {name}() on {}", other.type_name()))),
         }
     }

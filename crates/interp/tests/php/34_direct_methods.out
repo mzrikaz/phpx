@@ -1,0 +1,45 @@
+1 base-secret Base
+kid:2 base-secret Kid
+3 base-secret Base
+kid:4 base-secret Kid
+make 0
+bye 0
+hi 0
+after
+boom 1@5
+ok 2
+T 50
+x5x6
+Typed::f(): Argument #1 ($x) must be of type int, string given, called in F on line 17
+Call to a member function get() on null
+1 base-secret Base
+kid:2 base-secret Kid
+3 base-secret Base
+kid:4 base-secret Kid
+make 1
+bye 1
+hi 1
+after
+boom 1@5
+ok 2
+T 50
+x5x6
+Typed::f(): Argument #1 ($x) must be of type int, string given, called in F on line 17
+Call to a member function get() on null
+1 base-secret Base
+kid:2 base-secret Kid
+3 base-secret Base
+kid:4 base-secret Kid
+make 2
+bye 2
+hi 2
+after
+boom 1@5
+ok 2
+T 50
+x5x6
+Typed::f(): Argument #1 ($x) must be of type int, string given, called in F on line 17
+Call to a member function get() on null
+make 9
+bye 9
+hi 9

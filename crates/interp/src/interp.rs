@@ -731,6 +731,25 @@ impl Interp {
     }
 
     /// Run queued `__destruct` calls (objects whose last reference died).
+    /// Run queued destructors now (not the other statement-boundary work):
+    /// a temporary object dies as soon as the call made on it returns.
+    pub fn destruct_now(&self) -> R<()> {
+        use crate::value::DESTRUCT_QUEUE;
+        let q = DESTRUCT_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+        if q.is_empty() {
+            return Ok(());
+        }
+        let saved = self.pos.get();
+        let mut r = Ok(());
+        for o in q {
+            if r.is_ok() {
+                r = self.call_method(&o, "__destruct", vec![]).map(drop);
+            }
+        }
+        self.pos.set(saved);
+        r
+    }
+
     pub fn run_destructors(&self) -> R<()> {
         use crate::value::{DESTRUCT_PENDING, DESTRUCT_QUEUE};
         while DESTRUCT_PENDING.swap(false, std::sync::atomic::Ordering::Relaxed) {

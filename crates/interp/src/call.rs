@@ -1039,7 +1039,7 @@ impl Interp {
 
     pub fn method_call(&self, f: &Frame, o: &Rc<Obj>, name: &str, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
         let lname = name.to_ascii_lowercase();
-        match o.class.find_method(&lname).cloned() {
+        match o.class.find_method_from(&lname, f.class.as_deref()).cloned() {
             Some(m) => {
                 if self.check_method_visible(f, &o.class, &m).is_err() && o.class.find_method("__call").is_some() {
                     return self.magic_call(o, name, pos);

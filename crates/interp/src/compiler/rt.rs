@@ -1383,7 +1383,7 @@ pub unsafe extern "C" fn rt_method_call(
         };
         let hit = hit.or_else(|| {
             // Miss: look the method up and (if it compiles) cache it.
-            let m = o.class.find_method(site.lname)?.clone();
+            let m = o.class.find_method_from(site.lname, f.class.as_deref())?.clone();
             if !it.member_visible(f.class.as_deref(), m.vis, &m.declaring) {
                 return None;
             }
@@ -1445,7 +1445,7 @@ unsafe fn method_call_general(
         Value::Object(o) => {
             let o = o.clone();
             if meta.is_null() {
-                let params = o.class.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m));
+                let params = o.class.find_method_from(&name.to_ascii_lowercase(), f.class.as_deref()).and_then(|m| crate::call::method_params(m));
                 with_refs(params, vals, locals, |pos| it.method_call(f, &o, name, pos, vec![]))
             } else {
                 expand_args(it, vals, meta).and_then(|(pos, named)| it.method_call(f, &o, name, pos, named))
@@ -2125,6 +2125,11 @@ pub unsafe extern "C" fn rt_stash_free(slot: *mut *mut Ctrl) {
         drop(Box::from_raw(*slot));
         *slot = ptr::null_mut();
     }
+}
+
+pub unsafe extern "C" fn rt_destruct_now(c: *mut Cx) -> u64 {
+    let (it, _) = cx(c);
+    status(it, it.destruct_now(), |_| ())
 }
 
 pub unsafe extern "C" fn rt_destruct(c: *mut Cx) -> u64 {

@@ -134,6 +134,20 @@ impl Class {
         self.methods.get(lname)
     }
 
+    /// The method `$obj->name()` runs when called from `scope`: private
+    /// methods belong to their class, so the scope's own private method
+    /// wins over a same-named one of a subclass (PHP semantics).
+    pub fn find_method_from<'a>(&'a self, lname: &str, scope: Option<&'a Class>) -> Option<&'a Rc<Method>> {
+        if let Some(sc) = scope {
+            if let Some(m) = sc.methods.get(lname) {
+                if m.vis == Vis::Private && *m.declaring == *sc.lname && !std::ptr::eq(sc, self) && self.is_subclass_of(sc) {
+                    return Some(m);
+                }
+            }
+        }
+        self.methods.get(lname)
+    }
+
     pub fn find_prop(&self, name: &str) -> Option<&PropDecl> {
         self.props.iter().find(|p| &*p.name == name)
     }
