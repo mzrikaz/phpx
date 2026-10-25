@@ -126,6 +126,7 @@ impl Slots {
         Slots { ptr: std::ptr::NonNull::new(v.as_mut_ptr()).unwrap(), len, cap }
     }
 
+    #[inline(always)]
     fn from_slice(s: &[Option<Value>]) -> Slots {
         if s.is_empty() {
             return Slots::new();
@@ -139,6 +140,7 @@ impl Slots {
         n
     }
 
+    #[inline(always)]
     fn with_capacity(cap: u32) -> Slots {
         // SAFETY: non-zero size.
         let p = unsafe { std::alloc::alloc(Slots::layout(cap)) } as *mut Option<Value>;
@@ -232,11 +234,13 @@ impl Props {
     /// Instance storage for `shape` with these initial values (None =
     /// uninitialized).
     pub fn with_shape(shape: Rc<Shape>, vals: Vec<Option<Value>>) -> Props {
-        debug_assert_eq!(shape.names.len(), vals.len());
+        // Generated code indexes the slots by shape position.
+        assert_eq!(shape.names.len(), vals.len());
         Props { shape, vals: Slots::from_vec(vals) }
     }
 
     /// Like `with_shape`, cloning the values from a template.
+    #[inline(always)]
     pub fn from_template(shape: Rc<Shape>, vals: &[Option<Value>]) -> Props {
         debug_assert_eq!(shape.names.len(), vals.len());
         Props { shape, vals: Slots::from_slice(vals) }
