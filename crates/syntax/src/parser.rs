@@ -214,10 +214,6 @@ impl Parser {
         Err(())
     }
 
-    fn unsupported(&mut self, code: &'static str, span: Span, msg: &str, help: &str) {
-        self.diags.push(Diagnostic::error(code, span, msg).with_help(help));
-    }
-
 
     /// Any single word: identifiers, keywords (allowed as member names).
     fn ident(&mut self) -> PResult<Ident> {
@@ -1261,15 +1257,14 @@ impl Parser {
                 let attrs = self.attributes()?;
                 return self.closure_like(attrs, start);
             }
-            Tok::Backtick(_) => {
+            Tok::Backtick(raw) => {
+                // `cmd` is shell_exec("cmd") (deprecated in PHP 8.5; the
+                // run-time helper reports that).
+                let span = self.span();
                 self.bump();
-                self.unsupported(
-                    "E1006",
-                    start,
-                    "backtick shell execution is not supported",
-                    "use Process::run() (or shell_exec()) explicitly",
-                );
-                return mk(self, ExprKind::Error);
+                let cmd = self.template(&raw, false, span);
+                let callee = Expr { kind: ExprKind::Name("\\__phpx_backtick".into()), span, hint: Default::default() };
+                return mk(self, ExprKind::Call { callee: Box::new(callee), args: vec![Arg { name: None, value: cmd, spread: false }] });
             }
             Tok::Name(n) => {
                 let lower = n.to_ascii_lowercase();

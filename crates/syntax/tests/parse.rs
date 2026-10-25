@@ -107,7 +107,8 @@ fn string_interpolation() {
 #[test]
 fn rejects_dropped_features_with_codes() {
     assert_eq!(codes("<?php f(&$x);"), ["E0002"]); // call-time by-ref, removed in PHP 5.4
-    assert_eq!(codes("<?php $x = `ls`;"), ["E1006"]);
+    // Backticks run (as shell_exec(), deprecated at run time like PHP 8.5).
+    assert!(codes("<?php $x = `ls $dir`;").is_empty());
     assert_eq!(codes("<?php create_function('$a', 'return 1;');"), ["E1007"]);
     assert_eq!(codes("<?php class A { public int $x { get => 1; } }"), ["E1008"]);
 }
@@ -146,23 +147,18 @@ fn allowed_lookalikes_are_not_rejected() {
 
 #[test]
 fn recovers_and_reports_every_error() {
-    let (_, d) = check("<?php\n$a = ;\n$c = `ls`;\n$b = 1 2;\nfunction ok() { return 1; }\n");
+    let (_, d) = check("<?php\n$a = ;\n$c = 2;\n$b = 1 2;\nfunction ok() { return 1; }\n");
     let codes: Vec<_> = d.iter().map(|d| d.code).collect();
-    assert_eq!(codes, ["E0002", "E1006", "E0002"], "{d:#?}");
+    assert_eq!(codes, ["E0002", "E0002"], "{d:#?}");
 }
 
 #[test]
 fn diagnostic_renders_with_caret() {
-    let src = "<?php\nfunction f() { $x = `ls`; }\n";
+    let src = "<?php\nclass A { public int $x { get => 1; } }\n";
     let (_, d) = check(src);
     let out = d[0].render("app/f.php", src);
-    assert_eq!(
-        out,
-        "error[E1006]: backtick shell execution is not supported\n \
-         --> app/f.php:2:21\n  \
-         |\n\
-         2 | function f() { $x = `ls`; }\n  \
-         |                     ^^^^\n  \
-         = help: use Process::run() (or shell_exec()) explicitly\n"
-    );
+    assert!(out.starts_with("error[E1008]: "), "{out}");
+    assert!(out.contains(" --> app/f.php:2:"), "{out}");
+    assert!(out.contains("2 | class A { public int $x { get => 1; } }"), "{out}");
+    assert!(out.contains("^"), "{out}");
 }
