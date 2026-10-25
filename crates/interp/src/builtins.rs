@@ -346,7 +346,13 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("min", |it, _, a| min_max(it, a, std::cmp::Ordering::Less, "min"));
     t.insert("rand", |it, _, a| rand_between(it, a));
     t.insert("mt_rand", |it, _, a| rand_between(it, a));
-    t.insert("random_int", |it, _, a| rand_between(it, a));
+    t.insert("random_int", |it, _, a| {
+        let (lo, hi) = (int(it, a, 0)?, int(it, a, 1)?);
+        if hi < lo {
+            return Err(it.error("ValueError", "random_int(): Argument #1 ($min) must be less than or equal to argument #2 ($max)"));
+        }
+        Ok(Value::Int(secure_range(lo, hi)))
+    });
     t.insert("mt_srand", |_, _, _| Ok(Value::Null));
     t.insert("mt_getrandmax", |_, _, _| Ok(Value::Int(2147483647)));
     t.insert("getrandmax", |_, _, _| Ok(Value::Int(2147483647)));
@@ -761,6 +767,23 @@ pub fn random_u64() -> u64 {
         s.set(x);
         x.wrapping_mul(0x2545F4914F6CDD1D)
     })
+}
+
+/// Uniform integer in [lo, hi] from the OS CSPRNG (rejection sampling,
+/// no modulo bias). For random_int().
+pub fn secure_range(lo: i64, hi: i64) -> i64 {
+    let span = (hi as i128 - lo as i128) as u128 + 1;
+    if span > u64::MAX as u128 {
+        return i64::from_le_bytes(secure_bytes(8).try_into().unwrap());
+    }
+    let span = span as u64;
+    let zone = u64::MAX - (u64::MAX % span);
+    loop {
+        let r = u64::from_le_bytes(secure_bytes(8).try_into().unwrap());
+        if r < zone {
+            return (lo as i128 + (r % span) as i128) as i64;
+        }
+    }
 }
 
 fn rand_between(it: &Interp, a: &[Value]) -> R<Value> {
