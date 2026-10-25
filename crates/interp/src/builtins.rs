@@ -135,8 +135,8 @@ pub fn constants() -> HashMap<String, Value> {
     add("PHP_MAXPATHLEN", Value::Int(4096));
     add("PHP_DEBUG", Value::Int(0));
     add("PHP_ZTS", Value::Int(0));
-    add("PHP_SAPI", Value::str("cli"));
-    add("PHP_BINARY", Value::str(""));
+    add("PHP_SAPI", Value::str(crate::server::sapi()));
+    add("PHP_BINARY", Value::str(&std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()));
     add("PATH_SEPARATOR", Value::str(":"));
     add("PHP_MAJOR_VERSION", Value::Int(8));
     add("PHP_MINOR_VERSION", Value::Int(5));
@@ -738,7 +738,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::array(PhpArray::from_list(EXTENSIONS.iter().map(|e| Value::str(e)).collect::<Vec<_>>())))
     });
     // Diagnostic: native stack bytes left in this green thread.
-    t.insert("php_sapi_name", |_, _, _| Ok(Value::str("cli")));
+    t.insert("php_sapi_name", |_, _, _| Ok(Value::str(crate::server::sapi())));
     t.insert("phpversion", |_, _, _| Ok(Value::str("8.5.10")));
     t.insert("gc_collect_cycles", |it, _, _| {
         // Destructors of cyclic garbage run, then the cycles are freed.

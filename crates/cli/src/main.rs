@@ -1,6 +1,7 @@
-//! `phpx run <file>`: run a PHP file. `phpx check <paths...>`: parse files and
-//! report syntax errors and unsupported PHP features. `phpx ast <file>`: dump
-//! the syntax tree.
+//! `phpx <file>` (or `phpx run <file>`): run a PHP file, with php's
+//! command-line options (-r, -S, -d, -n, ...). `phpx check <paths...>`:
+//! parse files and report syntax errors and unsupported PHP features.
+//! `phpx ast <file>`: dump the syntax tree.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -15,38 +16,180 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("check") if args.len() > 1 => check(&args[1..]),
         Some("ast") if args.len() == 2 => ast(&args[1]),
-        Some("run") if args.len() >= 2 => {
-            // php-style ini options before the script: -n, -d key=value.
-            let mut i = 1;
-            let (mut no_ini, mut overrides) = (false, vec![]);
-            while i < args.len() {
-                match args[i].as_str() {
-                    "-n" => no_ini = true,
-                    "-d" if i + 1 < args.len() => {
-                        i += 1;
-                        let (k, v) = args[i].split_once('=').unwrap_or((&args[i], "1"));
-                        overrides.push((k.to_string(), v.to_string()));
-                    }
-                    d if d.starts_with("-d") && d.len() > 2 => {
-                        let (k, v) = d[2..].split_once('=').unwrap_or((&d[2..], "1"));
-                        overrides.push((k.to_string(), v.to_string()));
-                    }
-                    _ => break,
-                }
-                i += 1;
-            }
-            if i >= args.len() {
-                eprintln!("phpx run: missing script");
-                return ExitCode::from(2);
-            }
-            phpx_interp::set_ini_options(no_ini, overrides);
-            run(&args[i], &args[i + 1..])
-        }
+        Some("run") => php_cli(&args[1..]),
         Some("optrees") => optrees::run(),
-        _ => {
-            eprintln!("usage:\n  phpx run [-n] [-d key=value]... <file.php> [args...]\n  phpx check [--summary] <file-or-dir>...\n  phpx ast <file>");
-            ExitCode::from(2)
+        Some("help") => {
+            usage();
+            ExitCode::SUCCESS
         }
+        _ => php_cli(&args),
+    }
+}
+
+fn usage() {
+    eprintln!(
+        "usage:
+  phpx [options] [-f] <file.php> [--] [args...]
+  phpx [options] -r <code> [--] [args...]
+  phpx [options] -S <addr>:<port> [-t docroot] [router.php]
+  phpx run <file.php> [args...]          (same as without `run`)
+  phpx check [--summary] <file-or-dir>...
+  phpx ast <file>
+
+options: -n (no php.ini)  -d key[=value]  -c <path>  -v  -m  -l <file>"
+    );
+}
+
+/// php's command line: ini options, then a script, -r code or -S.
+fn php_cli(args: &[String]) -> ExitCode {
+    let (mut no_ini, mut overrides) = (false, vec![]);
+    let (mut code, mut server, mut docroot, mut script) = (None, None, None, None);
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let next = |i: &mut usize| -> Option<String> {
+            *i += 1;
+            args.get(*i).cloned()
+        };
+        match a {
+            "-n" => no_ini = true,
+            "-d" => {
+                let Some(d) = next(&mut i) else { return missing(a) };
+                let (k, v) = d.split_once('=').unwrap_or((&d, "1"));
+                overrides.push((k.to_string(), v.to_string()));
+            }
+            d if d.starts_with("-d") => {
+                let (k, v) = d[2..].split_once('=').unwrap_or((&d[2..], "1"));
+                overrides.push((k.to_string(), v.to_string()));
+            }
+            "-c" => {
+                next(&mut i);
+            }
+            "-q" | "-e" | "-H" => {}
+            "-r" => match next(&mut i) {
+                Some(c) => {
+                    code = Some(c);
+                    i += 1;
+                    break;
+                }
+                None => return missing(a),
+            },
+            "-S" => match next(&mut i) {
+                Some(addr) => server = Some(addr),
+                None => return missing(a),
+            },
+            "-t" => match next(&mut i) {
+                Some(d) => docroot = Some(d),
+                None => return missing(a),
+            },
+            "-f" => match next(&mut i) {
+                Some(f) => {
+                    script = Some(f);
+                    i += 1;
+                    break;
+                }
+                None => return missing(a),
+            },
+            "-v" | "--version" => {
+                println!("PHP 8.5.10 (cli) (phpx {}) (NTS)\nCopyright (c) The PHP Group\nZend Engine v4.5.10, Copyright (c) Zend Technologies (phpx runtime)", env!("CARGO_PKG_VERSION"));
+                return ExitCode::SUCCESS;
+            }
+            "-m" => {
+                println!("[PHP Modules]");
+                for m in phpx_interp::extensions() {
+                    println!("{m}");
+                }
+                println!("\n[Zend Modules]\n");
+                return ExitCode::SUCCESS;
+            }
+            "-l" => {
+                let Some(f) = next(&mut i) else { return missing(a) };
+                return lint(&f);
+            }
+            "-h" | "--help" | "-?" => {
+                usage();
+                return ExitCode::SUCCESS;
+            }
+            "--" => {
+                i += 1;
+                break;
+            }
+            s if s.starts_with('-') && s.len() > 1 && script.is_none() && server.is_none() => {
+                eprintln!("phpx: unknown option {s}");
+                usage();
+                return ExitCode::from(1);
+            }
+            s => {
+                if server.is_none() {
+                    script = Some(s.to_string());
+                    i += 1;
+                    break;
+                }
+                // With -S, the next plain argument is the router script.
+                script = Some(s.to_string());
+            }
+        }
+        i += 1;
+    }
+    phpx_interp::set_ini_options(no_ini, overrides);
+    if let Some(addr) = server {
+        let code = phpx_interp::server::serve(&addr, docroot.as_deref().map(std::path::Path::new), script.as_deref().map(std::path::Path::new));
+        return ExitCode::from(code.clamp(0, 255) as u8);
+    }
+    let rest: Vec<String> = args.get(i..).map(|r| r.to_vec()).unwrap_or_default();
+    let rest: Vec<String> = match rest.first().map(String::as_str) {
+        Some("--") => rest[1..].to_vec(),
+        _ => rest,
+    };
+    if let Some(c) = code {
+        let out = Box::new(std::io::BufWriter::new(std::io::stdout()));
+        let mut argv = vec!["Standard input code".to_string()];
+        argv.extend(rest);
+        let src = format!("<?php {c}");
+        let code = phpx_interp::run_source_args(std::path::Path::new("Command line code"), src, argv, out);
+        return ExitCode::from(code.clamp(0, 255) as u8);
+    }
+    match script {
+        Some(s) => run(&s, &rest),
+        None => {
+            // No script: read it from stdin, like php.
+            let mut src = String::new();
+            if std::io::Read::read_to_string(&mut std::io::stdin(), &mut src).is_err() {
+                return ExitCode::from(1);
+            }
+            let out = Box::new(std::io::BufWriter::new(std::io::stdout()));
+            let mut argv = vec!["Standard input code".to_string()];
+            argv.extend(rest);
+            let code = phpx_interp::run_source_args(std::path::Path::new("Standard input code"), src, argv, out);
+            ExitCode::from(code.clamp(0, 255) as u8)
+        }
+    }
+}
+
+fn missing(opt: &str) -> ExitCode {
+    eprintln!("phpx: option {opt} needs an argument");
+    ExitCode::from(1)
+}
+
+fn lint(path: &str) -> ExitCode {
+    let src = match std::fs::read(path) {
+        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+        Err(_) => {
+            eprintln!("Could not open input file: {path}");
+            return ExitCode::from(1);
+        }
+    };
+    let (_, diags) = phpx_syntax::check(&src);
+    let errors: Vec<_> = diags.iter().filter(|d| d.severity == Severity::Error).collect();
+    if errors.is_empty() {
+        println!("No syntax errors detected in {path}");
+        ExitCode::SUCCESS
+    } else {
+        for d in errors {
+            eprint!("{}", d.render(path, &src));
+        }
+        println!("Errors parsing {path}");
+        ExitCode::from(255)
     }
 }
 

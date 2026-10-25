@@ -42,6 +42,7 @@ mod db;
 mod pdo;
 mod process;
 mod reflect;
+pub mod server;
 mod trace;
 mod weak;
 mod sockets;
@@ -93,6 +94,11 @@ pub fn run_source(path: &Path, src: String, out: Box<dyn Write>) -> i32 {
 /// php.ini options from the command line: `-n` (no files) and `-d k=v`.
 static INI_OPTS: std::sync::OnceLock<(bool, Vec<(String, String)>)> = std::sync::OnceLock::new();
 
+/// Names of the extensions phpx implements (php -m).
+pub fn extensions() -> &'static [&'static str] {
+    builtins::EXTENSIONS
+}
+
 pub fn set_ini_options(no_files: bool, overrides: Vec<(String, String)>) {
     let _ = INI_OPTS.set((no_files, overrides));
 }
@@ -128,6 +134,15 @@ fn cli_globals(frame: &mut Frame, path: &Path, argv: &[String]) {
 }
 
 pub fn run_source_args(path: &Path, src: String, argv: Vec<String>, out: Box<dyn Write>) -> i32 {
+    let script = path.to_path_buf();
+    run_main(path, src, out, Box::new(move |_, frame| cli_globals(frame, &script, &argv))).0
+}
+
+/// Sets up a script's globals once its interpreter exists.
+pub(crate) type Setup = Box<dyn FnOnce(&Rc<Interp>, &mut Frame)>;
+
+/// Run a main script: (exit code, whether the script returned false).
+pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Setup) -> (i32, bool) {
     phpx_runtime::set_stack_size(MAIN_STACK);
     let it = Interp::new(out);
     {
@@ -139,22 +154,26 @@ pub fn run_source_args(path: &Path, src: String, argv: Vec<String>, out: Box<dyn
         Ok(x) => x,
         Err(msg) => {
             eprint!("{msg}");
-            return 255;
+            return (255, false);
         }
     };
     it.register_strict(id, file);
     it.included.borrow_mut().insert(path.to_path_buf());
     let main_it = it.clone();
-    let script = path.to_path_buf();
     let code = phpx_runtime::block_on(move || {
         // Only the root task gets the big stack; async tasks get the default.
         phpx_runtime::set_stack_size(INTERP_STACK);
         let ctx = main_it.top_ctx(id, false);
         let mut frame = Frame::new(ctx, 0);
-        cli_globals(&mut frame, &script, &argv);
+        setup(&main_it, &mut frame);
         main_it.globals.set(&mut frame);
+        let mut returned_false = false;
         let code = match main_it.run_file_in(&mut frame, file, id) {
-            Ok(_) | Err(Ctrl::GenClose) => 0,
+            Ok(v) => {
+                returned_false = matches!(v, value::Value::Bool(false));
+                0
+            }
+            Err(Ctrl::GenClose) => 0,
             Err(Ctrl::Exit(c)) => c,
             Err(Ctrl::Throw(e)) => crate::errors::uncaught(&main_it, e),
         };
@@ -179,14 +198,14 @@ pub fn run_source_args(path: &Path, src: String, argv: Vec<String>, out: Box<dyn
             }
             _ => code,
         };
-        Ok(code)
+        Ok((code, returned_false))
     });
     it.flush();
     match code {
         Ok(c) => c,
         Err(e) => {
             eprintln!("phpx: runtime error: {e}");
-            255
+            (255, false)
         }
     }
 }

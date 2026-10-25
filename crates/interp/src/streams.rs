@@ -353,7 +353,7 @@ pub fn open(it: &Interp, path: &str, mode: &str) -> Result<Value, String> {
             "stdout" => Backend::Stdout,
             "stderr" => Backend::Stderr,
             "output" => Backend::Output,
-            "input" => Backend::Memory(vec![]),
+            "input" => Backend::Memory(crate::server::request_body()),
             r if r == "memory" || r.starts_with("temp") => Backend::Memory(vec![]),
             _ => return Err(format!("fopen(): Invalid php:// URL specified")),
         };
@@ -859,8 +859,20 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("umask", |_, _, _| Ok(Value::Int(0o022)));
     t.insert("disk_free_space", |_, _, _| Ok(Value::Float(1e12)));
     t.insert("disk_total_space", |_, _, _| Ok(Value::Float(2e12)));
-    t.insert("is_uploaded_file", |_, _, _| Ok(Value::Bool(false)));
-    t.insert("move_uploaded_file", |_, _, _| Ok(Value::Bool(false)));
+    t.insert("is_uploaded_file", |it, _, a| Ok(Value::Bool(crate::server::is_uploaded(&path_arg(it, a, 0)?))));
+    t.insert("move_uploaded_file", |it, _, a| {
+        let (from, to) = (path_arg(it, a, 0)?, path_arg(it, a, 1)?);
+        if !crate::server::is_uploaded(&from) {
+            return Ok(Value::Bool(false));
+        }
+        let ok = std::fs::rename(&from, &to).is_ok() || (std::fs::copy(&from, &to).is_ok() && std::fs::remove_file(&from).is_ok());
+        if ok {
+            crate::server::forget_upload(&from);
+        } else {
+            it.warn(&format!("move_uploaded_file({to}): Failed to open stream: Permission denied"));
+        }
+        Ok(Value::Bool(ok))
+    });
     t.insert("link", |it, _, a| Ok(Value::Bool(std::fs::hard_link(path_arg(it, a, 0)?, path_arg(it, a, 1)?).is_ok())));
     t.insert("symlink", |it, _, a| Ok(Value::Bool(std::os::unix::fs::symlink(path_arg(it, a, 0)?, path_arg(it, a, 1)?).is_ok())));
     t.insert("readlink", |it, _, a| {
