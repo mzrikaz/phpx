@@ -364,6 +364,18 @@ pub fn open(it: &Interp, path: &str, mode: &str) -> Result<Value, String> {
         let wrapper = if rest.starts_with("temp") { "TEMP" } else if rest == "memory" { "MEMORY" } else { "PHP" };
         return Ok(Resource::new("stream", Box::new(Stream::new(backend, mode, path, wrapper))));
     }
+    if let Some(rest) = path.strip_prefix("data:").map(|r| r.strip_prefix("//").unwrap_or(r)) {
+        // data:[<mediatype>][;base64],<data> (RFC 2397)
+        let Some((meta, data)) = rest.split_once(',') else {
+            return Err("fopen(): rfc2397: no comma in URL".into());
+        };
+        let bytes = if meta.ends_with(";base64") {
+            crate::strings::base64_decode(data.as_bytes()).ok_or_else(|| "fopen(): rfc2397: unable to decode".to_string())?
+        } else {
+            crate::server::percent_decode_bytes(data)
+        };
+        return Ok(Resource::new("stream", Box::new(Stream::new(Backend::Memory(bytes), mode, path, "RFC2397"))));
+    }
     let local = path.strip_prefix("file://").unwrap_or(path);
     if path.contains("://") && !path.starts_with("file://") {
         return Err(format!("fopen(): Unable to find the wrapper \"{}\"", path.split("://").next().unwrap_or("")));

@@ -103,7 +103,52 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("file_get_contents", |it, _, a| {
         let p = path(it, a, 0)?;
-        match std::fs::read(&p) {
+        let offset = if has(a, 3) { int(it, a, 3)? } else { 0 };
+        let length = if has(a, 4) && !arg(a, 4).is_null() { Some(int(it, a, 4)?) } else { None };
+        if length.is_some_and(|l| l < 0) {
+            return Err(it.error("ValueError", "file_get_contents(): Argument #5 ($length) must be greater than or equal to 0"));
+        }
+        if p.starts_with("php://") || p.starts_with("data:") || (p.contains("://") && !p.starts_with("file://")) {
+            let res = match crate::streams::open(it, &p, "rb") {
+                Ok(r) => r,
+                Err(msg) => {
+                    it.warn(&msg.replacen("fopen(", "file_get_contents(", 1));
+                    return Ok(Value::Bool(false));
+                }
+            };
+            let data = crate::streams::with_stream(it, &res, "file_get_contents", |st| {
+                let mut out = vec![];
+                loop {
+                    let chunk = st.read(65536, it);
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    out.extend_from_slice(&chunk);
+                }
+                out
+            })?;
+            let start = (offset.max(0) as usize).min(data.len());
+            let end = length.map_or(data.len(), |l| (start + l as usize).min(data.len()));
+            return Ok(Value::bytes(data[start..end].to_vec()));
+        }
+        let p = p.strip_prefix("file://").map(str::to_string).unwrap_or(p);
+        let read = if offset != 0 || length.is_some() {
+            use std::io::{Read, Seek};
+            std::fs::File::open(&p).and_then(|mut f| {
+                let len = f.metadata()?.len() as i64;
+                let start = if offset < 0 { (len + offset).max(0) } else { offset };
+                f.seek(std::io::SeekFrom::Start(start as u64))?;
+                let mut b = vec![];
+                match length {
+                    Some(l) => f.take(l as u64).read_to_end(&mut b)?,
+                    None => f.read_to_end(&mut b)?,
+                };
+                Ok(b)
+            })
+        } else {
+            std::fs::read(&p)
+        };
+        match read {
             Ok(b) => Ok(Value::bytes(b)),
             Err(e) => {
                 it.warn(&format!("file_get_contents({p}): Failed to open stream: {}", io_reason(&e)));
@@ -124,6 +169,18 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             v => it.to_str(&v)?.to_vec(),
         };
         let append = int(it, a, 2)? & 8 != 0;
+        if p.starts_with("php://") || (p.contains("://") && !p.starts_with("file://")) {
+            let res = match crate::streams::open(it, &p, if append { "ab" } else { "wb" }) {
+                Ok(r) => r,
+                Err(msg) => {
+                    it.warn(&msg.replacen("fopen(", "file_put_contents(", 1));
+                    return Ok(Value::Bool(false));
+                }
+            };
+            let n = crate::streams::with_stream(it, &res, "file_put_contents", |st| st.write(&data, it))?;
+            return Ok(Value::Int(n as i64));
+        }
+        let p = p.strip_prefix("file://").map(str::to_string).unwrap_or(p);
         let r = if append {
             use std::io::Write;
             std::fs::OpenOptions::new().append(true).create(true).open(&p).and_then(|mut f| f.write_all(&data))
