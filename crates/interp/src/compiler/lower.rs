@@ -465,7 +465,14 @@ impl<'a> Lower<'a> {
     }
 
     pub fn stmt(&mut self, s: &'static Stmt) -> L<()> {
-        // Queued destructors run at statement boundaries.
+        self.boundary_check();
+        self.set_pos(s.span.start);
+        self.stmt_body(s)
+    }
+
+    /// Statement boundary: queued destructors, cycle collection, memory and
+    /// time limits (one load + branch when nothing is pending).
+    fn boundary_check(&mut self) {
         let flag = self.iconst(&crate::value::DESTRUCT_PENDING as *const _ as i64);
         let pending = self.b.ins().load(types::I8, flags(), flag, 0);
         let (run, cont) = (self.b.create_block(), self.b.create_block());
@@ -475,7 +482,9 @@ impl<'a> Lower<'a> {
         self.call_checked("rt_destruct", &[self.cx]);
         self.b.ins().jump(cont, &[]);
         self.b.switch_to_block(cont);
-        self.set_pos(s.span.start);
+    }
+
+    fn stmt_body(&mut self, s: &'static Stmt) -> L<()> {
         match &s.kind {
             StmtKind::Expr(e) => self.discard(e)?,
             StmtKind::Echo(es) => {
@@ -774,6 +783,10 @@ impl<'a> Lower<'a> {
     fn loop_body(&mut self, body: &'static [Stmt], cont: Block, exit: Block) -> L<()> {
         self.loops.push((cont, exit, self.handlers.len()));
         self.terminated = false;
+        if body.is_empty() {
+            // `while (...) {}` must still notice time limits.
+            self.boundary_check();
+        }
         self.stmts(body)?;
         if !self.terminated {
             self.b.ins().jump(cont, &[]);

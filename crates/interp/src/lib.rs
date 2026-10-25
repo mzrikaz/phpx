@@ -25,6 +25,7 @@ mod ops;
 mod preg;
 mod streams;
 mod strings;
+mod timeout;
 pub mod value;
 
 use std::io::Write;

@@ -338,7 +338,14 @@ impl Interp {
             anon_classes: RefCell::new(HashMap::new()),
             file_strict: RefCell::new(vec![]),
             me: RefCell::new(std::rc::Weak::new()),
-            jit: RefCell::new(if std::env::var("PHPX_NOJIT").is_ok() { None } else { phpx_jit::Jit::new() }),
+            jit: RefCell::new(if std::env::var("PHPX_NOJIT").is_ok() {
+                None
+            } else {
+                phpx_jit::Jit::new().map(|mut j| {
+                    j.set_interrupt_flag(&crate::value::DESTRUCT_PENDING as *const _ as usize);
+                    j
+                })
+            }),
             pending: RefCell::new(None),
             file_ctxs: RefCell::new(vec![]),
             native: RefCell::new(crate::compiler::Native::from_env()),
@@ -626,6 +633,10 @@ impl Interp {
     // ---- statements --------------------------------------------------
 
     pub fn exec_block(&self, f: &mut Frame, stmts: &'static [Stmt]) -> R<Flow> {
+        if stmts.is_empty() && crate::value::DESTRUCT_PENDING.load(std::sync::atomic::Ordering::Relaxed) {
+            // Empty loop bodies still notice time/memory limits.
+            self.run_destructors()?;
+        }
         let mut i = 0;
         while i < stmts.len() {
             match self.exec(f, &stmts[i])? {
@@ -666,6 +677,12 @@ impl Interp {
         while DESTRUCT_PENDING.swap(false, std::sync::atomic::Ordering::Relaxed) {
             if let Some((limit, tried)) = crate::alloc::take_over() {
                 return Err(self.memory_fatal(limit, tried));
+            }
+            if let Some(secs) = crate::timeout::take_expired() {
+                self.flush();
+                let (file, line) = self.here();
+                eprintln!("PHP Fatal error:  Maximum execution time of {secs} second{} exceeded in {file} on line {line}", if secs == 1 { "" } else { "s" });
+                return Err(Ctrl::Exit(255));
             }
             if crate::gc::take_due() {
                 crate::gc::collect();

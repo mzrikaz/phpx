@@ -220,13 +220,14 @@ impl Interp {
             }
             "include_path" => *self.include_path.borrow_mut() = v.to_string(),
             "zend.enable_gc" => crate::gc::set_enabled(v == "1"),
+            "max_execution_time" => crate::timeout::set(v.trim().parse().unwrap_or(0)),
             _ => {}
         }
     }
 
     /// After loading files: apply every setting with a side effect.
     pub fn ini_apply_all(&self) {
-        for k in ["memory_limit", "include_path", "zend.enable_gc"] {
+        for k in ["memory_limit", "include_path", "zend.enable_gc", "max_execution_time"] {
             if let Some(v) = self.ini_get(k) {
                 self.ini_apply(k, &v);
             }
@@ -351,6 +352,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("set_time_limit", |it, _, a| {
         let v = it.to_int(&arg(a, 0))?;
         it.ini.borrow_mut().set("max_execution_time", &v.to_string());
+        crate::timeout::set(v);
         Ok(Value::Bool(true))
     });
     t.insert("error_reporting", |it, _, a| {

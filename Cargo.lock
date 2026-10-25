@@ -818,6 +818,7 @@ dependencies = [
  "flate2",
  "hmac",
  "indexmap",
+ "libc",
  "md-5",
  "phpx-jit",
  "phpx-runtime",
