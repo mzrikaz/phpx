@@ -1,0 +1,37 @@
+Array
+(
+    [0] => D/a/x/m.json
+    [1] => D/b/x/m.json
+)
+Array
+(
+    [0] => D/a
+    [1] => D/b
+)
+Array
+(
+    [0] => D/a/
+    [1] => D/b/
+)
+Array
+(
+    [0] => D/a/f.txt
+    [1] => D/a/x
+    [2] => D/b/x
+)
+Array
+(
+    [0] => a/x/m.json
+    [1] => b/x/m.json
+)
+Array
+(
+    [0] => a
+)
+NULL
+NULL
+NULL
+NULL
+NULL
+ok
+NULL

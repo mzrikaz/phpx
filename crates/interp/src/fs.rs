@@ -186,21 +186,8 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("glob", |it, _, a| {
         let pat = path(it, a, 0)?;
-        let (dir, file_pat) = match pat.rfind('/') {
-            Some(i) => (pat[..i].to_string(), pat[i + 1..].to_string()),
-            None => (".".to_string(), pat.clone()),
-        };
-        let mut out = vec![];
-        if let Ok(rd) = std::fs::read_dir(if dir.is_empty() { "/" } else { &dir }) {
-            for e in rd.flatten() {
-                let name = e.file_name().to_string_lossy().into_owned();
-                if !name.starts_with('.') && wildcard(file_pat.as_bytes(), name.as_bytes()) {
-                    out.push(if pat.contains('/') { format!("{dir}/{name}") } else { name });
-                }
-            }
-        }
-        out.sort();
-        Ok(Value::array(PhpArray::from_list(out.iter().map(|n| Value::str(n)))))
+        let flags = if a.len() > 1 { it.to_int(&a[1])? } else { 0 };
+        Ok(Value::array(PhpArray::from_list(crate::glob::glob(&pat, flags).iter().map(|n| Value::str(n)))))
     });
     t.insert("getcwd", |_, _, _| Ok(std::env::current_dir().map(|d| Value::str(&d.display().to_string())).unwrap_or(Value::Bool(false))));
     t.insert("chdir", |it, _, a| Ok(Value::Bool(std::env::set_current_dir(path(it, a, 0)?).is_ok())));
@@ -221,17 +208,6 @@ fn io_reason(e: &std::io::Error) -> &'static str {
         std::io::ErrorKind::NotFound => "No such file or directory",
         std::io::ErrorKind::PermissionDenied => "Permission denied",
         _ => "I/O error",
-    }
-}
-
-/// `*` and `?` matching for glob(); `{a,b}` braces are not supported.
-fn wildcard(p: &[u8], s: &[u8]) -> bool {
-    match (p.first(), s.first()) {
-        (None, None) => true,
-        (Some(b'*'), _) => wildcard(&p[1..], s) || (!s.is_empty() && wildcard(p, &s[1..])),
-        (Some(b'?'), Some(_)) => wildcard(&p[1..], &s[1..]),
-        (Some(a), Some(b)) if a == b => wildcard(&p[1..], &s[1..]),
-        _ => false,
     }
 }
 
