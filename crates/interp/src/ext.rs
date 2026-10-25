@@ -625,7 +625,7 @@ fn unpack(it: &Interp, a: &[Value]) -> R<Value> {
 // ---- hashing ------------------------------------------------------------------
 
 #[derive(Clone)]
-enum Hasher {
+pub(crate) enum Hasher {
     Md5(md5::Md5),
     Sha1(sha1::Sha1),
     Sha224(sha2::Sha224),
@@ -638,7 +638,7 @@ enum Hasher {
 const ALGOS: &[&str] = &["md5", "sha1", "sha224", "sha256", "sha384", "sha512", "crc32b"];
 
 impl Hasher {
-    fn new(algo: &str) -> Option<Hasher> {
+    pub(crate) fn new(algo: &str) -> Option<Hasher> {
         Some(match algo.to_ascii_lowercase().as_str() {
             "md5" => Hasher::Md5(md5::Md5::new()),
             "sha1" => Hasher::Sha1(sha1::Sha1::new()),
@@ -651,7 +651,7 @@ impl Hasher {
         })
     }
 
-    fn update(&mut self, d: &[u8]) {
+    pub(crate) fn update(&mut self, d: &[u8]) {
         match self {
             Hasher::Md5(h) => h.update(d),
             Hasher::Sha1(h) => h.update(d),
@@ -663,7 +663,7 @@ impl Hasher {
         }
     }
 
-    fn finish(self) -> Vec<u8> {
+    pub(crate) fn finish(self) -> Vec<u8> {
         match self {
             Hasher::Md5(h) => h.finalize().to_vec(),
             Hasher::Sha1(h) => h.finalize().to_vec(),
@@ -688,7 +688,7 @@ pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-fn digest_out(raw: Vec<u8>, binary: bool) -> Value {
+pub(crate) fn digest_out(raw: Vec<u8>, binary: bool) -> Value {
     if binary {
         Value::bytes(raw)
     } else {
@@ -696,7 +696,7 @@ fn digest_out(raw: Vec<u8>, binary: bool) -> Value {
     }
 }
 
-fn hmac(algo: &str, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn hmac(algo: &str, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
     let proto = Hasher::new(algo)?;
     let bs = proto.block_size();
     let mut k = if key.len() > bs {
@@ -719,15 +719,15 @@ fn hmac(algo: &str, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
     Some(outer.finish())
 }
 
-fn unknown_algo(it: &Interp, fname: &str, algo: &str) -> crate::interp::Ctrl {
+pub(crate) fn unknown_algo(it: &Interp, fname: &str, algo: &str) -> crate::interp::Ctrl {
     it.error("ValueError", &format!("{fname}(): Argument #1 ($algo) must be a valid hashing algorithm, \"{algo}\" given"))
 }
 
 /// State kept in a HashContext object.
 #[derive(Clone)]
-struct HashState {
-    h: Hasher,
-    hmac_key: Option<(String, Vec<u8>)>,
+pub(crate) struct HashState {
+    pub(crate) h: Hasher,
+    pub(crate) hmac_key: Option<(String, Vec<u8>)>,
 }
 
 // ---- URLs ---------------------------------------------------------------------------
@@ -1485,7 +1485,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
 }
 
-fn with_hash<T>(it: &Interp, v: &Value, g: impl FnOnce(&mut HashState) -> T) -> R<T> {
+pub(crate) fn with_hash<T>(it: &Interp, v: &Value, g: impl FnOnce(&mut HashState) -> T) -> R<T> {
     if let Value::Object(o) = v {
         if let Some(Internal::Data(d)) = o.internal_mut().as_deref_mut() {
             if let Some(st) = d.as_any_mut().downcast_mut::<HashState>() {

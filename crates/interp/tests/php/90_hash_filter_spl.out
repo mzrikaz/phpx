@@ -1,0 +1,61 @@
+string(20) "632c2812e46d4604102b"
+string(40) "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957"
+string(20) "f03104b7e5cd21965935"
+string(32) "91e5d56c66498add12a49423948bff92"
+hash_pbkdf2(): Argument #4 ($iterations) must be greater than 0
+hash_pbkdf2(): Argument #1 ($algo) must be a valid cryptographic hashing algorithm
+string(64) "80c724c4a65d79568fc3606753c192adcc24bc263286767d4410269d8093c372"
+string(84) "9ca0d662557439e3b83365f2da4626d35da195c6d9d1779f09838cf9e408966ece99106e2585ace6f083"
+int(100)
+hash_hkdf(): Argument #2 ($key) must not be empty
+hash_hkdf(): Argument #3 ($length) must be less than or equal to 5100
+string(64) "c0af28962cd061db885eba2cb0a7a8e77a053db04c491e27c97d4247034d7a32"
+int(100)
+int(19900)
+bool(true)
+bool(true)
+bool(true)
+string(32) "900150983cd24fb0d6963f7d28e17f72"
+string(64) "9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab"
+string(4) "SHA1"
+int(64)
+int(41)
+string(60) "68778c5d46180727d701e54bafa1597852164d86ba0a266e25b7be070811"
+array(3) {
+  [0]=>
+  string(2) "a#"
+  [2]=>
+  string(3) "c##"
+  ["k"]=>
+  string(2) "x#"
+}
+NULL
+string(4) "AaBb"
+int(2)
+array(4) {
+  ["a"]=>
+  int(12)
+  ["b"]=>
+  int(7)
+  ["c"]=>
+  string(14) "me@example.com"
+  ["missing"]=>
+  NULL
+}
+array(2) {
+  ["x"]=>
+  int(5)
+  ["y"]=>
+  bool(false)
+}
+array(1) {
+  ["x"]=>
+  string(1) "1"
+}
+NULL
+string(9) ".inc,.php"
+string(4) ".php"
+string(4) ".php"
+autoload Nope\Missing
+bool(true)
+string(11) "ArrayObject"

@@ -123,6 +123,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::wrappers::register(&mut t);
     crate::filters::register(&mut t);
     crate::iconv_conv::register(&mut t);
+    crate::ext_more::register(&mut t);
     crate::errors::register(&mut t);
     t
 }
