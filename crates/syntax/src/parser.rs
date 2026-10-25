@@ -36,6 +36,9 @@ pub struct Parser {
     pub diags: Vec<Diagnostic>,
     /// One entry per function body being parsed: did it contain `yield`?
     gen_stack: Vec<bool>,
+    /// Doc comment in front of the last attribute group (`/** */ #[A]
+    /// class X`): it belongs to the declaration after the attributes.
+    attr_doc: Option<String>,
 }
 
 fn binary_op(t: &Tok) -> Option<(u8, u8, BinOp)> {
@@ -103,7 +106,7 @@ const MAGIC_CONSTS: &[&str] =
 
 impl Parser {
     pub fn from_tokens(toks: Vec<Token>) -> Self {
-        Parser { toks, pos: 0, diags: vec![], gen_stack: vec![] }
+        Parser { toks, pos: 0, diags: vec![], gen_stack: vec![], attr_doc: None }
     }
 
     // ---- token helpers -------------------------------------------------
@@ -776,6 +779,7 @@ impl Parser {
 
     fn attributes(&mut self) -> PResult<Vec<Attribute>> {
         let mut attrs = vec![];
+        self.attr_doc = self.tok().doc.clone();
         while self.eat_p("#[") {
             loop {
                 if self.at_p("]") {
@@ -796,7 +800,7 @@ impl Parser {
 
     fn function_decl(&mut self, attrs: Vec<Attribute>) -> PResult<Function> {
         let start = self.span();
-        let doc = self.tok().doc.clone();
+        let doc = self.tok().doc.clone().or_else(|| if attrs.is_empty() { None } else { self.attr_doc.take() });
         self.expect_kw("function")?;
         let by_ref = self.eat_p("&");
         let name = self.ident()?;
@@ -944,7 +948,7 @@ impl Parser {
 
     fn class_decl(&mut self, attrs: Vec<Attribute>) -> PResult<Class> {
         let start = self.span();
-        let doc = self.tok().doc.clone();
+        let doc = self.tok().doc.clone().or_else(|| if attrs.is_empty() { None } else { self.attr_doc.take() });
         let modifiers = self.modifiers();
         let kind = match self.kw().as_deref() {
             Some("class") => ClassKind::Class,
@@ -991,6 +995,7 @@ impl Parser {
         let start = self.span();
         let doc = self.tok().doc.clone();
         let attrs = if self.at_p("#[") { self.attributes()? } else { vec![] };
+        let doc = doc.or_else(|| self.tok().doc.clone());
         if self.eat_kw("use") {
             let traits = self.name_list()?;
             let mut adaptations = vec![];
