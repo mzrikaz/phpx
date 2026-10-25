@@ -1,0 +1,46 @@
+int(1623)
+bool(true)
+bool(true)
+string(6) "1f8b08"
+string(9) "line one
+"
+string(4) "line"
+string(1) " "
+int(14)
+bool(false)
+int(0)
+string(9) "line one
+"
+bool(true)
+bool(true)
+bool(true)
+int(4)
+string(9) "line two
+"
+bool(true)
+bool(true)
+bool(true)
+array(1) {
+  [0]=>
+  string(15) "not compressed
+"
+}
+bool(false)
+string(14) "DeflateContext"
+string(23) "Hello incremental world"
+string(23) "Hello incremental world"
+int(1)
+bool(true)
+string(14) "DeflateContext"
+string(23) "Hello incremental world"
+string(23) "Hello incremental world"
+int(1)
+bool(true)
+string(14) "DeflateContext"
+string(23) "Hello incremental world"
+string(23) "Hello incremental world"
+int(1)
+bool(true)
+deflate_init(): Argument #1 ($encoding) must be one of ZLIB_ENCODING_RAW, ZLIB_ENCODING_GZIP, or ZLIB_ENCODING_DEFLATE
+bool(false)
+bool(false)

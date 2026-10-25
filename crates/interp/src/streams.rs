@@ -99,6 +99,11 @@ pub struct Dir {
     at: usize,
 }
 
+/// A read-only stream over `data`.
+pub(crate) fn memory_stream(data: Vec<u8>, mode: &str, uri: &str, wrapper: &'static str) -> Value {
+    Resource::new("stream", Box::new(Stream::new(Backend::Memory(data), mode, uri, wrapper)))
+}
+
 /// A directory handle over a fixed list of entries.
 pub(crate) fn dir_resource(entries: Vec<String>) -> Value {
     Resource::new("stream", Box::new(Dir { entries, at: 0 }))
@@ -532,6 +537,9 @@ pub fn open(it: &Interp, path: &str, mode: &str) -> Result<Value, String> {
     let lower = path.to_ascii_lowercase();
     if lower.starts_with("php://filter/") {
         return filter_url(it, path, mode);
+    }
+    if lower.starts_with("compress.zlib://") {
+        return crate::zlib_more::open(it, path, mode, "fopen");
     }
     if let Some(rest) = lower.strip_prefix("php://") {
         let backend = match rest {

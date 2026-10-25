@@ -133,6 +133,14 @@ final class StreamBucket
     public int $datalen;
 }
 
+final class DeflateContext
+{
+}
+
+final class InflateContext
+{
+}
+
 final class Directory
 {
     public readonly string $path;
