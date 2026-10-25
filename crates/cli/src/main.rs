@@ -15,10 +15,36 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("check") if args.len() > 1 => check(&args[1..]),
         Some("ast") if args.len() == 2 => ast(&args[1]),
-        Some("run") if args.len() >= 2 => run(&args[1], &args[2..]),
+        Some("run") if args.len() >= 2 => {
+            // php-style ini options before the script: -n, -d key=value.
+            let mut i = 1;
+            let (mut no_ini, mut overrides) = (false, vec![]);
+            while i < args.len() {
+                match args[i].as_str() {
+                    "-n" => no_ini = true,
+                    "-d" if i + 1 < args.len() => {
+                        i += 1;
+                        let (k, v) = args[i].split_once('=').unwrap_or((&args[i], "1"));
+                        overrides.push((k.to_string(), v.to_string()));
+                    }
+                    d if d.starts_with("-d") && d.len() > 2 => {
+                        let (k, v) = d[2..].split_once('=').unwrap_or((&d[2..], "1"));
+                        overrides.push((k.to_string(), v.to_string()));
+                    }
+                    _ => break,
+                }
+                i += 1;
+            }
+            if i >= args.len() {
+                eprintln!("phpx run: missing script");
+                return ExitCode::from(2);
+            }
+            phpx_interp::set_ini_options(no_ini, overrides);
+            run(&args[i], &args[i + 1..])
+        }
         Some("optrees") => optrees::run(),
         _ => {
-            eprintln!("usage:\n  phpx run <file.php> [args...]\n  phpx check [--summary] <file-or-dir>...\n  phpx ast <file>");
+            eprintln!("usage:\n  phpx run [-n] [-d key=value]... <file.php> [args...]\n  phpx check [--summary] <file-or-dir>...\n  phpx ast <file>");
             ExitCode::from(2)
         }
     }
