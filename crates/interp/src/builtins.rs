@@ -339,6 +339,8 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                     0 if txt.starts_with("0b") => (2, txt[2..].to_string()),
                     0 if txt.starts_with('0') && txt.len() > 1 => (8, txt[1..].to_string()),
                     0 => (10, txt),
+                    // strtol() rejects other bases: the result is 0.
+                    b if !(2..=36).contains(&b) => return Ok(Value::Int(0)),
                     b => (b as u32, txt),
                 };
                 let digits: String = txt.chars().take_while(|c| c.is_digit(base)).collect();
@@ -428,7 +430,13 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("lcg_value", |_, _, _| Ok(Value::Float((random_u64() >> 11) as f64 / (1u64 << 53) as f64)));
     t.insert("base_convert", |it, _, a| {
         let txt = String::from_utf8_lossy(&s(it, a, 0)?).to_ascii_lowercase();
-        let (from, to) = (int(it, a, 1)? as u32, int(it, a, 2)? as u32);
+        let (from, to) = (int(it, a, 1)?, int(it, a, 2)?);
+        for (i, (b, name)) in [(from, "from_base"), (to, "to_base")].into_iter().enumerate() {
+            if !(2..=36).contains(&b) {
+                return Err(it.error("ValueError", &format!("base_convert(): Argument #{} (${name}) must be between 2 and 36 (inclusive)", i + 2)));
+            }
+        }
+        let (from, to) = (from as u32, to as u32);
         let digits: String = txt.chars().filter(|c| c.is_digit(from)).collect();
         let n = u64::from_str_radix(&digits, from).unwrap_or(0);
         Ok(Value::str(&to_radix(n, to)))

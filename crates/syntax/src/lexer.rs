@@ -99,7 +99,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn starts_with(&self, s: &str) -> bool {
-        self.b[self.pos..].starts_with(s.as_bytes())
+        self.b.get(self.pos..).is_some_and(|r| r.starts_with(s.as_bytes()))
     }
 
     fn err(&mut self, start: usize, msg: impl Into<String>) {
@@ -372,7 +372,9 @@ impl<'a> Lexer<'a> {
             }
             self.pos += if self.peek(0) == b'\\' { 2 } else { 1 };
         }
-        let end = self.pos.min(self.b.len());
+        // A backslash at the very end steps one past it.
+        self.pos = self.pos.min(self.b.len());
+        let end = self.pos;
         let raw = self.src[s..end].to_string();
         if self.pos >= self.b.len() {
             self.err(start, "unterminated string");

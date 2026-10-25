@@ -470,8 +470,14 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::Int(out.len() as i64))
     });
     t.insert("number_format", |it, _, a| {
-        let n = crate::builtins::float(it, a, 0)?;
-        let dec = if has(a, 1) { int(it, a, 1)?.max(0) as usize } else { 0 };
+        let mut n = crate::builtins::float(it, a, 0)?;
+        let dec = if has(a, 1) { int(it, a, 1)? } else { 0 };
+        if dec < 0 {
+            // PHP 8.3+: negative precision rounds left of the point.
+            n = php_round(n, dec);
+        }
+        let dec = dec.max(0) as usize;
+        crate::builtins::reserve(it, dec.saturating_add(64))?;
         let dp = if has(a, 2) { s(it, a, 2)?.to_vec() } else { b".".to_vec() };
         let ts = if has(a, 3) { s(it, a, 3)?.to_vec() } else { b",".to_vec() };
         b(number_format(n, dec, &dp, &ts))
@@ -787,7 +793,12 @@ pub fn natcmp(a: &[u8], b: &[u8], ci: bool) -> std::cmp::Ordering {
 
 pub fn number_format(n: f64, dec: usize, dp: &[u8], ts: &[u8]) -> Vec<u8> {
     let r = php_round(n, dec as i64);
-    let txt = format!("{:.*}", dec, r.abs());
+    // A double's exact decimal expansion ends within 1100 digits after the
+    // point (and the formatter caps precision at u16): pad the rest with 0.
+    let mut txt = format!("{:.*}", dec.min(1100), r.abs());
+    if dec > 1100 {
+        txt.extend(std::iter::repeat_n('0', dec - 1100));
+    }
     let (int_part, frac) = match txt.split_once('.') {
         Some((i, f)) => (i.to_string(), Some(f.to_string())),
         None => (txt, None),

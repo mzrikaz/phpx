@@ -480,6 +480,9 @@ fn unpack(it: &Interp, a: &[Value]) -> R<Value> {
     let fmt = s(it, a, 0)?;
     let data = s(it, a, 1)?;
     let mut pos = if has(a, 2) { int(it, a, 2)?.max(0) as usize } else { 0 };
+    if pos > data.len() {
+        return Err(it.error("ValueError", "unpack(): Argument #3 ($offset) must be contained in argument #2 ($data)"));
+    }
     let mut out = PhpArray::new();
     for part in fmt.split(|&c| c == b'/') {
         if part.is_empty() {
@@ -499,6 +502,10 @@ fn unpack(it: &Interp, a: &[Value]) -> R<Value> {
             }
             if i > st {
                 count = std::str::from_utf8(&part[st..i]).ok().and_then(|x| x.parse::<usize>().ok());
+                if count.is_none_or(|n| n > i32::MAX as usize) {
+                    it.warn(&format!("unpack(): Type {}: integer overflow", c as char));
+                    return Ok(Value::Bool(false));
+                }
             }
         }
         let name = String::from_utf8_lossy(&part[i..]).into_owned();
@@ -556,9 +563,23 @@ fn unpack(it: &Interp, a: &[Value]) -> R<Value> {
                 }
                 out.insert(key(0, 1), Value::bytes(field));
             }
-            b'x' => pos += count.unwrap_or(1),
+            b'x' => {
+                let n = count.unwrap_or(1);
+                if pos + n > data.len() {
+                    it.warn("unpack(): Type x: not enough input values, need 1 values but only 0 were provided");
+                    return Ok(Value::Bool(false));
+                }
+                pos += n;
+            }
             b'X' => pos = pos.saturating_sub(count.unwrap_or(1)),
-            b'@' => pos = count.unwrap_or(0),
+            b'@' => {
+                let at = count.unwrap_or(0);
+                if at > data.len() {
+                    it.warn("unpack(): Type @: outside of string");
+                } else {
+                    pos = at;
+                }
+            }
             _ => {
                 let size = match c {
                     b'c' | b'C' => 1,
