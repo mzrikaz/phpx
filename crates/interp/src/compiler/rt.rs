@@ -1209,7 +1209,7 @@ unsafe fn rc_from(p: *const crate::class::Class) -> Option<Rc<crate::class::Clas
 }
 
 /// Native entry for a user method (None: abstract, native, or doesn't compile).
-unsafe fn method_entry(it: &Interp, m: &Rc<crate::class::Method>) -> Option<(crate::compiler::Entry, Option<Rc<crate::class::Class>>)> {
+pub(crate) unsafe fn method_entry(it: &Interp, m: &Rc<crate::class::Method>) -> Option<(crate::compiler::Entry, Option<Rc<crate::class::Class>>)> {
     let crate::class::MethodBody::User(func) = &m.body else { return None };
     let body = func.body.as_deref()?;
     let fn_id = *func as *const ast::Function as usize;
@@ -1396,7 +1396,7 @@ unsafe fn remember_jit(it: &Interp, u: &crate::interp::UserFn, args: *mut Value,
 
 /// Run a native entry with a fresh frame; applies the declared return type.
 #[allow(clippy::too_many_arguments)]
-unsafe fn enter(it: &Interp, entry: crate::compiler::Entry, frame: &mut Frame, args: *mut Value, n: u64, dst: *mut Value) -> Option<u64> {
+pub(crate) unsafe fn enter(it: &Interp, entry: crate::compiler::Entry, frame: &mut Frame, args: *mut Value, n: u64, dst: *mut Value) -> Option<u64> {
     if phpx_runtime::stack_remaining().is_some_and(|r| r < 256 * 1024) {
         return None; // the general path raises the proper error
     }

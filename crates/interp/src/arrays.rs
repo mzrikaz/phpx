@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::builtins::{arg, arr, callable, has, int, random_u64};
-use crate::interp::{BuiltinFn, Callable, Ctrl, Frame, Interp, R};
+use crate::interp::{BuiltinFn, Ctrl, Frame, Interp, R};
 use crate::value::{compare, identical, loose_eq, Key, PStr, PhpArray, Value};
 
 fn list(vals: impl IntoIterator<Item = Value>) -> R<Value> {
@@ -41,11 +41,11 @@ fn sort_cmp(it: &Interp, flags: i64) -> impl Fn(&Value, &Value) -> Ordering + '_
 }
 
 /// Call a user comparator; remember the first exception and stop comparing.
-fn user_cmp(it: &Interp, c: &Callable, err: &RefCell<Option<Ctrl>>, x: Value, y: Value) -> Ordering {
+fn user_cmp(it: &Interp, c: &RefCell<crate::callback::Callback>, err: &RefCell<Option<Ctrl>>, x: Value, y: Value) -> Ordering {
     if err.borrow().is_some() {
         return Ordering::Equal;
     }
-    match it.call_callable(c, vec![x, y], vec![]) {
+    match c.borrow_mut().call(&mut [x, y]) {
         Ok(v) => match v {
             Value::Bool(b) => if b { Ordering::Greater } else { Ordering::Less },
             v => it.to_int(&v).unwrap_or(0).cmp(&0),
@@ -71,7 +71,7 @@ fn sort_generic(it: &Interp, f: &Frame, a: &mut [Value], by: SortBy, reverse: bo
     // Stable sort; descending just flips the comparator.
     let flip = |o: Ordering| if reverse { o.reverse() } else { o };
     if user {
-        let c = callable(it, f, a, 1)?;
+        let c = RefCell::new(it.callback(callable(it, f, a, 1)?));
         match by {
             SortBy::Value => entries.sort_by(|x, y| flip(user_cmp(it, &c, &err, x.1.clone(), y.1.clone()))),
             SortBy::Key => entries.sort_by(|x, y| flip(user_cmp(it, &c, &err, x.0.to_value(), y.0.to_value()))),
@@ -258,21 +258,21 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             if cb.is_null() {
                 return Ok(Value::Array(x));
             }
-            let c = it.to_callable(f, &cb)?;
+            let mut c = it.callback(it.to_callable(f, &cb)?);
             let mut out = PhpArray::new();
             for (k, v) in x.iter() {
-                out.insert(k.clone(), it.call_callable(&c, vec![v.clone()], vec![])?);
+                out.insert(k.clone(), c.call(&mut [v.clone()])?);
             }
             return Ok(Value::array(out));
         }
         let arrays: Vec<Rc<PhpArray>> = (1..a.len()).map(|i| arr(it, a, i, "array_map")).collect::<R<_>>()?;
         let n = arrays.iter().map(|x| x.len()).max().unwrap_or(0);
-        let c = if cb.is_null() { None } else { Some(it.to_callable(f, &cb)?) };
+        let mut c = if cb.is_null() { None } else { Some(it.callback(it.to_callable(f, &cb)?)) };
         let mut out = PhpArray::new();
         for i in 0..n {
-            let args: Vec<Value> = arrays.iter().map(|x| x.get_index(i).map(|e| e.1.clone()).unwrap_or_default()).collect();
-            out.push(match &c {
-                Some(c) => it.call_callable(c, args, vec![])?,
+            let mut args: Vec<Value> = arrays.iter().map(|x| x.get_index(i).map(|e| e.1.clone()).unwrap_or_default()).collect();
+            out.push(match &mut c {
+                Some(c) => c.call(&mut args)?,
                 None => Value::array(PhpArray::from_list(args)),
             });
         }
@@ -281,19 +281,17 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("array_filter", |it, f, a| {
         let x = arr(it, a, 0, "array_filter")?;
         let mode = int(it, a, 2)?;
-        let c = if has(a, 1) && !arg(a, 1).is_null() { Some(callable(it, f, a, 1)?) } else { None };
+        let mut c = if has(a, 1) && !arg(a, 1).is_null() { Some(it.callback(callable(it, f, a, 1)?)) } else { None };
         let mut out = PhpArray::new();
         for (k, v) in x.iter() {
-            let keep = match &c {
+            let keep = match &mut c {
                 None => v.truthy(),
-                Some(c) => {
-                    let args = match mode {
-                        2 => vec![k.to_value()],
-                        1 => vec![v.clone(), k.to_value()],
-                        _ => vec![v.clone()],
-                    };
-                    it.call_callable(c, args, vec![])?.truthy()
+                Some(c) => match mode {
+                    2 => c.call(&mut [k.to_value()])?,
+                    1 => c.call(&mut [v.clone(), k.to_value()])?,
+                    _ => c.call(&mut [v.clone()])?,
                 }
+                .truthy(),
             };
             if keep {
                 out.insert(k.clone(), v.clone());
@@ -303,22 +301,22 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("array_reduce", |it, f, a| {
         let x = arr(it, a, 0, "array_reduce")?;
-        let c = callable(it, f, a, 1)?;
+        let mut c = it.callback(callable(it, f, a, 1)?);
         let mut acc = arg(a, 2);
         for v in x.values() {
-            acc = it.call_callable(&c, vec![acc, v.clone()], vec![])?;
+            acc = c.call(&mut [acc, v])?;
         }
         Ok(acc)
     });
     t.insert("array_walk", |it, f, a| {
         let x = by_ref_array(it, a, "array_walk")?;
-        let c = callable(it, f, a, 1)?;
+        let mut c = it.callback(callable(it, f, a, 1)?);
         let extra = if has(a, 2) { vec![arg(a, 2)] } else { vec![] };
         let restore = Value::array(x.clone());
         for (k, v) in x.iter() {
             let mut args = vec![v.clone(), k.to_value()];
             args.extend(extra.iter().cloned());
-            if let Err(e) = it.call_callable(&c, args, vec![]) {
+            if let Err(e) = c.call(&mut args) {
                 a[0] = restore;
                 return Err(e);
             }
@@ -500,36 +498,36 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("array_key_last", |it, _, a| Ok(arr(it, a, 0, "array_key_last")?.iter().last().map(|(k, _)| k.to_value()).unwrap_or_default()));
     t.insert("array_is_list", |it, _, a| Ok(Value::Bool(arr(it, a, 0, "array_is_list")?.is_list())));
     t.insert("array_find", |it, f, a| {
-        let c = callable(it, f, a, 1)?;
+        let mut c = it.callback(callable(it, f, a, 1)?);
         for (k, v) in arr(it, a, 0, "array_find")?.iter() {
-            if it.call_callable(&c, vec![v.clone(), k.to_value()], vec![])?.truthy() {
+            if c.call(&mut [v.clone(), k.to_value()])?.truthy() {
                 return Ok(v.clone());
             }
         }
         Ok(Value::Null)
     });
     t.insert("array_find_key", |it, f, a| {
-        let c = callable(it, f, a, 1)?;
+        let mut c = it.callback(callable(it, f, a, 1)?);
         for (k, v) in arr(it, a, 0, "array_find_key")?.iter() {
-            if it.call_callable(&c, vec![v.clone(), k.to_value()], vec![])?.truthy() {
+            if c.call(&mut [v.clone(), k.to_value()])?.truthy() {
                 return Ok(k.to_value());
             }
         }
         Ok(Value::Null)
     });
     t.insert("array_any", |it, f, a| {
-        let c = callable(it, f, a, 1)?;
+        let mut c = it.callback(callable(it, f, a, 1)?);
         for (k, v) in arr(it, a, 0, "array_any")?.iter() {
-            if it.call_callable(&c, vec![v.clone(), k.to_value()], vec![])?.truthy() {
+            if c.call(&mut [v.clone(), k.to_value()])?.truthy() {
                 return Ok(Value::Bool(true));
             }
         }
         Ok(Value::Bool(false))
     });
     t.insert("array_all", |it, f, a| {
-        let c = callable(it, f, a, 1)?;
+        let mut c = it.callback(callable(it, f, a, 1)?);
         for (k, v) in arr(it, a, 0, "array_all")?.iter() {
-            if !it.call_callable(&c, vec![v.clone(), k.to_value()], vec![])?.truthy() {
+            if !c.call(&mut [v.clone(), k.to_value()])?.truthy() {
                 return Ok(Value::Bool(false));
             }
         }

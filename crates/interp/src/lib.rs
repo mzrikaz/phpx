@@ -9,6 +9,7 @@ mod arginfo;
 mod arginfo_table;
 mod arrays;
 mod builtins;
+mod callback;
 mod call;
 mod class;
 mod compiler;
