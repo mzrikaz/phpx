@@ -1049,7 +1049,14 @@ impl Interp {
                 Ok(Place { root: Root::Var(self.global_slot(f, name)), path: vec![] })
             }
             ExprKind::Index { base, index } => {
-                let mut p = self.place(f, base)?;
+                // `$this[...] = v`: writes through ArrayAccess on $this.
+                let mut p = match &base.kind {
+                    ExprKind::Var(n) if &**n == "this" => {
+                        let this = f.this.clone().map(Value::Object).ok_or_else(|| self.error("Error", "Using $this when not in object context"))?;
+                        Place { root: Root::Var(crate::interp::slot(this)), path: vec![] }
+                    }
+                    _ => self.place(f, base)?,
+                };
                 let k = match index {
                     Some(i) => {
                         let v = self.eval(f, i)?;
@@ -1762,7 +1769,7 @@ pub fn const_array(items: &[Option<ast::ArrayItem>]) -> Option<Value> {
                     Value::Int(n) => Key::Int(n),
                     Value::Str(s) => Key::from_pstr(&s),
                     Value::Bool(b) => Key::Int(b as i64),
-                    Value::Null => Key::Str(crate::value::pstr("")),
+                    // Null keys are deprecated: evaluated at run time.
                     _ => return None,
                 };
                 a.insert(key, v);
