@@ -174,6 +174,7 @@ impl<'a> Lower<'a> {
 
     fn alloc_temp(&mut self) -> usize {
         if let Some(t) = self.free.pop() {
+            debug_assert!(!self.free.contains(&t), "temp {t} on the free list twice");
             return t;
         }
         let slot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 16, 4));
@@ -256,6 +257,7 @@ impl<'a> Lower<'a> {
     fn release(&mut self, op: Op) {
         if let Op::Ptr(p, Some(t)) = op {
             self.clear(p);
+            debug_assert!(!self.free.contains(&t), "temp {t} released twice");
             self.free.push(t);
         }
     }
@@ -1758,7 +1760,11 @@ impl<'a> Lower<'a> {
                 let p = self.b.ins().load(types::I64, flags(), va, tag::PAYLOAD);
                 let n = self.b.ins().load(types::I64, flags(), p, off);
                 self.store_into(ta, Op::Int(n));
-                self.release(v);
+                // Both branches drop the operand at run time; its temp goes
+                // back to the free list once (below), not once per branch.
+                if let Op::Ptr(p, Some(_)) = v {
+                    self.clear(p);
+                }
                 self.b.ins().jump(merge, &[]);
                 // Other types: the real built-in (errors, Countable, ...)
                 // with the value already evaluated.
