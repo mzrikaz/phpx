@@ -1,0 +1,72 @@
+int(9)
+int(9)
+int(8)
+int(2)
+bool(false)
+int(8)
+int(2)
+bool(false)
+strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+strripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+string(12) "@example.com"
+string(4) "user"
+string(36) "1\+1=2\? \[yes\] \(no\) \$5 \^\.\*\\"
+string(0) ""
+array(3) {
+  [97]=>
+  int(3)
+  [98]=>
+  int(2)
+  [99]=>
+  int(1)
+}
+string(3) "abc"
+int(253)
+int(256)
+int(253)
+string(13) "Uryyb, Jbeyq!"
+int(6)
+string(3) "abc"
+a=>b z=>aa Az=>Ba zz=>aaa Zz=>AAa 9=>10 a9=>b0 Zz9=>AAa0 zZ=>aaA 
+b=>a aa=>z Ba=>Az 10=>9 1=>0 A0=>9 Aa=>z zA=>yZ 100=>99 
+str_decrement(): Argument #1 ($string) "a" is out of decrement range
+str_decrement(): Argument #1 ($string) "0" is out of decrement range
+str_decrement(): Argument #1 ($string) "01" is out of decrement range
+str_decrement(): Argument #1 ($string) must not be empty
+str_decrement(): Argument #1 ($string) must be composed only of alphanumeric ASCII characters
+Thompson:0MPSN knight:NFT Christmas:XRSTMS school:SXL physician:FSXN Xavier:SFR wright:RFT gnome:NM aero:ER judge:JJ tough:TF science:SNS bitch:BX laugh:LF whistle:WSTL rough:RF agnes:AKNS Thumb:0M ignored:IKNRT ciao:X : 123: 
+0M
+bool(true)
+bool(true)
+int(0)
+string(32) "5=&5S=`IT97AT('1E>'0@=&5X=`T*
+`
+"
+string(21) "test
+text text text
+"
+bool(true)
+string(2) "`
+"
+string(30) "Hello Worldnext linex = y==xx
+"
+0.5235987756 1.0471975512 1.1752011936 1.5430806348 0.7615941560 0.8813735870
+1.3169578969 0.5493061443 0.0000100001 0.0000100000 5.0000000000
+float(3.141592653589793)
+float(180)
+float(INF)
+float(-INF)
+bool(true)
+float(1024)
+float(NAN)
+array(4) {
+  [0]=>
+  string(3) "sec"
+  [1]=>
+  string(4) "usec"
+  [2]=>
+  string(11) "minuteswest"
+  [3]=>
+  string(7) "dsttime"
+}
+bool(true)

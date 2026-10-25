@@ -11,6 +11,8 @@ mod arrays;
 mod arrays_more;
 mod core_more;
 mod ob;
+mod math_more;
+mod strings_more;
 mod builtins;
 mod callback;
 mod call;
