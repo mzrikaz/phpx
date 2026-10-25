@@ -261,7 +261,11 @@ impl Stream {
                 }
                 f.write_all(data).map(|_| data.len()).unwrap_or(0)
             }
-            Backend::Stdout | Backend::Output => {
+            Backend::Stdout => {
+                it.write_stdout(data);
+                data.len()
+            }
+            Backend::Output => {
                 it.echo(data);
                 data.len()
             }

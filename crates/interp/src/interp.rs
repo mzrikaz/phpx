@@ -511,6 +511,20 @@ impl Interp {
         let _ = w.flush();
     }
 
+    /// php://stdout: the process's stdout, past any ob_start() buffers
+    /// (in order with echo output that is not buffered).
+    pub fn write_stdout(&self, data: &[u8]) {
+        if crate::server::sapi() == "cli-server" {
+            let _ = std::io::stdout().write_all(data);
+            return;
+        }
+        let base = std::mem::take(&mut self.out.borrow_mut()[0]);
+        let mut w = self.writer.borrow_mut();
+        let _ = w.write_all(&base);
+        let _ = w.write_all(data);
+        let _ = w.flush();
+    }
+
     pub fn warn(&self, msg: &str) {
         crate::errors::raise(self, crate::errors::E_WARNING, msg);
     }
