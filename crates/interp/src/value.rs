@@ -682,6 +682,20 @@ impl Obj {
     }
 
     /// Native comparison of two objects' states, if their class has one.
+    /// `==` between Closure objects (None: not both closures). As in PHP,
+    /// distinct closures differ unless both come from the same callable
+    /// (`strlen(...)`, `$o->m(...)`, Closure::fromCallable()).
+    pub fn closure_eq(&self, other: &Obj) -> Option<bool> {
+        if self.gc.get() & other.gc.get() & HAS_INTERNAL == 0 {
+            return None;
+        }
+        let (a, b) = (self.try_internal()?, other.try_internal()?);
+        match (&*a, &*b) {
+            (Internal::Closure(x), Internal::Closure(y)) => Some(std::ptr::eq(self, other) || same_callable(x, y)),
+            _ => None,
+        }
+    }
+
     pub fn native_compare(&self, other: &Obj) -> Option<Ordering> {
         if self.gc.get() & other.gc.get() & HAS_INTERNAL == 0 {
             return None;
@@ -1081,11 +1095,41 @@ pub fn stack_low() -> bool {
     phpx_runtime::stack_remaining().is_some_and(|r| r < 256 * 1024)
 }
 
+/// Whether two first-class-callable closures wrap the same callable.
+fn same_callable(x: &crate::interp::Callable, y: &crate::interp::Callable) -> bool {
+    use crate::interp::{Callable, ClosureKind};
+    let unwrap = |c: &Callable| -> Option<Callable> {
+        match c {
+            Callable::Closure(cd) => match &cd.kind {
+                ClosureKind::Wrap(inner) => Some(inner.clone()),
+                _ => None,
+            },
+            c => Some(c.clone()),
+        }
+    };
+    match (unwrap(x), unwrap(y)) {
+        (Some(Callable::User(p)), Some(Callable::User(q))) => std::ptr::eq(p.decl, q.decl),
+        (Some(Callable::Builtin(p, _)), Some(Callable::Builtin(q, _))) => p == q,
+        (Some(Callable::Method { this: t1, method: m1, .. }), Some(Callable::Method { this: t2, method: m2, .. })) => {
+            Rc::ptr_eq(&m1, &m2)
+                && match (t1, t2) {
+                    (Some(a), Some(b)) => Rc::ptr_eq(&a, &b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }
+        _ => false,
+    }
+}
+
 pub fn loose_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Ref(x), _) => loose_eq(&x.borrow(), b),
         (_, Value::Ref(y)) => loose_eq(a, &y.borrow()),
         (Value::Object(x), Value::Object(y)) => {
+            if let Some(eq) = x.closure_eq(y) {
+                return eq;
+            }
             if let Some(o) = x.native_compare(y) {
                 return o == Ordering::Equal;
             }
