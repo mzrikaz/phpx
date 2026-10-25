@@ -58,7 +58,6 @@ one of the constructs below; those functions run in the interpreter.
 | `global $x` | `global` |
 | `$GLOBALS` | `$GLOBALS` |
 | `$$x`, `${expr}` | `variable variable / $GLOBALS` |
-| `@expr` | `@ operator` |
 | `compact`, `extract`, `eval`, `get_defined_vars`, `func_get_args`, `func_num_args`, `get_called_class` | `scope-reading function` |
 | `include` / `require` inside the function | `include` |
 | `yield`, `yield from` | `generator` |

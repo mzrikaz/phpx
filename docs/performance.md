@@ -88,6 +88,23 @@ two-word vector, the destructed flag shares the GC index word, and native
 state (closures, generators) lives in a side table; small blocks come from
 size-class free lists without per-block headers.
 
+### I/O (`~/.cache/phpx-io/io.php`, ms, same machine and moment)
+
+| Test | PHP 8.5 | phpx | Node |
+|---|---|---|---|
+| write 1M lines with `fwrite` | 903 | 766 | 1145 |
+| read 1M lines with `fgets` (Node: readFile + split) | 150 | 134 | 303 |
+| `file_get_contents` + `explode` | 84 | 92 | 126 |
+| 20k small files written, read, deleted | 775 | 556 | 663 |
+| `json_encode` + `json_decode`, 100k rows | 122 | 154 | 55 |
+
+`fgets` used to consume its read-ahead buffer a byte at a time (25×
+slower than PHP); a script using `@` anywhere ran in the interpreter.
+
+Network waits (sockets, TLS) park the green thread: three concurrent
+clients waiting 0.5 s each on a local server finish in 0.51 s. CPU-bound
+code still holds the one scheduler thread, as in Node.
+
 ## Plan: beat PHP everywhere, approach Node/Go
 
 Targets: every microbenchmark at or below PHP 8.5 with JIT; numeric and

@@ -42,12 +42,23 @@ Target: `wp-admin/setup-config.php` output identical to PHP.
 - [ ] `set_error_handler` invoking user handlers (Laravel converts warnings to exceptions)
 - [ ] WordPress setup page byte-identical to PHP (currently blocked on mysqli check)
 
-## 2. Databases
+## 2. Databases and network *(in progress)*
 
-- [ ] mysqli (procedural + OO), async-capable (parks the green thread)
+Every driver speaks its wire protocol on the runtime reactor, so a query
+or request parks the green thread instead of blocking the process.
+
+- [x] Socket streams: `fsockopen`, `stream_socket_client/server/accept`, `stream_select`, timeouts, `tcp://`, `unix://`
+- [x] TLS client (rustls, system roots, PHP `ssl` context options), `tls://`/`ssl://`, `stream_socket_enable_crypto`
+- [ ] mysqli (procedural + OO) on a native MySQL protocol client
 - [ ] PDO core + MySQL driver
-- [ ] PDO SQLite
-- [ ] PDO Postgres
+- [ ] PDO SQLite (bundled libsqlite3) and `SQLite3`
+- [ ] PDO Postgres and `pg_*` on a native protocol client
+- [ ] `http://` / `https://` stream wrapper (`file_get_contents($url)`)
+- [ ] curl + curl_multi (Guzzle)
+- [ ] Redis (`Redis` class, phpredis-compatible; Predis already works over sockets)
+- [ ] gRPC (HTTP/2 client, `Grpc\Channel`)
+- [ ] ext-sockets (`socket_*`)
+- [ ] Non-blocking DNS (resolution currently blocks the thread)
 - [ ] WordPress install + front page against MySQL
 
 ## 3. HTTP server mode (`phpx serve`)
@@ -71,7 +82,7 @@ Constructs that currently force interpreter fallback
 - [ ] `use (&$x)` captures
 - [ ] `static` variables
 - [ ] `global` / `$GLOBALS` / superglobals via helpers
-- [ ] `@` operator
+- [x] `@` operator
 - [ ] `foreach` with `list()` targets
 - [ ] Dynamic class references (`new $class`, `$class::m()`), anonymous classes
 - [ ] First-class callable syntax `f(...)`
@@ -108,14 +119,17 @@ See [performance.md](performance.md).
 - [ ] DateTime family (`DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`, `DatePeriod`)
 - [ ] Reflection (classes, methods, properties, parameters, attributes)
 - [x] SPL data structures and iterators (`ArrayObject`, `SplObjectStorage`, `SplStack`, …) — file/directory iterators (`SplFileInfo`, `RecursiveDirectoryIterator`) still missing
-- [ ] curl (async-capable)
-- [ ] gd / imagick
+- [ ] gd / imagick, exif, `getimagesize`
 - [ ] xml parser, DOM, SimpleXML, XMLReader/XMLWriter
-- [ ] sodium, openssl
-- [ ] hash extension (full)
-- [ ] intl, mbstring completeness
-- [ ] zip, zlib
-- [ ] filter, fileinfo, session
+- [ ] sodium, openssl (`openssl_encrypt/decrypt/sign/verify`, keys, x509)
+- [ ] hash extension (full: `hash_pbkdf2`)
+- [ ] intl (`NumberFormatter`, `IntlDateFormatter`, `Normalizer`, `Collator`, `idn_to_ascii`)
+- [ ] zip (`ZipArchive`), zlib (`gzopen` streams)
+- [ ] fileinfo (`finfo`, `mime_content_type`), session
+- [ ] bcmath, gmp
+- [ ] tokenizer (`token_get_all`, `PhpToken`)
+- [ ] posix, pcntl
+- [ ] `get_defined_constants`, `preg_replace_callback_array`
 - [ ] Process functions (`exec`, `proc_open`, `shell_exec`) — `shell_exec` is missing today
 
 ## 7. Language

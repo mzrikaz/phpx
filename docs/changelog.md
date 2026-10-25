@@ -4,6 +4,22 @@ What has been built so far, grouped by milestone (most recent first).
 Entries before the first commit (2026-10-25) are reconstructed from the code
 and project notes; later entries follow the git history.
 
+## 2026-10-25 — I/O and network
+
+- **Socket streams**: `fsockopen`, `stream_socket_client/server/accept`,
+  `stream_select`, socket timeouts and blocking mode, `tcp://`,
+  `unix://`, `tls://`/`ssl://` and `stream_socket_enable_crypto` (rustls,
+  system roots, PHP's `ssl` context options). Waits park the green
+  thread; messages and `stream_get_meta_data()` match PHP.
+- **Faster file I/O**: `fgets` scans the read-ahead buffer with memchr
+  instead of reading a byte at a time.
+- **Native `@`**: the operator compiles (it used to force the whole
+  function or script into the interpreter).
+- Built-in by-reference parameters come from PHP's arginfo
+  (`$errno`/`$errstr`, `stream_select` arrays, ...).
+- Prepared callbacks for `array_map`, `array_filter`, sorts and friends;
+  string keys no longer pin oversized buffers.
+
 ## 2026-10-25 — Compatibility and hardening
 
 - **Built-in signatures** from PHP's Reflection (`tools/arginfo`): PHP's
