@@ -14,6 +14,7 @@ mod ob;
 mod math_more;
 mod strings_more;
 mod misc_more;
+mod sysinfo;
 mod builtins;
 mod callback;
 mod call;
