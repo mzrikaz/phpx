@@ -24,6 +24,7 @@ mod native;
 mod ops;
 mod preg;
 mod props;
+mod pstr;
 mod streams;
 mod strings;
 mod timeout;

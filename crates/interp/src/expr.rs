@@ -535,7 +535,7 @@ impl Interp {
         let append = |it: &Interp, cur: Value| -> R<Value> {
             Ok(match cur {
                 Value::Str(mut s) => {
-                    Rc::make_mut(&mut s).extend_from_slice(rhs);
+                    s.push_bytes(rhs);
                     Value::Str(s)
                 }
                 other => {

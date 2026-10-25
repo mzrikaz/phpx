@@ -12,14 +12,14 @@ use indexmap::IndexMap;
 use crate::class::Class;
 
 /// PHP strings are byte strings, not UTF-8.
-pub type PStr = Rc<Vec<u8>>;
+pub use crate::pstr::PStr;
 
 pub fn pstr(s: &str) -> PStr {
-    Rc::new(s.as_bytes().to_vec())
+    PStr::from_bytes(s.as_bytes())
 }
 
 pub fn pbytes(b: &[u8]) -> PStr {
-    Rc::new(b.to_vec())
+    PStr::from_bytes(b)
 }
 
 /// A variable's storage cell. Two names (or an array element and a name)
@@ -646,7 +646,7 @@ impl Value {
     }
 
     pub fn bytes(b: Vec<u8>) -> Value {
-        Value::Str(Rc::new(b))
+        Value::Str(PStr::from(b))
     }
 
     pub fn array(a: PhpArray) -> Value {

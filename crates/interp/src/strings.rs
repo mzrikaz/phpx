@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::builtins::{arg, has, int, php_round, s};
-use std::rc::Rc;
+
 
 use crate::interp::{BuiltinFn, Interp, R};
 use crate::value::{fmt_float, Key, PhpArray, Value};
@@ -693,7 +693,7 @@ fn char_width(c: char) -> usize {
 thread_local! {
     /// Interned one-byte strings (like PHP's ZSTR_CHAR): chr() and string
     /// offsets don't allocate.
-    static ONE_BYTE: Vec<crate::value::PStr> = (0..=255u8).map(|c| Rc::new(vec![c])).collect();
+    static ONE_BYTE: Vec<crate::value::PStr> = (0..=255u8).map(|c| crate::value::PStr::from_bytes(&[c])).collect();
 }
 
 pub fn one_byte(c: u8) -> crate::value::PStr {

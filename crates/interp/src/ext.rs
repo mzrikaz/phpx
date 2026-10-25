@@ -171,7 +171,7 @@ impl Unser<'_> {
             b's' => {
                 let s = self.string()?;
                 self.expect(b';')?;
-                Some(Key::Str(Rc::new(s)))
+                Some(Key::Str(crate::value::PStr::from(s)))
             }
             _ => None,
         }
@@ -884,7 +884,7 @@ pub fn parse_query(q: &[u8]) -> PhpArray {
                 (n.to_string() == s).then_some(n)
             }) {
                 Some(n) => Key::Int(n),
-                None => Key::Str(Rc::new(b.to_vec())),
+                None => Key::Str(crate::value::PStr::from_bytes(b)),
             }
         }
         fn put(arr: &mut PhpArray, segs: &[Vec<u8>], val: Value) {

@@ -187,8 +187,17 @@ pub fn inline_rc() -> bool {
 }
 
 fn rc_layout_ok() -> bool {
-    let v = Value::str("probe");
-    let Value::Str(rc) = &v else { return false };
+    // Strings: our own header, strong count first.
+    let s = Value::str("probe");
+    let sp = unsafe { ((&s as *const Value as *const u8).add(tag::PAYLOAD as usize) as *const usize).read() };
+    let s2 = s.clone();
+    let ok = unsafe { (sp as *const usize).read() } == 2;
+    drop(s2);
+    if !ok || unsafe { (sp as *const usize).read() } != 1 {
+        return false;
+    }
+    let v = Value::array(crate::value::PhpArray::new());
+    let Value::Array(rc) = &v else { return false };
     let raw = std::rc::Rc::as_ptr(rc) as *const u8;
     // Payload word of the Value is the pointer to the Rc's inner block.
     let payload = unsafe { ((&v as *const Value as *const u8).add(tag::PAYLOAD as usize) as *const usize).read() };
