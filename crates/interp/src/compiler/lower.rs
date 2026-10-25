@@ -802,15 +802,87 @@ impl<'a> Lower<'a> {
         let sa = self.addr(op).unwrap();
         let islot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
         self.iters.push(islot);
+        // Packed arrays iterate inline over a held copy (a snapshot: writes
+        // to the variable separate, as foreach-by-value requires); idx < 0
+        // means "use the iterator helper".
+        let fast = super::layout().is_some();
+        let arr_t = self.alloc_temp();
+        let idx_slot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+        let (packed_setup, iter_setup, after_setup) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        if fast {
+            let tg = self.load_tag(sa);
+            let is_arr = self.b.ins().icmp_imm_s(IntCC::Equal, tg, tag::ARRAY as i64);
+            let chk = self.b.create_block();
+            self.b.ins().brif(is_arr, chk, &[], iter_setup, &[]);
+            self.b.switch_to_block(chk);
+            let rc = self.b.ins().load(types::I64, flags(), sa, tag::PAYLOAD);
+            let pk = self.b.ins().load(types::I64, flags(), rc, 16);
+            let packed = self.b.ins().icmp_imm_s(IntCC::NotEqual, pk, 0);
+            self.b.ins().brif(packed, packed_setup, &[], iter_setup, &[]);
+            self.b.switch_to_block(packed_setup);
+            let arr_a = self.temp_addr(arr_t);
+            self.store_into(arr_a, Op::Ptr(sa, None));
+            let zero = self.iconst(0);
+            self.b.ins().stack_store(types::I64, zero, idx_slot, 0);
+            self.b.ins().jump(after_setup, &[]);
+        } else {
+            self.b.ins().jump(iter_setup, &[]);
+            self.b.switch_to_block(packed_setup);
+            self.b.ins().jump(after_setup, &[]);
+        }
+        self.b.switch_to_block(iter_setup);
         let ia = self.b.ins().stack_addr(types::I64, islot, 0);
         self.call_checked("rt_iter_new", &[self.cx, sa, ia]);
+        let neg = self.iconst(-1);
+        self.b.ins().stack_store(types::I64, neg, idx_slot, 0);
+        self.b.ins().jump(after_setup, &[]);
+        self.b.switch_to_block(after_setup);
         self.release(op);
         let (head, bodyb, exit) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
         self.b.ins().jump(head, &[]);
         self.b.switch_to_block(head);
-        let iter = self.b.ins().stack_load(types::I64, types::I64, islot, 0);
         let kt = key.map(|_| self.alloc_temp());
         let vt = self.alloc_temp();
+        let (packed_next, iter_next, more) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        let idx = self.b.ins().stack_load(types::I64, types::I64, idx_slot, 0);
+        let iter_mode = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, idx, 0);
+        self.b.ins().brif(iter_mode, iter_next, &[], packed_next, &[]);
+        // Packed: element idx of the held array, or done.
+        self.b.switch_to_block(packed_next);
+        {
+            let arr_a = self.temp_addr(arr_t);
+            let rc = self.b.ins().load(types::I64, flags(), arr_a, tag::PAYLOAD);
+            let len = self.b.ins().load(types::I64, flags(), rc, 24);
+            let more_p = self.b.ins().icmp(IntCC::SignedLessThan, idx, len);
+            let (take, deref, plain) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+            self.b.ins().brif(more_p, take, &[], exit, &[]);
+            self.b.switch_to_block(take);
+            let pk = self.b.ins().load(types::I64, flags(), rc, 16);
+            let off = self.b.ins().ishl_imm_u(idx, 4);
+            let p = self.b.ins().iadd(pk, off);
+            let va = self.temp_addr(vt);
+            let et = self.load_tag(p);
+            let is_ref = self.b.ins().icmp_imm_s(IntCC::Equal, et, tag::REF as i64);
+            let after = self.b.create_block();
+            self.b.ins().brif(is_ref, deref, &[], plain, &[]);
+            self.b.switch_to_block(deref);
+            self.call("rt_copy", &[va, p]);
+            self.b.ins().jump(after, &[]);
+            self.b.switch_to_block(plain);
+            self.store_into(va, Op::Ptr(p, None));
+            self.b.ins().jump(after, &[]);
+            self.b.switch_to_block(after);
+            if let Some(t) = kt {
+                let ka = self.temp_addr(t);
+                self.store_tag(ka, tag::INT);
+                self.b.ins().store(flags(), idx, ka, tag::PAYLOAD);
+            }
+            let n = self.b.ins().iadd_imm_s(idx, 1);
+            self.b.ins().stack_store(types::I64, n, idx_slot, 0);
+            self.b.ins().jump(more, &[]);
+        }
+        self.b.switch_to_block(iter_next);
+        let iter = self.b.ins().stack_load(types::I64, types::I64, islot, 0);
         let ka = match kt {
             Some(t) => self.temp_addr(t),
             None => self.iconst(0),
@@ -818,7 +890,7 @@ impl<'a> Lower<'a> {
         let va = self.temp_addr(vt);
         let r = self.call("rt_iter_next", &[self.cx, iter, ka, va]).unwrap();
         let err = self.b.ins().icmp_imm_s(IntCC::Equal, r, 2);
-        let (ok, more) = (self.b.create_block(), self.b.create_block());
+        let ok = self.b.create_block();
         self.b.ins().brif(err, self.unwind, &[], ok, &[]);
         self.b.switch_to_block(ok);
         let has = self.b.ins().icmp_imm_s(IntCC::Equal, r, 1);
@@ -842,6 +914,8 @@ impl<'a> Lower<'a> {
         self.b.switch_to_block(exit);
         let ia = self.b.ins().stack_addr(types::I64, islot, 0);
         self.call("rt_iter_free", &[ia]);
+        let arr_a = self.temp_addr(arr_t);
+        self.release(Op::Ptr(arr_a, Some(arr_t)));
         Ok(())
     }
 
@@ -1280,7 +1354,7 @@ impl<'a> Lower<'a> {
                 let k = self.expr(index.as_deref().ok_or("[] read")?)?;
                 let k = self.materialize(k);
                 let (ba, ka) = (self.addr(b).unwrap(), self.addr(k).unwrap());
-                let r = self.helper_value("rt_index_get", |l| vec![l.cx, ba, ka])?;
+                let r = self.index_read(ba, ka)?;
                 self.release(k);
                 self.release(b);
                 r
@@ -1436,6 +1510,59 @@ impl<'a> Lower<'a> {
         let bad = self.b.ins().bor(empty, is_ref);
         let ok = self.b.create_block();
         self.b.ins().brif(bad, slow, &[], ok, &[]);
+        self.b.switch_to_block(ok);
+        p
+    }
+
+    /// `$arr[$k]`: packed array + in-range int key read inline; everything
+    /// else (hash arrays, strings, ArrayAccess, warnings) via rt_index_get.
+    fn index_read(&mut self, ba: CValue, ka: CValue) -> L<Op> {
+        if super::layout().is_none() {
+            return self.helper_value("rt_index_get", |l| vec![l.cx, ba, ka]);
+        }
+        let t = self.alloc_temp();
+        let ta = self.temp_addr(t);
+        let (slow, merge) = (self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(slow);
+        let p = self.packed_elem(ba, ka, slow);
+        self.store_into(ta, Op::Ptr(p, None));
+        self.b.ins().jump(merge, &[]);
+        self.b.switch_to_block(slow);
+        let ta2 = self.temp_addr(t);
+        self.call_checked("rt_index_get", &[self.cx, ba, ka, ta2]);
+        self.b.ins().jump(merge, &[]);
+        self.b.switch_to_block(merge);
+        let ta = self.temp_addr(t);
+        Ok(Op::Ptr(ta, Some(t)))
+    }
+
+    /// Address of `$arr[$k]` when the value at `ba` is a packed array, the
+    /// key at `ka` an in-range int and the element not a reference;
+    /// otherwise branches to `slow`.
+    fn packed_elem(&mut self, ba: CValue, ka: CValue, slow: Block) -> CValue {
+        let tg = self.load_tag(ba);
+        let is_arr = self.b.ins().icmp_imm_s(IntCC::Equal, tg, tag::ARRAY as i64);
+        let (c1, c2, c3, ok) = (self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(is_arr, c1, &[], slow, &[]);
+        self.b.switch_to_block(c1);
+        let kt = self.load_tag(ka);
+        let is_int = self.b.ins().icmp_imm_s(IntCC::Equal, kt, tag::INT as i64);
+        self.b.ins().brif(is_int, c2, &[], slow, &[]);
+        self.b.switch_to_block(c2);
+        let rc = self.b.ins().load(types::I64, flags(), ba, tag::PAYLOAD);
+        let arr = self.b.ins().iadd_imm_s(rc, 16);
+        let pk = self.b.ins().load(types::I64, flags(), arr, 0);
+        let len = self.b.ins().load(types::I64, flags(), arr, 8);
+        let k = self.b.ins().load(types::I64, flags(), ka, tag::PAYLOAD);
+        // Unsigned compare: negative keys fail too. A hash array has len 0.
+        let inb = self.b.ins().icmp(IntCC::UnsignedLessThan, k, len);
+        self.b.ins().brif(inb, c3, &[], slow, &[]);
+        self.b.switch_to_block(c3);
+        let off = self.b.ins().ishl_imm_u(k, 4);
+        let p = self.b.ins().iadd(pk, off);
+        let vt = self.load_tag(p);
+        let is_ref = self.b.ins().icmp_imm_s(IntCC::Equal, vt, tag::REF as i64);
+        self.b.ins().brif(is_ref, slow, &[], ok, &[]);
         self.b.switch_to_block(ok);
         p
     }
