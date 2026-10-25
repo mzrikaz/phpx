@@ -1989,7 +1989,14 @@ unsafe fn run_ctor(it: &Interp, site: &MethodSite, mc: &MethodCache, o: &Rc<crat
     }
     let mc = &mc;
     let m = &*mc.method;
-    let crate::class::MethodBody::User(func) = &m.body else { unreachable!() };
+    let crate::class::MethodBody::User(func) = &m.body else {
+        // A built-in class's native constructor (DateTime, ...).
+        let pos = take_args(args, n);
+        let cls = std::mem::ManuallyDrop::new(Rc::from_raw(mc.class));
+        let ctor = cls.ctor.clone().unwrap();
+        let r = it.invoke_method(Some(o.clone()), &ctor, (*cls).clone(), pos, vec![]);
+        return status(it, r, |v| put(out, v));
+    };
     let make = || {
         let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
         frame.static_class = rc_from(mc.class);
