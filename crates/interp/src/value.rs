@@ -1070,6 +1070,7 @@ pub fn identical(a: &Value, b: &Value) -> bool {
                     && x.iter().zip(y.iter()).all(|((ka, va), (kb, vb))| ka == kb && identical(&va, &vb)))
         }
         (Value::Object(x), Value::Object(y)) => Rc::ptr_eq(x, y),
+        (Value::Resource(x), Value::Resource(y)) => x.id == y.id,
         _ => false,
     }
 }
