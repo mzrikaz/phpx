@@ -15,20 +15,25 @@ comparisons look better than they were). "PHP JIT" adds
 
 ### Microbenchmarks (ns per operation, `microf.php`, lower is better)
 
-| Operation | PHP 8.5 (`-n`) | phpx | Status |
-|---|---|---|---|
-| empty loop | 5.5 | 3.1 | faster |
-| `$x = $x + 1` | 6.1 | 1.9 | faster |
-| `$a[] = $i` | 22.3 | 25 | ~par |
-| `foreach` over array | 10.3 | 25 | **slower** |
-| built-in call (`abs`) | 20.1 | 2.2 | faster |
-| user function call | 19.1 | 31 | **slower** |
-| `.=` concat | 19.7 | 12.5 | faster |
-| `$a[$i]` read | 8.2 | 18 | **slower** |
-| `$o->p` read | 6.8 | 21 | **slower** |
-| method call | 19.4 | 55 | **slower** |
-| `"item $i"` | 60.3 | 87 | **slower** |
-| `new C` (no ctor) | 38.7 | 122 | **slower** |
+| Operation | PHP 8.5 (`-n`) | phpx (2026-10-25 start) | phpx now | Status |
+|---|---|---|---|---|
+| empty loop | 5.5 | 3.1 | 3.2 | faster |
+| `$x = $x + 1` | 6.1 | 1.9 | 2.0 | faster |
+| `$a[] = $i` | 22.3 | 25 | 25-30 | ~par (noisy) |
+| `foreach` over array | 10.3 | 25 | 7.5 | **faster** (inline packed iteration) |
+| `abs()` (numeric JIT inline) | 20.1 | 2.2 | 2.3 | faster |
+| `strlen()` / `count()` / `is_*` | 5.1 | 70 | 4-6 | **par** (inline intrinsics) |
+| other built-in call (`chr`) | 7.2 | 75 | 30 | slower |
+| user function call | 19.1 | 31 | 26 | slower |
+| `.=` concat | 19.7 | 12.5 | 14 | faster |
+| `$a[$i]` read | 8.2 | 18 | 6.7 | **faster** (inline packed read) |
+| `$o->p` read | 6.8 | 21 | 7.1 | **par** (inline cache) |
+| method call | 19.4 | 55 | 38 | slower |
+| `"item $i"` | 60.3 | 87 | 57 | **par** (single-alloc strings) |
+| `new C` (no ctor) | 38.7 | 147 | 114 | slower |
+
+Remaining gaps are call overhead (frames, helper round trips, the
+per-built-in panic guard) and object allocation; see the plan below.
 
 ### Numeric code (`num.php`, ms)
 
@@ -46,7 +51,7 @@ comparisons look better than they were). "PHP JIT" adds
 |---|---|---|
 | object with 2 props | 105 | 169 (was 333 before shapes) |
 | constant array literal `[1,2]` | 17 | 17 (was 169 before sharing) |
-| short string | 57 | 68 |
+| short string | 57 | 64 (was 68 before single-allocation strings) |
 
 ## Plan: beat PHP everywhere, approach Node/Go
 
