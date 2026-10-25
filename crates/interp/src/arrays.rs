@@ -73,15 +73,15 @@ fn sort_generic(it: &Interp, f: &Frame, a: &mut [Value], by: SortBy, reverse: bo
     if user {
         let c = RefCell::new(it.callback(callable(it, f, a, 1)?));
         match by {
-            SortBy::Value => entries.sort_by(|x, y| flip(user_cmp(it, &c, &err, x.1.clone(), y.1.clone()))),
-            SortBy::Key => entries.sort_by(|x, y| flip(user_cmp(it, &c, &err, x.0.to_value(), y.0.to_value()))),
+            SortBy::Value => crate::zsort::sort(&mut entries, |x, y| flip(user_cmp(it, &c, &err, x.1.clone(), y.1.clone()))),
+            SortBy::Key => crate::zsort::sort(&mut entries, |x, y| flip(user_cmp(it, &c, &err, x.0.to_value(), y.0.to_value()))),
         }
     } else {
         let flags = if has(a, 1) { it.to_int(&a[1])? } else { 0 };
         let cmp = sort_cmp(it, flags);
         match by {
-            SortBy::Value => entries.sort_by(|x, y| flip(cmp(&x.1, &y.1))),
-            SortBy::Key => entries.sort_by(|x, y| flip(cmp(&x.0.to_value(), &y.0.to_value()))),
+            SortBy::Value => crate::zsort::sort(&mut entries, |x, y| flip(cmp(&x.1, &y.1))),
+            SortBy::Key => crate::zsort::sort(&mut entries, |x, y| flip(cmp(&x.0.to_value(), &y.0.to_value()))),
         }
     }
     if let Some(e) = err.into_inner() {

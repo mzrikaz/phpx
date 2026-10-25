@@ -35,6 +35,7 @@ mod fiber;
 mod glob;
 mod mbext;
 mod tokenizer;
+mod zsort;
 mod db;
 mod pdo;
 mod process;
