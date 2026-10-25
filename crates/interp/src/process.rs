@@ -228,11 +228,19 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         if let Value::Array(env) = arg(a, 4) {
             c.env_clear();
             for (k, v) in env.iter() {
-                let key = match k {
-                    Key::Str(s) => String::from_utf8_lossy(&s).into_owned(),
-                    Key::Int(n) => n.to_string(),
-                };
-                c.env(key, String::from_utf8_lossy(&it.to_str(&v)?).into_owned());
+                let val = String::from_utf8_lossy(&it.to_str(&v)?).into_owned();
+                match k {
+                    Key::Str(s) => {
+                        c.env(String::from_utf8_lossy(&s).into_owned(), val);
+                    }
+                    // A list entry is a whole "NAME=value" (Symfony Process
+                    // passes its environment like this).
+                    Key::Int(_) => {
+                        if let Some((name, value)) = val.split_once('=') {
+                            c.env(name, value);
+                        }
+                    }
+                }
             }
         }
         it.flush();
