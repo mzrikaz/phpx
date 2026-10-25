@@ -41,6 +41,21 @@ final class Promise {}
 
 final class Concurrency {}
 
+final class WeakReference
+{
+    private function __construct() {}
+}
+
+final class WeakMap implements ArrayAccess, Countable, IteratorAggregate
+{
+    public function getIterator(): Iterator
+    {
+        foreach (__phpx_weakmap_entries($this) as [$k, $v]) {
+            yield $k => $v;
+        }
+    }
+}
+
 class Exception implements Throwable
 {
     protected $message = '';

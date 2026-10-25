@@ -30,6 +30,7 @@ mod props;
 mod pstr;
 mod date;
 mod reflect;
+mod weak;
 mod sockets;
 mod streams;
 mod strings;

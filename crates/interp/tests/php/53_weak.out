@@ -1,0 +1,18 @@
+int(2)
+int(1)
+bool(true)
+bool(false)
+bool(true)
+int(1)
+bool(true)
+array(1) {
+  [0]=>
+  int(2)
+}
+int(1)
+int(0)
+Object stdClass#3 not contained in WeakMap
+WeakMap key must be an object
+bool(true)
+bool(true)
+NULL
