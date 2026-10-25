@@ -326,6 +326,9 @@ impl Native {
         let mut flags = settings::builder();
         flags.set("use_colocated_libcalls", "false").ok()?;
         flags.set("is_pic", "false").ok()?;
+        // The IR verifier roughly doubles compile time; PHPX_NATIVE_VERIFY=1
+        // turns it back on when debugging the lowering.
+        flags.set("enable_verifier", if std::env::var("PHPX_NATIVE_VERIFY").is_ok() { "true" } else { "false" }).ok()?;
         flags.set("opt_level", "speed").ok()?;
         let isa = cranelift_native::builder().ok()?.finish(settings::Flags::new(flags)).ok()?;
         let mut jb = JITBuilder::with_isa(isa, default_libcall_names());
