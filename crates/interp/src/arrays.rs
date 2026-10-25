@@ -668,6 +668,10 @@ fn count_nested(it: &Interp, x: &PhpArray, path: &mut Vec<usize>) -> i64 {
 
 fn key_exists(it: &Interp, a: &[Value]) -> R<Value> {
     match arg(a, 1) {
+        Value::Array(x) if arg(a, 0).is_null() => {
+            it.deprecated("Using null as the key parameter for array_key_exists() is deprecated, use an empty string instead");
+            Ok(Value::Bool(x.get(&crate::value::Key::Str(crate::value::pstr(""))).is_some()))
+        }
         Value::Array(x) => Ok(Value::Bool(x.get(&it.to_key(&arg(a, 0))?).is_some())),
         Value::Object(o) => Ok(Value::Bool(o.props.borrow().contains_key(&*it.to_string_lossy(&arg(a, 0))?))),
         other => Err(it.error(

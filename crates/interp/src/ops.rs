@@ -40,7 +40,10 @@ impl Interp {
             Value::Int(n) => Key::Int(*n),
             Value::Str(s) => Key::from_pstr(s),
             Value::Bool(b) => Key::Int(*b as i64),
-            Value::Null => Key::Str(crate::value::pbytes(b"")),
+            Value::Null => {
+                self.deprecated("Using null as an array offset is deprecated, use an empty string instead");
+                Key::Str(crate::value::pbytes(b""))
+            }
             Value::Float(f) => {
                 if f.fract() != 0.0 && f.is_finite() {
                     self.deprecated(&format!("Implicit conversion from float {} to int loses precision", fmt_float(*f)));

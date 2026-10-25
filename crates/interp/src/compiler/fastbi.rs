@@ -102,7 +102,6 @@ pub unsafe extern "C" fn rt_fast_key_exists(args: *mut Value, n: u64, dst: *mut 
     let key = match arg(args, 0) {
         Value::Int(i) => Key::Int(*i),
         Value::Str(s) => Key::from_pstr(s),
-        Value::Null => Key::Str(pbytes(b"")),
         _ => return DECLINE,
     };
     let found = a.get(&key).is_some();
