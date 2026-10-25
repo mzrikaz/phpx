@@ -14,6 +14,9 @@ use crate::value::{pstr, Internal, Key, Obj, PhpArray, Value};
 // ---- serialize ----------------------------------------------------------------
 
 fn ser(it: &Interp, v: &Value, out: &mut Vec<u8>) -> R<()> {
+    if it.stack_low() {
+        return Err(it.stack_overflow());
+    }
     match v {
         Value::Ref(r) => return ser(it, &r.borrow().clone(), out),
         Value::Null | Value::Resource(_) => out.extend_from_slice(b"N;"),
@@ -126,6 +129,8 @@ struct Unser<'a> {
     b: &'a [u8],
     i: usize,
     allowed: Option<Vec<String>>,
+    depth: usize,
+    max_depth: usize,
     /// Values in order of appearance, for `r:` / `R:` back-references.
     seen: Vec<Value>,
 }
@@ -170,6 +175,23 @@ impl Unser<'_> {
     }
 
     fn value(&mut self, it: &Interp) -> R<Option<Value>> {
+        if it.stack_low() {
+            return Err(it.stack_overflow());
+        }
+        if self.depth >= self.max_depth {
+            it.warn(&format!(
+                "unserialize(): Maximum depth of {} exceeded. The depth limit can be changed using the max_depth unserialize() option or the unserialize_max_depth ini setting",
+                self.max_depth
+            ));
+            return Ok(None);
+        }
+        self.depth += 1;
+        let r = self.value_inner(it);
+        self.depth -= 1;
+        r
+    }
+
+    fn value_inner(&mut self, it: &Interp) -> R<Option<Value>> {
         let Some(&t) = self.b.get(self.i) else { return Ok(None) };
         if self.b.get(self.i + 1) != Some(&b':') && t != b'N' {
             return Ok(None);
@@ -321,8 +343,8 @@ pub fn serialize(it: &Interp, v: &Value) -> R<Vec<u8>> {
     Ok(out)
 }
 
-pub fn unserialize(it: &Interp, b: &[u8], allowed: Option<Vec<String>>) -> R<Value> {
-    let mut u = Unser { b, i: 0, allowed, seen: vec![] };
+pub fn unserialize(it: &Interp, b: &[u8], allowed: Option<Vec<String>>, max_depth: usize) -> R<Value> {
+    let mut u = Unser { b, i: 0, allowed, depth: 0, max_depth, seen: vec![] };
     match u.value(it)? {
         Some(v) => Ok(v),
         None => {
@@ -1036,14 +1058,21 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("unserialize", |it, _, a| {
         let data = s(it, a, 0)?;
         let mut allowed = None;
+        let mut max_depth = 4096;
         if let Value::Array(o) = arg(a, 1) {
+            if let Some(d) = o.get(&Key::Str(pstr("max_depth"))) {
+                let d = it.to_int(&d)?;
+                if d > 0 {
+                    max_depth = d as usize;
+                }
+            }
             match o.get(&Key::Str(pstr("allowed_classes"))) {
                 Some(Value::Bool(false)) => allowed = Some(vec![]),
                 Some(Value::Array(l)) => allowed = Some(l.values().map(|v| it.to_string_lossy(&v)).collect::<R<Vec<_>>>()?),
                 _ => {}
             }
         }
-        unserialize(it, &data, allowed)
+        unserialize(it, &data, allowed, max_depth)
     });
     t.insert("pack", |it, _, a| pack(it, a));
     t.insert("unpack", |it, _, a| unpack(it, a));

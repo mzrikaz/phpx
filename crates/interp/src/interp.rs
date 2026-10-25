@@ -276,6 +276,8 @@ pub struct Interp {
     output_start: RefCell<Option<(String, usize)>>,
     /// Classes resolved from source names, keyed by the AST name's address.
     pub class_cache: RefCell<FxHashMap<usize, Rc<Class>>>,
+    /// eval() sources already parsed, by call site + code.
+    pub eval_cache: RefCell<HashMap<String, (usize, &'static ast::File)>>,
     /// `@` nesting depth: warnings are suppressed while nonzero.
     pub silence: Cell<u32>,
     /// Variable names created at run time (`$$x`, extract()).
@@ -321,6 +323,7 @@ impl Interp {
             pos: Cell::new(Pos { file: 0, off: 0 }),
             globals: Cell::new(std::ptr::null_mut()),
             silence: Cell::new(0),
+            eval_cache: RefCell::new(HashMap::new()),
             class_cache: RefCell::new(FxHashMap::default()),
             response: RefCell::new(Default::default()),
             include_path: RefCell::new(".:/usr/share/php".into()),

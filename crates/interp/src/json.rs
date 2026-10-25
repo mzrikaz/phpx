@@ -105,6 +105,9 @@ fn nl(out: &mut String, flags: i64, depth: usize) {
 }
 
 fn encode(it: &Interp, v: &Value, flags: i64, depth: usize, out: &mut String) -> Result<(), EncErr> {
+    if it.stack_low() {
+        return Err(EncErr::Json(1, "Maximum stack depth exceeded"));
+    }
     if depth > 512 {
         return Err(EncErr::Json(1, "Maximum stack depth exceeded"));
     }
@@ -272,6 +275,9 @@ impl Parser<'_> {
     }
 
     fn value(&mut self) -> PR<J> {
+        if phpx_runtime::stack_remaining().is_some_and(|r| r < 256 * 1024) {
+            return Err((1, "Maximum stack depth exceeded"));
+        }
         match self.b.get(self.i) {
             Some(b'n') => self.lit(b"null", J::Null),
             Some(b't') => self.lit(b"true", J::Bool(true)),

@@ -918,7 +918,7 @@ pub unsafe extern "C" fn rt_call(
     }
     if let Some(fun) = (*site).builtin.get() {
         let mut vals: Vec<Value> = (0..n as usize).map(|i| take(args.add(i)).into_deref()).collect();
-        return status(it, fun(it, f, &mut vals), |v| put(dst, v));
+        return status(it, crate::builtins::guarded(it, "built-in", || fun(it, f, &mut vals)), |v| put(dst, v));
     }
     if let Some((entry, u)) = (*site).cached.get() {
         let u = &*u;
@@ -956,7 +956,7 @@ pub unsafe extern "C" fn rt_call(
                         vals[idx] = take(local);
                     }
                 }
-                let r = fun(it, f, &mut vals);
+                let r = crate::builtins::guarded(it, bname, || fun(it, f, &mut vals));
                 for &idx in &idxs {
                     let local = *locals.add(idx);
                     if !local.is_null() {
@@ -971,7 +971,7 @@ pub unsafe extern "C" fn rt_call(
                 (*site).builtin.set(Some(*fun));
             }
             let mut vals: Vec<Value> = pos.into_iter().map(Value::into_deref).collect();
-            return fun(it, f, &mut vals);
+            return crate::builtins::guarded(it, bname, || fun(it, f, &mut vals));
         }
         let params = crate::call::callable_params(&callable);
         with_refs(params, pos, locals, |pos| it.call_callable(&callable, pos, vec![]))

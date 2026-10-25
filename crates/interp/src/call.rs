@@ -412,7 +412,21 @@ impl Interp {
         let code = String::from_utf8_lossy(&self.to_str(&v)?).into_owned();
         let (file, line) = self.here();
         let path = format!("{file}({line}) : eval()'d code");
-        match self.parse_file(std::path::Path::new(&path), format!("<?php {code}")) {
+        // Parsed code is kept (the AST is 'static): reuse it when the same
+        // site evaluates the same code again, so eval in a loop doesn't grow.
+        let key = format!("{path}\0{code}");
+        let cached = self.eval_cache.borrow().get(&key).copied();
+        let parsed = match cached {
+            Some(x) => Ok(x),
+            None => {
+                let r = self.parse_file(std::path::Path::new(&path), format!("<?php {code}"));
+                if let Ok(x) = &r {
+                    self.eval_cache.borrow_mut().insert(key, *x);
+                }
+                r
+            }
+        };
+        match parsed {
             Ok((id, parsed)) => {
                 let saved = f.ctx.clone();
                 let r = self.run_stmts_top(f, &parsed.stmts, id);
@@ -482,7 +496,7 @@ impl Interp {
         for (_, p) in &places {
             self.place_set(f, p, Value::Null)?;
         }
-        let r = fun(self, f, &mut vals);
+        let r = crate::builtins::guarded(self, name, || fun(self, f, &mut vals));
         for (i, p) in places {
             let v = std::mem::take(&mut vals[i]);
             self.place_set(f, &p, v)?;
@@ -618,7 +632,7 @@ impl Interp {
         let ctx = self.file_ctx(self.pos.get().file as usize);
         let mut frame = Frame::new(ctx, 0);
         let mut args: Vec<Value> = pos.into_iter().map(Value::into_deref).collect();
-        fun(self, &mut frame, &mut args)
+        crate::builtins::guarded(self, name, || fun(self, &mut frame, &mut args))
     }
 
     #[inline(never)]
@@ -781,8 +795,14 @@ impl Interp {
         self.try_native(inv.fn_id, mk, f)
     }
 
+    /// Recursive built-ins (serialize, json, ...) check this before going
+    /// deeper: true when less than 256 KiB of task stack is left.
+    pub fn stack_low(&self) -> bool {
+        phpx_runtime::stack_remaining().is_some_and(|r| r < 256 * 1024)
+    }
+
     #[inline(never)]
-    fn stack_overflow(&self) -> Ctrl {
+    pub fn stack_overflow(&self) -> Ctrl {
         self.error(
             "Error",
             &format!("Maximum call stack size of {} bytes reached. Infinite recursion?", phpx_runtime::stack_size()),

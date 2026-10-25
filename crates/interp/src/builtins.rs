@@ -44,6 +44,22 @@ pub fn callable(it: &Interp, f: &Frame, a: &[Value], i: usize) -> R<Callable> {
     it.to_callable(f, &arg(a, i))
 }
 
+/// Run a built-in, turning a Rust panic (a phpx bug) into a PHP `Error`
+/// instead of aborting the process. Unwinding must not cross generated code.
+pub fn guarded(it: &Interp, name: &str, f: impl FnOnce() -> R<Value>) -> R<Value> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(p) => {
+            let msg = p
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| p.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panic".into());
+            Err(it.error("Error", &format!("phpx internal error in {name}(): {msg}")))
+        }
+    }
+}
+
 /// Extensions phpx implements (enough for feature checks to pass).
 pub const EXTENSIONS: &[&str] = &["Core", "date", "pcre", "hash", "json", "SPL", "standard", "filter", "zlib", "ctype", "random"];
 
