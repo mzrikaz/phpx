@@ -68,20 +68,42 @@ Tested against a real Laravel 12 + Filament app (Wit-ERP, MySQL):
 - [x] Full bootstrap (env, config, providers, facades, boot)
 - [x] `artisan --version`, `artisan route:list` (output identical to PHP, 205 routes)
 - [x] PCRE2 regular expressions, Fiber, WeakMap/WeakReference, SPL file iterators, real stack traces
-- [ ] DOM (`DOMDocument`; Termwind renders console output through it)
-- [ ] Tokenizer (`token_get_all`, `PhpToken`; Collision's error highlighter)
+- [x] DOM (`DOMDocument` & co on a native tree; libxml2's HTML parser and serializers ported, so Termwind output matches PHP)
+- [x] Tokenizer (`token_get_all`, `token_name`, `PhpToken`)
+- [x] `set_error_handler` / `set_exception_handler` (Laravel turns warnings into `ErrorException`)
+- [x] `artisan module:list`, `artisan about` (output identical to PHP)
+- [x] `artisan serve` through phpx's built-in server (`phpx -S`)
 - [ ] The remaining functions of implemented extensions (about 200: output buffering details, zlib streams, iconv, session, hash_pbkdf2, ...)
-- [ ] Serving requests (`phpx serve`)
+- [ ] `DOMXPath` (PHPUnit configuration, Symfony DomCrawler)
+- [ ] Undefined-variable warnings in compiled code (compiled locals have no "unset" state yet)
 
 ## 3. HTTP server mode (`phpx serve`)
 
-- [ ] Request → green thread, per-request isolated globals and superglobals (`$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST`, `$_SERVER`)
-- [ ] `header()` / status codes / `headers_sent()` semantics
-- [ ] Cookies, sessions (`session_*`, crypto via RustCrypto)
-- [ ] Output buffering integrated with the response
-- [ ] Static file serving
-- [ ] Front-controller routing (Laravel `public/index.php`, WordPress `index.php`)
+Done in the development server (`phpx -S host:port [-t docroot] [router.php]`,
+a drop-in for `php -S`):
+
+- [x] php-compatible command line (`phpx file.php`, `-r`, `-S`, `-t`, `-d`, `-n`, `-v`, `-m`, `-l`, stdin); `PHP_BINARY` is phpx
+- [x] Superglobals per request (`$_GET`, `$_POST`, `$_COOKIE`, `$_FILES` with multipart uploads, `$_REQUEST`, `$_SERVER`), `php://input`, `move_uploaded_file()`
+- [x] `header()` / status codes, headers sent before the first output byte, streamed body
+- [x] Static files, router scripts, index fallback, PHP's log format (`artisan serve` parses it)
+- [x] Worker threads that keep parsed files between requests (`PHP_CLI_SERVER_WORKERS`)
+
+Production server (`phpx serve`), next:
+
+- [ ] Event-driven core: worker thread per core, each request a green thread (blocking-style PHP stays concurrent)
+- [ ] Per-request context instead of thread-local state, so requests interleave on one thread without seeing each other's state
+- [ ] Boot snapshot: boot the framework once, start each request from a copy-on-write clone of the booted state (Octane speed, no state leaks)
+- [ ] Keep-alive, HTTP/2, TLS, compression; reverse-proxy friendly (forwarded headers)
+- [ ] FastCGI listener (drop-in for PHP-FPM behind Nginx/Apache)
+- [ ] Sessions (`session_*`)
 - [ ] M:N scheduler across cores (work stealing)
+
+## 3b. Distribution
+
+- [ ] Single static binary per platform; install scripts (`curl | sh`, PowerShell), Homebrew, apt/rpm, winget/scoop
+- [ ] `phpx upgrade` self-update; version switching
+- [ ] macOS (kqueue reactor) and Windows (IOCP reactor) ports
+- [ ] Bundled Composer (`phpx composer ...`)
 
 ## 4. Native compiler coverage
 

@@ -23,23 +23,38 @@ For each call of a user function (`call.rs`, `compiler/mod.rs`):
    and the function has not been rejected by the JIT. It compiles a
    specialisation per argument-type signature after 50 calls (on the first
    call if the function contains a loop).
-2. **Native compiler**: compiles the function on its **2nd call**, or on the
-   **1st** call if its body contains a loop (`while`, `do`, `for`,
-   `foreach`, including inside `if`/`switch`/blocks).
+2. **Native compiler**: compiles the function once it is **hot**, after
+   1000 calls (`PHPX_NATIVE_THRESHOLD=n` changes it). Compiling costs
+   about a millisecond per function, so code that runs a few times (most of
+   a framework's boot) is cheaper to interpret: a Laravel artisan command
+   compiles ~120 functions instead of ~2000.
    `PHPX_NATIVE=all` compiles everything on the first call.
-3. **Interpreter**: everything else, plus functions that were rejected.
+3. **On-stack replacement (OSR)**: a `while`, `do` or `for` loop that runs
+   500 iterations in one interpreted call moves to native code mid-call.
+   The compiler builds an entry for that loop: it takes the interpreter
+   frame's locals (`rt_load_locals`), jumps straight to the loop header and
+   runs the rest of the function natively; the interpreter returns its
+   result. Not for loops inside `foreach`, `switch` or `try`, nor when a
+   local is shared (`static`, `global`, references): those keep
+   interpreting. Generators never OSR.
+4. **Interpreter**: everything else, plus functions that were rejected.
 
 File top-level code (each namespace segment) is compiled when it contains a
 loop, or always with `PHPX_NATIVE=all`.
 
-Compilation results are cached per function (by AST address), including
-negative results, so a rejected function is never re-analysed.
+Compilation results are cached per function (by AST address) and per OSR
+loop, including negative results, so a rejected function is never
+re-analysed. Cranelift's IR verifier is off (it took three quarters of
+compile time); `PHPX_NATIVE_VERIFY=1` turns it on.
 
 | `PHPX_NATIVE` | Threshold |
 |---|---|
-| unset / any other value | 2nd call (1st with a loop) |
+| unset / any other value | 1000 calls (`PHPX_NATIVE_THRESHOLD`), loops via OSR |
 | `all` | 1st call |
 | `off` or `0` | never (interpreter + numeric JIT only) |
+
+Planned: compiling on a background thread while the interpreter keeps
+running, and an on-disk cache of compiled code so a deploy compiles once.
 
 ## What compiles
 
@@ -201,7 +216,7 @@ planned optimisation ([performance.md](performance.md)).
 ## Debugging
 
 ```sh
-PHPX_NATIVE_LOG=1 phpx run app.php      # "[native] foo compiled" / "[native] bar: not compiled: global"
+PHPX_NATIVE_LOG=1 phpx run app.php      # "[native] foo compiled" / "[native] bar: not compiled: global", total compile CPU at exit
 PHPX_JIT_LOG=1 phpx run app.php         # numeric JIT decisions
 PHPX_NATIVE=all phpx run app.php        # compile everything eagerly (good for finding compiler bugs)
 PHPX_NATIVE=off PHPX_NOJIT=1 phpx run app.php   # pure interpreter (semantic reference)

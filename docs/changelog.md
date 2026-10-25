@@ -4,6 +4,37 @@ What has been built so far, grouped by milestone (most recent first).
 Entries before the first commit (2026-10-25) are reconstructed from the code
 and project notes; later entries follow the git history.
 
+## 2026-10-26 — Laravel serves, tiered compilation
+
+`artisan module:list`, `artisan about` and `artisan serve` run on a real
+Laravel 12 + Filament app; console output is identical to PHP.
+
+- **DOM** on a native node tree: `DOMDocument`, `DOMElement`, `DOMAttr`,
+  `DOMText`, node lists and maps, `DOMImplementation`, libxml errors.
+  libxml2 2.13's HTML parser (implied elements, auto-close tables,
+  whitespace rules, HTML 4 entities, encoding detection) and its HTML and
+  XML serializers are ported, so `saveHTML()`/`saveXML()` match PHP byte
+  for byte; an XML parser with namespaces, DTD entities and CDATA.
+- **Tokenizer**: `token_get_all()`, `token_name()`, `PhpToken` (matches PHP
+  on every file of a Laravel project).
+- **Error handling**: `set_error_handler()` (called under `@` too, with
+  `error_reporting()` masked), `set_exception_handler()`,
+  `error_get_last()`, `trigger_error()` levels; a handler's exception
+  surfaces where PHP's would. `#[\Deprecated]` class constants and PHP
+  8.5's deprecated PDO driver constants.
+- **Command line and built-in server**: php's options (`-r`, `-S`, `-t`,
+  `-d`, ...); `phpx -S` serves like `php -S` (router scripts, static
+  files, uploads, PHP's log format) with worker threads that keep parsed
+  files between requests.
+- **Tiered compilation**: functions compile after 1000 calls instead of
+  the second; long loops switch to native code mid-call (on-stack
+  replacement). Cranelift's verifier is off (3/4 of compile time).
+- **Fixes**: `usort()` and friends use PHP's exact sort algorithm (so
+  inconsistent comparators order like PHP), `$res === $res` on resources,
+  `stream_select()` with a zero timeout, `php://stdout` bypasses output
+  buffers, `file_get_contents()` on `php://`/`data:` URIs and with
+  offset/length, a bare `$var;` statement does not warn.
+
 ## 2026-10-26 — Laravel boots
 
 A real Laravel 12 + Filament application boots and runs `artisan

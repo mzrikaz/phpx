@@ -67,7 +67,8 @@ Known places where phpx output can differ from PHP 8.5 today.
 | Non-UTF-8 source files | Source is decoded with `from_utf8_lossy`, so Latin-1 bytes inside string literals become U+FFFD | Keep sources as bytes |
 | Stack traces | Frames of built-in functions that call back into PHP (`[internal function]`, e.g. `array_map`) are not listed | Record built-in frames too |
 | Missing built-ins | Calling an unimplemented function throws `Error: Call to undefined function` | [stdlib.md](stdlib.md) lists what is missing |
-| Missing classes | DOM/XML classes, `mysqli`, `SQLite3`, `PhpToken`, intl classes | Roadmap items 2 and 6 |
+| Missing classes | `DOMXPath`, SimpleXML, XMLReader/XMLWriter, `mysqli`, `SQLite3`, intl classes | Roadmap items 2 and 6 |
+| Undefined variables in compiled code | Native code reads an unset local as null without the "Undefined variable" warning (the interpreter warns) | Give compiled locals an unset state |
 | `serialize()` of references | A structure that contains itself through a reference raises the call-stack Error instead of producing `R:`/`r:` back-references | Implement reference tracking in `serialize` |
 | Compile-depth limit | PHP refuses source nested beyond ~10,000 levels (or 3,000 `if`s) at compile time; phpx accepts deeper nesting while the stack allows, then reports the same "Maximum call stack size ... reached during compilation" error | Acceptable (more lenient) |
 | Superglobals in CLI | `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST` are empty arrays; `$_SESSION` is not set (like PHP CLI without a session) | HTTP server mode |
