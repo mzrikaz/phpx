@@ -1,0 +1,151 @@
+string(12) "App\UserRepo"
+string(8) "UserRepo"
+string(3) "App"
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+string(8) "App\Base"
+array(2) {
+  [0]=>
+  string(8) "App\Repo"
+  [1]=>
+  string(9) "Countable"
+}
+array(1) {
+  [0]=>
+  string(8) "App\Logs"
+}
+bool(true)
+bool(true)
+string(29) "/**
+ * A user repository.
+ */"
+int(22)
+int(34)
+bool(true)
+array(3) {
+  ["LIMIT"]=>
+  int(10)
+  ["SECRET"]=>
+  string(1) "s"
+  ["VERSION"]=>
+  string(3) "1.0"
+}
+bool(true)
+string(3) "1.0"
+0 inner type=?App\Repo builtin=false null=true opt=true var=false prom=true def=NULL const=NULL
+1 size type=int builtin=true null=false opt=true var=false prom=true def=10 const='self::LIMIT'
+2 tags type=string builtin=true null=false opt=true var=true prom=false
+int(3)
+int(0)
+id:int -
+strict:bool false
+opts:array array (
+)
+other:?App\UserRepo NULL
+string(6) "?array"
+bool(true)
+bool(true)
+string(12) "App\UserRepo"
+bool(true)
+string(6) "static"
+string(10) "string|int"
+string(15) "App\PHP_INT_MAX"
+array(7) {
+  [0]=>
+  string(24) "__construct@App\UserRepo"
+  [1]=>
+  string(18) "table@App\UserRepo"
+  [2]=>
+  string(17) "find@App\UserRepo"
+  [3]=>
+  string(18) "count@App\UserRepo"
+  [4]=>
+  string(17) "make@App\UserRepo"
+  [5]=>
+  string(19) "secret@App\UserRepo"
+  [6]=>
+  string(16) "log@App\UserRepo"
+}
+array(1) {
+  [0]=>
+  string(4) "make"
+}
+array(6) {
+  [0]=>
+  string(17) "name@App\UserRepo"
+  [1]=>
+  string(17) "hits@App\UserRepo"
+  [2]=>
+  string(18) "inner@App\UserRepo"
+  [3]=>
+  string(17) "size@App\UserRepo"
+  [4]=>
+  string(16) "log@App\UserRepo"
+  [5]=>
+  string(14) "count@App\Base"
+}
+int(5)
+string(8) "hidden 0"
+int(0)
+bool(true)
+string(3) "int"
+string(9) "hidden 42"
+bool(true)
+int(0)
+bool(true)
+bool(true)
+NULL
+int(0)
+bool(false)
+string(9) "App\Route"
+array(2) {
+  [0]=>
+  string(6) "/users"
+  ["methods"]=>
+  array(2) {
+    [0]=>
+    string(3) "GET"
+    [1]=>
+    string(4) "POST"
+  }
+}
+string(6) "/users"
+array(2) {
+  [0]=>
+  string(3) "GET"
+  [1]=>
+  string(4) "POST"
+}
+int(1)
+int(0)
+int(2)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+string(3) "int"
+bool(true)
+array(1) {
+  [0]=>
+  string(1) "o"
+}
+bool(true)
+int(4)
+bool(true)
+ReflectionException: Class "Nope\Missing" does not exist
+Method App\UserRepo::zzz() does not exist
+Property App\UserRepo::$zzz does not exist
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+string(6) "string"
+int(2)
+string(1) "S"
+bool(true)
+string(5) "count"
+bool(true)

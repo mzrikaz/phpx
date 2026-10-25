@@ -28,6 +28,7 @@ mod ops;
 mod preg;
 mod props;
 mod pstr;
+mod reflect;
 mod sockets;
 mod streams;
 mod strings;

@@ -1630,6 +1630,7 @@ impl Interp {
                             body: MethodBody::User(func),
                             is_static: modifiers.static_,
                             is_abstract: modifiers.abstract_ || func.body.is_none(),
+                            is_final: modifiers.final_,
                             vis: Vis::of(modifiers),
                             declaring: lname.clone(),
                             ctx: ctx.clone(),
@@ -1666,6 +1667,7 @@ impl Interp {
                         body: MethodBody::Native(*fun),
                         is_static,
                         is_abstract: false,
+                        is_final: false,
                         vis: Vis::Public,
                         declaring: lname.clone(),
                         ctx: ctx.clone(),
@@ -1722,6 +1724,8 @@ impl Interp {
             methods,
             cases: cases.clone(),
             enum_backed: c.enum_type.is_some(),
+            decl: c,
+            decl_ctx: ctx.clone(),
         });
         if anon_name.is_none() {
             self.classes.borrow_mut().insert(lname.clone(), cls.clone());

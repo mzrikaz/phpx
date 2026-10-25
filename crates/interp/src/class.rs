@@ -61,6 +61,7 @@ pub struct Method {
     pub body: MethodBody,
     pub is_static: bool,
     pub is_abstract: bool,
+    pub is_final: bool,
     pub vis: Vis,
     /// Lowercase name of the declaring class (`self::` inside the body).
     pub declaring: Rc<str>,
@@ -116,6 +117,10 @@ pub struct Class {
     pub plain_new: bool,
     /// Shape of new instances: the declared properties in order.
     pub shape: Rc<crate::props::Shape>,
+    /// The declaration and its namespace context (Reflection: attributes,
+    /// doc comments, lines, modifiers).
+    pub decl: &'static ast::Class,
+    pub decl_ctx: Rc<NsCtx>,
 }
 
 impl Class {

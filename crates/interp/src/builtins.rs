@@ -95,6 +95,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::fs::register(&mut t);
     crate::streams::register(&mut t);
     crate::sockets::register(&mut t);
+    crate::reflect::register(&mut t);
     crate::ext::register(&mut t);
     crate::misc::register(&mut t);
     crate::ini::register(&mut t);
