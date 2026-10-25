@@ -1,0 +1,151 @@
+string(37) "2023-11-14 23:13:20 Tue Nov 318 2 2 %"
+string(19) "2023-11-14 22:13:20"
+string(26) "Wednesday July  3 11 AM 24"
+string(16) "America/New_York"
+string(12) "Europe/Paris"
+string(15) "America/Chicago"
+string(13) "Europe/Berlin"
+string(14) "Asia/Chongqing"
+bool(false)
+string(3) "UTC"
+bool(false)
+array(9) {
+  ["sunrise"]=>
+  int(1699943156)
+  ["sunset"]=>
+  int(1699974934)
+  ["transit"]=>
+  int(1699959045)
+  ["civil_twilight_begin"]=>
+  int(1699940897)
+  ["civil_twilight_end"]=>
+  int(1699977193)
+  ["nautical_twilight_begin"]=>
+  int(1699938402)
+  ["nautical_twilight_end"]=>
+  int(1699979688)
+  ["astronomical_twilight_begin"]=>
+  int(1699935993)
+  ["astronomical_twilight_end"]=>
+  int(1699982097)
+}
+array(9) {
+  ["sunrise"]=>
+  bool(true)
+  ["sunset"]=>
+  bool(true)
+  ["transit"]=>
+  int(1718794733)
+  ["civil_twilight_begin"]=>
+  bool(true)
+  ["civil_twilight_end"]=>
+  bool(true)
+  ["nautical_twilight_begin"]=>
+  bool(true)
+  ["nautical_twilight_end"]=>
+  bool(true)
+  ["astronomical_twilight_begin"]=>
+  bool(true)
+  ["astronomical_twilight_end"]=>
+  bool(true)
+}
+array(9) {
+  ["sunrise"]=>
+  bool(false)
+  ["sunset"]=>
+  bool(false)
+  ["transit"]=>
+  int(1702983259)
+  ["civil_twilight_begin"]=>
+  bool(false)
+  ["civil_twilight_end"]=>
+  bool(false)
+  ["nautical_twilight_begin"]=>
+  int(1702979667)
+  ["nautical_twilight_end"]=>
+  int(1702986851)
+  ["astronomical_twilight_begin"]=>
+  int(1702967717)
+  ["astronomical_twilight_end"]=>
+  int(1702998801)
+}
+string(5) "07:24"
+int(1699975047)
+float(7.4013442891)
+array(9) {
+  ["sunrise"]=>
+  int(1699962092)
+  ["sunset"]=>
+  int(1699997957)
+  ["transit"]=>
+  int(1699980024)
+  ["civil_twilight_begin"]=>
+  int(1699960342)
+  ["civil_twilight_end"]=>
+  int(1699999707)
+  ["nautical_twilight_begin"]=>
+  int(1699958361)
+  ["nautical_twilight_end"]=>
+  int(1700001688)
+  ["astronomical_twilight_begin"]=>
+  int(1699956422)
+  ["astronomical_twilight_end"]=>
+  int(1700003627)
+}
+array(12) {
+  ["year"]=>
+  int(2024)
+  ["month"]=>
+  int(1)
+  ["day"]=>
+  int(15)
+  ["hour"]=>
+  bool(false)
+  ["minute"]=>
+  bool(false)
+  ["second"]=>
+  bool(false)
+  ["fraction"]=>
+  bool(false)
+  ["warning_count"]=>
+  int(0)
+  ["warnings"]=>
+  array(0) {
+  }
+  ["error_count"]=>
+  int(0)
+  ["errors"]=>
+  array(0) {
+  }
+  ["is_localtime"]=>
+  bool(false)
+}
+array(12) {
+  ["year"]=>
+  int(2009)
+  ["month"]=>
+  int(1)
+  ["day"]=>
+  int(6)
+  ["hour"]=>
+  int(13)
+  ["minute"]=>
+  int(5)
+  ["second"]=>
+  int(0)
+  ["fraction"]=>
+  float(0)
+  ["warning_count"]=>
+  int(0)
+  ["warnings"]=>
+  array(0) {
+  }
+  ["error_count"]=>
+  int(0)
+  ["errors"]=>
+  array(0) {
+  }
+  ["is_localtime"]=>
+  bool(false)
+}
+bool(true)

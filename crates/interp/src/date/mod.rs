@@ -2,10 +2,12 @@
 //! state), DateInterval / DatePeriod (PHP in prelude_date.php, with native
 //! helpers), and date(), strtotime(), mktime() and friends.
 
+mod abbr_map;
 mod civil;
 mod format;
 mod fromformat;
 mod interval;
+mod more;
 mod parse;
 mod zone;
 
@@ -620,6 +622,7 @@ fn getdate_arr(ts: i64, zone: &Zone) -> Value {
 }
 
 pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
+    more::register(t);
     t.insert("date", |it, _, a| date_fn(it, a, default_zone(it)));
     t.insert("gmdate", |it, _, a| date_fn(it, a, Zone::Offset(0)));
     t.insert("mktime", |it, _, a| mktime_fn(it, a, default_zone(it)));
