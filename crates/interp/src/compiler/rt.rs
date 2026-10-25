@@ -1127,12 +1127,35 @@ impl SiteFrame {
     }
 }
 
-/// A `$obj->m(...)` call site with a monomorphic inline cache.
+/// A `$obj->m(...)` call site with a monomorphic inline cache (also used
+/// by static calls, `new` and `$f(...)`). `#[repr(C)]`: generated code
+/// reads the `direct*` fields and the frame for direct method calls.
+#[repr(C)]
 pub struct MethodSite {
+    /// Compiled entry of the cached method when it may be called directly
+    /// (0: not), for objects of class `direct_class` called from scope
+    /// `direct_scope`.
+    pub direct: std::cell::Cell<usize>,
+    pub direct_class: std::cell::Cell<usize>,
+    pub direct_scope: std::cell::Cell<usize>,
+    pub frame: SiteFrame,
     pub name: &'static str,
     pub lname: &'static str,
     pub cached: std::cell::Cell<Option<MethodCache>>,
-    pub frame: SiteFrame,
+}
+
+impl MethodSite {
+    pub fn new(name: &'static str, lname: &'static str) -> MethodSite {
+        MethodSite {
+            direct: Default::default(),
+            direct_class: Default::default(),
+            direct_scope: Default::default(),
+            frame: Default::default(),
+            name,
+            lname,
+            cached: Default::default(),
+        }
+    }
 }
 
 /// Plain pointers: classes and methods are never freed while running.
@@ -1400,6 +1423,13 @@ pub unsafe extern "C" fn rt_method_call(
             };
             site.cached.set(Some(mc));
             site.frame.invalidate();
+            // Direct calls from compiled code: instance methods whose
+            // binding won't always decline.
+            let direct = !m.is_static && crate::call::method_params(&m).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
+            site.direct.set(if direct { entry as usize } else { 0 });
+            // Keyed the way generated code reads them: the raw Rc words.
+            site.direct_class.set(*(std::ptr::addr_of!(o.class) as *const usize));
+            site.direct_scope.set(scope_key(f));
             Some(mc)
         });
         if let Some(mc) = hit {

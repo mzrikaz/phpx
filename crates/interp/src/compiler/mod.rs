@@ -153,6 +153,14 @@ pub struct Layout {
     /// reset after a direct call).
     pub frame_vars_len: i32,
     pub frame_args_len: i32,
+    /// From an object's Rc pointer to its class pointer.
+    pub obj_class: i32,
+    /// `MethodSite::direct`, `direct_class`, `direct_scope`, frame, busy.
+    pub msite_direct: i32,
+    pub msite_class: i32,
+    pub msite_scope: i32,
+    pub msite_frame: i32,
+    pub msite_busy: i32,
 }
 
 pub fn layout() -> Option<Layout> {
@@ -217,6 +225,12 @@ fn probe_layout() -> Option<Layout> {
         site_busy: (offset_of!(rt::CallSite, frame) + rt::SiteFrame::BUSY) as i32,
         frame_vars_len: frame_vars_len as i32,
         frame_args_len: frame_args_len as i32,
+        obj_class: (2 * size_of::<usize>() + offset_of!(crate::value::Obj, class)) as i32,
+        msite_direct: offset_of!(rt::MethodSite, direct) as i32,
+        msite_class: offset_of!(rt::MethodSite, direct_class) as i32,
+        msite_scope: offset_of!(rt::MethodSite, direct_scope) as i32,
+        msite_frame: (offset_of!(rt::MethodSite, frame) + rt::SiteFrame::FRAME) as i32,
+        msite_busy: (offset_of!(rt::MethodSite, frame) + rt::SiteFrame::BUSY) as i32,
     })
 }
 

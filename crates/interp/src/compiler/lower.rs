@@ -1387,7 +1387,7 @@ impl<'a> Lower<'a> {
                 let cv = self.own(cv);
                 let cv = self.materialize(cv);
                 let ca = self.addr(cv).unwrap();
-                let site = Box::new(super::rt::MethodSite { name: "", lname: "", cached: Default::default(), frame: Default::default() });
+                let site = Box::new(super::rt::MethodSite::new("", ""));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
                 let (aa, la, n_) = self.args(args)?;
@@ -1436,7 +1436,7 @@ impl<'a> Lower<'a> {
                 let oa = self.addr(o).unwrap();
                 // Method lookup is by lowercase name: precompute it.
                 let lname: &'static str = Box::leak(name.to_ascii_lowercase().into_boxed_str());
-                let site = Box::new(super::rt::MethodSite { name, lname, cached: Default::default(), frame: Default::default() });
+                let site = Box::new(super::rt::MethodSite::new(name, lname));
                 let sp = &*site as *const super::rt::MethodSite as i64;
                 self.msites.push(site);
                 let r = if *nullsafe {
@@ -1450,7 +1450,10 @@ impl<'a> Lower<'a> {
                     let (aa, la, n_) = self.args(args)?;
                     let sp = self.iconst(sp);
                     let meta = self.arg_meta(args);
-                    self.helper_value("rt_method_call", |l| vec![l.cx, oa, sp, aa, n_, la, meta])?
+                    match super::layout().filter(|_| super::inline_rc() && args.iter().all(|a| !a.spread && a.name.is_none())) {
+                        Some(lay) => self.direct_method_call(lay, oa, sp, aa, n_, la, meta),
+                        None => self.helper_value("rt_method_call", |l| vec![l.cx, oa, sp, aa, n_, la, meta])?,
+                    }
                 };
                 if matches!(o, Op::Ptr(_, Some(_))) {
                     // A temporary (`(new C)->m()`) dies right after the call.
@@ -1465,7 +1468,7 @@ impl<'a> Lower<'a> {
                 let name = self.member(name)?;
                 let cr = self.iconst(class as *const ClassRef as i64);
                 let lname: &'static str = Box::leak(name.to_ascii_lowercase().into_boxed_str());
-                let site = Box::new(super::rt::MethodSite { name, lname, cached: Default::default(), frame: Default::default() });
+                let site = Box::new(super::rt::MethodSite::new(name, lname));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
                 let (aa, la, n_) = self.args(args)?;
@@ -1474,7 +1477,7 @@ impl<'a> Lower<'a> {
             }
             New { class, args } => {
                 let cr = self.iconst(class as *const ClassRef as i64);
-                let site = Box::new(super::rt::MethodSite { name: "__construct", lname: "__construct", cached: Default::default(), frame: Default::default() });
+                let site = Box::new(super::rt::MethodSite::new("__construct", "__construct"));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
                 let (aa, la, n_) = self.args(args)?;
@@ -1501,21 +1504,97 @@ impl<'a> Lower<'a> {
     /// `rt_call` handles the first calls, recursion (frame busy) and
     /// declined bindings (arguments untouched).
     fn direct_call(&mut self, lay: super::Layout, sp: CValue, aa: CValue, n: CValue, la: CValue, meta: CValue) -> Op {
+        self.emit_direct(
+            lay,
+            sp,
+            lay.site_busy,
+            aa,
+            n,
+            |l, slow| {
+                let entry = l.b.ins().load(types::I64, flags(), sp, lay.site_direct);
+                let c1 = l.b.create_block();
+                l.b.ins().brif(entry, c1, &[], slow, &[]);
+                l.b.switch_to_block(c1);
+                let frame = l.b.ins().load(types::I64, flags(), sp, lay.site_frame);
+                (entry, frame, None)
+            },
+            |l, ta| l.call_checked("rt_call", &[l.cx, sp, aa, n, la, meta, ta]),
+        )
+    }
+
+    /// `$o->m(...)`: like `direct_call`, for an object of the cached class
+    /// called from the cached scope; `$this` is lent to the site's frame.
+    #[allow(clippy::too_many_arguments)]
+    fn direct_method_call(&mut self, lay: super::Layout, oa: CValue, sp: CValue, aa: CValue, n: CValue, la: CValue, meta: CValue) -> Op {
+        self.emit_direct(
+            lay,
+            sp,
+            lay.msite_busy,
+            aa,
+            n,
+            |l, slow| {
+                let tg = l.load_tag(oa);
+                let is_obj = l.b.ins().icmp_imm_s(IntCC::Equal, tg, tag::OBJECT as i64);
+                let (c1, c2, c3) = (l.b.create_block(), l.b.create_block(), l.b.create_block());
+                l.b.ins().brif(is_obj, c1, &[], slow, &[]);
+                l.b.switch_to_block(c1);
+                let rc = l.b.ins().load(types::I64, flags(), oa, tag::PAYLOAD);
+                let cls = l.b.ins().load(types::I64, flags(), rc, lay.obj_class);
+                let want = l.b.ins().load(types::I64, flags(), sp, lay.msite_class);
+                let same = l.b.ins().icmp(IntCC::Equal, cls, want);
+                l.b.ins().brif(same, c2, &[], slow, &[]);
+                l.b.switch_to_block(c2);
+                let caller = l.b.ins().load(types::I64, flags(), l.cx, lay.cx_frame);
+                let scope = l.b.ins().load(types::I64, flags(), caller, lay.frame_class);
+                let want = l.b.ins().load(types::I64, flags(), sp, lay.msite_scope);
+                let same = l.b.ins().icmp(IntCC::Equal, scope, want);
+                l.b.ins().brif(same, c3, &[], slow, &[]);
+                l.b.switch_to_block(c3);
+                let entry = l.b.ins().load(types::I64, flags(), sp, lay.msite_direct);
+                let c4 = l.b.create_block();
+                l.b.ins().brif(entry, c4, &[], slow, &[]);
+                l.b.switch_to_block(c4);
+                let frame = l.b.ins().load(types::I64, flags(), sp, lay.msite_frame);
+                (entry, frame, Some(rc))
+            },
+            |l, ta| l.call_checked("rt_method_call", &[l.cx, oa, sp, aa, n, la, meta, ta]),
+        )
+    }
+
+    /// The shared shape of a direct call. `guard` branches to `slow` unless
+    /// the cached target applies, returning (entry, site frame, `$this`'s
+    /// Rc pointer for methods); `slow_call` runs the helper path, writing
+    /// the result to the given address.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_direct(
+        &mut self,
+        lay: super::Layout,
+        sp: CValue,
+        busy_off: i32,
+        aa: CValue,
+        n: CValue,
+        guard: impl FnOnce(&mut Self, Block) -> (CValue, CValue, Option<CValue>),
+        slow_call: impl FnOnce(&mut Self, CValue),
+    ) -> Op {
         let t = self.alloc_temp();
-        let (c1, c2, fast, chk, slow, done) =
-            (self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block());
-        let entry = self.b.ins().load(types::I64, flags(), sp, lay.site_direct);
-        self.b.ins().brif(entry, c1, &[], slow, &[]);
-        self.b.switch_to_block(c1);
-        let frame = self.b.ins().load(types::I64, flags(), sp, lay.site_frame);
+        let (slow, done) = (self.b.create_block(), self.b.create_block());
+        let (entry, frame, this) = guard(self, slow);
+        let (c2, fast, chk) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
         self.b.ins().brif(frame, c2, &[], slow, &[]);
         self.b.switch_to_block(c2);
-        let busy = self.b.ins().load(types::I8, flags(), sp, lay.site_busy);
+        let busy = self.b.ins().load(types::I8, flags(), sp, busy_off);
         self.b.ins().brif(busy, slow, &[], fast, &[]);
 
         self.b.switch_to_block(fast);
         let one = self.b.ins().iconst(types::I8, 1);
-        self.b.ins().store(flags(), one, sp, lay.site_busy);
+        self.b.ins().store(flags(), one, sp, busy_off);
+        if let Some(rc) = this {
+            // Lend `$this` to the frame (one more reference).
+            let cnt = self.b.ins().load(types::I64, flags(), rc, 0);
+            let cnt = self.b.ins().iadd_imm_s(cnt, 1);
+            self.b.ins().store(flags(), cnt, rc, 0);
+            self.b.ins().store(flags(), rc, frame, lay.frame_this);
+        }
         // The callee's Cx: same interpreter, the site's frame.
         let it = self.b.ins().load(types::I64, flags(), self.cx, 0);
         let cx2 = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 16, 3));
@@ -1535,7 +1614,18 @@ impl<'a> Lower<'a> {
         let st = self.b.inst_results(inst)[0];
         self.b.ins().store(flags(), saved, pa, 0);
         let zero = self.b.ins().iconst(types::I8, 0);
-        self.b.ins().store(flags(), zero, sp, lay.site_busy);
+        self.b.ins().store(flags(), zero, sp, busy_off);
+        if let Some(rc) = this {
+            // Take `$this` back and drop the frame's reference.
+            let null = self.iconst(0);
+            self.b.ins().store(flags(), null, frame, lay.frame_this);
+            let tt = self.alloc_temp();
+            let tta = self.temp_addr(tt);
+            self.store_tag(tta, tag::OBJECT);
+            self.b.ins().store(flags(), rc, tta, tag::PAYLOAD);
+            self.clear(tta);
+            self.free.push(tt);
+        }
         // Plain functions leave the frame untouched unless they ran
         // something that needed interpreter variables.
         let vl = self.b.ins().load(types::I64, flags(), frame, lay.frame_vars_len);
@@ -1556,7 +1646,7 @@ impl<'a> Lower<'a> {
 
         self.b.switch_to_block(slow);
         let ta = self.temp_addr(t);
-        self.call_checked("rt_call", &[self.cx, sp, aa, n, la, meta, ta]);
+        slow_call(self, ta);
         self.b.ins().jump(done, &[]);
         self.b.switch_to_block(done);
         let ta = self.temp_addr(t);
