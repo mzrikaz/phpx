@@ -36,6 +36,7 @@ mod glob;
 mod mbext;
 mod tokenizer;
 mod zsort;
+mod dom;
 mod db;
 mod pdo;
 mod process;

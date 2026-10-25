@@ -1,0 +1,64 @@
+<?php
+$d = new DOMDocument('1.0', 'UTF-8');
+$root = $d->createElement('root');
+$d->appendChild($root);
+$a = $d->createElement('a', 'x &amp; y < z');
+$root->appendChild($a);
+$a->setAttribute('id', 'one');
+$a->setAttribute('data-v', "q\"'<>&\n");
+$b = $root->appendChild($d->createElement('b'));
+$b->appendChild($d->createTextNode('t1'));
+$b->appendChild($d->createTextNode('t2'));
+var_dump($b->childNodes->length, $b->textContent);
+$b->normalize();
+var_dump($b->childNodes->length);
+$root->insertBefore($d->createComment(' c '), $a);
+$c = $root->appendChild($d->createElementNS('urn:x', 'x:c', 'nsv'));
+$c->setAttributeNS('urn:y', 'y:attr', 'v');
+var_dump($c->namespaceURI, $c->prefix, $c->localName, $c->lookupNamespaceURI('x'), $c->getAttributeNS('urn:y', 'attr'));
+echo $d->saveXML();
+$d->formatOutput = true;
+echo $d->saveXML();
+var_dump($a->getAttribute('missing'), $a->hasAttribute('id'), $a->getNodePath(), $c->getNodePath());
+$clone = $a->cloneNode(true);
+$root->appendChild($clone);
+var_dump($root->childNodes->length, $clone->isEqualNode($a), $clone->isSameNode($a));
+$root->removeChild($clone);
+$a->removeAttribute('data-v');
+foreach ($a->attributes as $k => $attr) { echo "$k=", $attr->value, "\n"; }
+$frag = $d->createDocumentFragment();
+$frag->appendXML('<p>one</p><p>two</p>');
+$root->appendChild($frag);
+var_dump($root->getElementsByTagName('p')->length, $root->lastChild->nodeName, $root->firstElementChild->nodeName, $root->childElementCount);
+$p = $root->getElementsByTagName('p')->item(0);
+$p->replaceWith('text', $d->createElement('q'));
+$root->append('end');
+$root->prepend($d->createElement('first'));
+echo $d->saveXML($root), "\n";
+try { $root->appendChild($root); } catch (DOMException $e) { echo get_class($e), ' ', $e->getMessage(), ' ', $e->code, "\n"; }
+$other = new DOMDocument;
+try { $other->appendChild($a); } catch (DOMException $e) { echo $e->getMessage(), ' ', $e->code, "\n"; }
+$imp = $other->importNode($a, true);
+$other->appendChild($imp);
+echo $other->saveXML();
+$t = $d->createTextNode('hello world');
+var_dump($t->substringData(6, 5), $t->length);
+$x = new DOMDocument;
+var_dump(@$x->loadXML('<a><b></a>'));
+libxml_use_internal_errors(true);
+var_dump($x->loadXML('<a><b></a>'));
+foreach (libxml_get_errors() as $e) { echo $e->level, ' ', $e->code, ' ', trim($e->message), ' ', $e->line, "\n"; }
+libxml_clear_errors();
+$x->loadXML('<r><i n="1"/><i n="2"/></r>');
+foreach ($x->documentElement->childNodes as $i => $n) echo $i, ':', $n->getAttribute('n'), ' ';
+echo "\n";
+$h = new DOMDocument;
+$h->loadHTML('<html><body><div id="main" class="c1 c2"><span>A</span>B<!-- k --></div><input disabled value="v"></body></html>');
+$m = $h->getElementById('main');
+var_dump($m->className, $m->id, $m->nodeValue, $m->childNodes->item(1)->nodeType, $m->firstChild->tagName);
+echo $h->saveHTML($m), "\n", $h->saveHTML();
+var_dump($h->documentElement->nodeName, $h->doctype->publicId);
+$e = new DOMElement('solo', 'val');
+var_dump($e->nodeName, $e->textContent, $e->ownerDocument);
+$h->documentElement->appendChild($e);
+var_dump($e->ownerDocument === $h);

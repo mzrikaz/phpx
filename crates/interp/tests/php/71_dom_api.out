@@ -1,0 +1,54 @@
+int(2)
+string(4) "t1t2"
+int(1)
+string(5) "urn:x"
+string(1) "x"
+string(1) "c"
+string(5) "urn:x"
+string(1) "v"
+<?xml version="1.0" encoding="UTF-8"?>
+<root><!-- c --><a id="one" data-v="q&quot;'&lt;&gt;&amp;&#10;">x &amp; y &lt; z</a><b>t1t2</b><x:c xmlns:x="urn:x" xmlns:y="urn:y" y:attr="v">nsv</x:c></root>
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+  <!-- c -->
+  <a id="one" data-v="q&quot;'&lt;&gt;&amp;&#10;">x &amp; y &lt; z</a>
+  <b>t1t2</b>
+  <x:c xmlns:x="urn:x" xmlns:y="urn:y" y:attr="v">nsv</x:c>
+</root>
+string(0) ""
+bool(true)
+string(7) "/root/a"
+string(9) "/root/x:c"
+int(5)
+bool(true)
+bool(false)
+id=one
+int(2)
+string(1) "p"
+string(1) "a"
+int(5)
+<root><first/><!-- c --><a id="one">x &amp; y &lt; z</a><b>t1t2</b><x:c xmlns:x="urn:x" xmlns:y="urn:y" y:attr="v">nsv</x:c>text<q/><p>two</p>end</root>
+DOMException Hierarchy Request Error 3
+Wrong Document Error 4
+<?xml version="1.0"?>
+<a id="one">x &amp; y &lt; z</a>
+string(5) "world"
+int(11)
+bool(false)
+bool(false)
+3 76 Opening and ending tag mismatch: b line 1 and a 1
+0:1 1:2 
+string(5) "c1 c2"
+string(4) "main"
+string(2) "AB"
+int(3)
+string(4) "span"
+<div id="main" class="c1 c2"><span>A</span>B<!-- k --></div>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><div id="main" class="c1 c2"><span>A</span>B<!-- k --></div><input disabled value="v"></body></html>
+string(4) "html"
+string(37) "-//W3C//DTD HTML 4.0 Transitional//EN"
+string(4) "solo"
+string(3) "val"
+NULL
+bool(true)

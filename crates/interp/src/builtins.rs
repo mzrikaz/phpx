@@ -105,6 +105,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::pdo::register(&mut t);
     crate::mbext::register(&mut t);
     crate::tokenizer::register(&mut t);
+    crate::dom::register(&mut t);
     crate::process::register(&mut t);
     t
 }

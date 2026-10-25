@@ -1,0 +1,126 @@
+---
+<!DOCTYPE html>
+<?xml encoding="UTF-8"><html><body><div class="a b">h&eacute;llo <b>x</b> &amp; &nbsp;y</div><br><p>one</p><p>two</p></body></html>
+~~
+<!DOCTYPE html>
+<?xml encoding="UTF-8"><html><body><div class="a b">h&eacute;llo <b>x</b> &amp; &nbsp;y</div><br><p>one</p><p>two</p></body></html>
+~~xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!DOCTYPE html>
+<?xml encoding="UTF-8"?>
+<html><body><div class="a b">héllo <b>x</b> &amp;  y</div><br/><p>one</p><p>two</p></body></html>
+---
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>hello</p></body></html>
+~~
+<p>hello</p>
+~~xml
+<?xml version="1.0" standalone="yes"?>
+<p>hello</p>
+---
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>a</p><div>b</div></body></html>
+~~
+<p>a</p><div>b</div>
+~~xml
+<?xml version="1.0" standalone="yes"?>
+<p>a</p>
+<div>b</div>
+---
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><ul><li>a</li><li>b</li></ul><table><tr><td>1</td><td>2</td></tr></table></body></html>
+~~
+<ul><li>a</li><li>b</li></ul><table><tr><td>1</td><td>2</td></tr></table>
+~~xml
+<?xml version="1.0" standalone="yes"?>
+<ul><li>a</li><li>b</li></ul>
+<table><tr><td>1</td><td>2</td></tr></table>
+---
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<!-- c --><html><body><span title='q"' data-x="1" checked>t</span><script>if (a<b) x="";</script></body></html>
+~~
+<!-- c --><span title='q"' data-x="1" checked>t</span><script>if (a<b) x="";</script>
+~~xml
+<?xml version="1.0" standalone="yes"?>
+<!-- c -->
+<span title="q&quot;" data-x="1" checked="checked">t</span>
+<script><![CDATA[if (a<b) x="";]]></script>
+---
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><head><title>T</title></head><body>B</body></html>
+~~
+<title>T</title><body>B</body>
+~~xml
+<?xml version="1.0" standalone="yes"?>
+<title>T</title>
+<body>B</body>
+---
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><div><unknown-tag a="b">u</unknown-tag></div></body></html>
+~~
+<div><unknown-tag a="b">u</unknown-tag></div>
+~~xml
+<?xml version="1.0" standalone="yes"?>
+<div><unknown-tag a="b">u</unknown-tag></div>
+---
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><div>
+  <span>x</span>
+</div></body></html>
+~~
+<div>
+  <span>x</span>
+</div>
+~~xml
+<?xml version="1.0" standalone="yes"?>
+<div>
+  <span>x</span>
+</div>
+<?xml version="1.0"?>
+<r a="&#xE9; "><b>&#xE9;
+</b><c/><!--c--><?p d?></r>
+<r a="&#xE9; "><b>é
+</b><c/><!--c--><?p d?></r>
+<?xml version="1.0" encoding="UTF-8"?>
+<r a="é"><b>é</b></r>
+<r a="é"><b>é</b></r>
+<?xml version="1.0" encoding="UTF-8"?>
+<r a="é">
+  <b>é</b>
+  <k>
+    <z>t</z>
+  </k>
+</r>
+<?xml version="1.0" encoding="UTF-8"?>
+<a><b>é</b></a>
+<a><b>é</b></a>
+int(4)
+<p>Ã©</p>
+string(10) "ISO-8859-1"
+string(5) "utf-8"
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html>
+<head><meta charset="utf-8"></head>
+<body><p>&eacute;</p></body>
+</html>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><div>
+<p>a</p>
+<ul>
+<li>x</li>
+<li>y</li>
+</ul>
+</div></body></html>
+NULL
+<?xml version="1.0" standalone="yes"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>e</p></body></html>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>e</p></body></html>
+string(10) "ISO-8859-1"
+<?xml version="1.0" encoding="ISO-8859-1" standalone="yes"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>é</p></body></html>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN" "http://www.w3.org/TR/REC-html40/loose.dtd">
+<html><body><p>&Atilde;&copy;</p></body></html>
+<p title="Ã©">Ã©</p>
