@@ -10,14 +10,43 @@ use crate::class::{Class, ConstSlot, Method, MethodBody, PropDecl, PropDefault, 
 use crate::interp::{qualify, slot, Callable, ClosureKind, Ctrl, Flow, Frame, Interp, NsCtx, UserFn, R};
 use crate::value::{Internal, Key, Obj, PhpArray, Value};
 
-/// Built-ins that take an argument by reference, and which one.
-pub(crate) const BY_REF: &[(&str, usize)] = &[
+/// By-reference parameter positions not in the arginfo table (variadic
+/// ones expanded, and phpx-only built-ins).
+const BY_REF: &[(&str, usize)] = &[
     ("sort", 0), ("rsort", 0), ("usort", 0), ("uasort", 0), ("uksort", 0), ("ksort", 0), ("krsort", 0),
     ("asort", 0), ("arsort", 0), ("shuffle", 0), ("array_push", 0), ("array_pop", 0), ("array_shift", 0),
     ("array_unshift", 0), ("array_splice", 0), ("array_walk", 0), ("preg_match", 2), ("preg_match_all", 2),
     ("settype", 0), ("natsort", 0), ("natcasesort", 0), ("array_multisort", 0),
     ("preg_replace", 4), ("parse_str", 1), ("sscanf", 2), ("sscanf", 3), ("sscanf", 4), ("sscanf", 5), ("sscanf", 6), ("sscanf", 7), ("next", 0), ("prev", 0), ("reset", 0), ("end", 0), ("headers_sent", 0), ("headers_sent", 1), ("similar_text", 2), ("openssl_random_pseudo_bytes", 1), ("preg_replace_callback", 4), ("str_replace", 3), ("str_ireplace", 3),
 ];
+
+/// Positions of built-in `name`'s by-reference parameters (from PHP's
+/// arginfo, plus `BY_REF`); empty for none.
+pub(crate) fn by_ref_params(name: &str) -> &'static [usize] {
+    static MAP: std::sync::OnceLock<rustc_hash::FxHashMap<&'static str, Vec<usize>>> = std::sync::OnceLock::new();
+    let map = MAP.get_or_init(|| {
+        let mut m: rustc_hash::FxHashMap<&'static str, Vec<usize>> = Default::default();
+        for (f, ps) in crate::arginfo_table::FUNCS {
+            // Implemented on a copy of the array.
+            if *f == "array_walk_recursive" {
+                continue;
+            }
+            for (i, p) in ps.iter().enumerate() {
+                if p.2 & 2 != 0 {
+                    m.entry(*f).or_default().push(i);
+                }
+            }
+        }
+        for &(f, i) in BY_REF {
+            let v = m.entry(f).or_default();
+            if !v.contains(&i) {
+                v.push(i);
+            }
+        }
+        m
+    });
+    map.get(name).map(Vec::as_slice).unwrap_or(&[])
+}
 
 /// Below this much free task stack, a call throws instead of recursing.
 const STACK_RESERVE: usize = 256 * 1024;
@@ -364,9 +393,9 @@ impl Interp {
             }
             _ => {}
         }
-        if BY_REF.iter().any(|(n, _)| *n == bname) {
-            let idxs: Vec<usize> = BY_REF.iter().filter(|(n, _)| *n == bname).map(|(_, i)| *i).collect();
-            return self.call_by_ref_builtin(f, bname, fun, args, &idxs);
+        let idxs = by_ref_params(bname);
+        if !idxs.is_empty() {
+            return self.call_by_ref_builtin(f, bname, fun, args, idxs);
         }
         let (pos, named) = self.eval_args(f, args)?;
         if named.is_empty() {

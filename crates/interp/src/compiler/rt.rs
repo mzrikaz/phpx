@@ -1294,10 +1294,11 @@ pub unsafe extern "C" fn rt_call(
                 let cls = if *bname == "get_class" { f.class.clone() } else { f.class.as_ref().and_then(|c| c.parent.clone()) };
                 return Ok(cls.map(|c| Value::str(&c.name)).unwrap_or(Value::Bool(false)));
             }
-            if crate::call::BY_REF.iter().any(|(nm, _)| nm == bname) {
+            let refs = crate::call::by_ref_params(bname);
+            if !refs.is_empty() {
                 let mut vals = pos;
                 let n = vals.len();
-                let idxs: Vec<usize> = crate::call::BY_REF.iter().filter(|(nm, _)| nm == bname).map(|(_, i)| *i).filter(|i| *i < vals.len()).collect();
+                let idxs: Vec<usize> = refs.iter().copied().filter(|i| *i < vals.len()).collect();
                 for &idx in &idxs {
                     let local = *locals.add(idx);
                     if !local.is_null() {

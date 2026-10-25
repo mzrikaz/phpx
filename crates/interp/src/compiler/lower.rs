@@ -95,8 +95,8 @@ struct WriteBack {
 enum ByRef {
     /// None of them (a built-in without by-reference parameters).
     None,
-    /// A built-in's by-reference parameter positions (`BY_REF` table).
-    Builtin(&'static str),
+    /// A built-in's by-reference parameter positions.
+    Builtin(&'static [usize]),
     /// Unknown until run time (user functions and methods).
     Unknown,
 }
@@ -104,9 +104,9 @@ enum ByRef {
 impl ByRef {
     fn for_function(name: &str) -> ByRef {
         let l = name.trim_start_matches('\\').to_ascii_lowercase();
-        if crate::call::BY_REF.iter().any(|(n, _)| *n == l) {
-            let n: &'static str = crate::call::BY_REF.iter().find(|(n, _)| *n == l).unwrap().0;
-            ByRef::Builtin(n)
+        let refs = crate::call::by_ref_params(&l);
+        if !refs.is_empty() {
+            ByRef::Builtin(refs)
         } else if crate::arginfo::spec(&l).is_some() {
             ByRef::None
         } else {
@@ -117,7 +117,7 @@ impl ByRef {
     fn may_be_ref(self, i: usize) -> bool {
         match self {
             ByRef::None => false,
-            ByRef::Builtin(n) => crate::call::BY_REF.iter().any(|(m, j)| *m == n && *j == i),
+            ByRef::Builtin(refs) => refs.contains(&i),
             ByRef::Unknown => true,
         }
     }
