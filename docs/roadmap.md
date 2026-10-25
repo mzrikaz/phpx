@@ -24,17 +24,23 @@ Legend: `[x]` done · `[ ]` pending · *(in progress)* = actively being worked o
 Target: `wp-admin/setup-config.php` output identical to PHP.
 
 - [x] File streams: `fopen` family, `php://` streams, directories, `stat` family, stream contexts
-- [ ] `header`, `headers_sent`, `setcookie`, `http_response_code` *(in progress)*
-- [ ] `serialize` / `unserialize` *(in progress)*
-- [ ] `pack` / `unpack` *(in progress)*
-- [ ] `parse_url` / `parse_str` *(in progress)*
-- [ ] `version_compare` *(in progress)*
-- [ ] `strspn`, `strcspn`, `sscanf` and other string gaps *(in progress)*
-- [ ] `htmlentities` / `html_entity_decode` *(in progress)*
-- [ ] `hash`, `hash_hmac`, `sha1`, `hash_equals` *(in progress)*
-- [ ] `strtotime`, `gmdate`, `DateTime` *(in progress)*
-- [ ] `array_replace_recursive` and other array gaps *(in progress)*
-- [ ] WordPress setup page byte-identical to PHP
+- [x] `header`, `headers_sent`, `setcookie`, `http_response_code`
+- [x] `serialize` / `unserialize`
+- [x] `pack` / `unpack`
+- [x] `parse_url` / `parse_str`
+- [x] `version_compare`
+- [x] `strspn`, `strcspn`, `sscanf` and other string gaps
+- [x] `htmlentities` / `html_entity_decode`
+- [x] `hash`, `hash_hmac`, `sha1`, `hash_equals`
+- [x] `array_replace_recursive` and other array gaps
+- [x] `filter_var`, bcrypt `password_*`, `gz*`, CSV, `next`/`prev` array pointer, class introspection
+- [x] `extension_loaded` reports implemented extensions; `PHP_VERSION` = 8.5.10
+- [x] Secure `random_bytes` (OS CSPRNG)
+- [ ] Reflection API (`ReflectionClass`, `ReflectionMethod`, ...)
+- [ ] DateTime family (`DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`, `DatePeriod`) and `strtotime`/`gmdate`
+- [ ] SPL data structures and iterators (`ArrayObject`, `SplObjectStorage`, `SplStack`, iterators)
+- [ ] `set_error_handler` invoking user handlers (Laravel converts warnings to exceptions)
+- [ ] WordPress setup page byte-identical to PHP (currently blocked on mysqli check)
 
 ## 2. Databases
 

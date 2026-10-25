@@ -1,8 +1,8 @@
 # Changelog
 
 What has been built so far, grouped by milestone (most recent first).
-The repository has no commit history yet, so this log is reconstructed from
-the code and project notes; entries are not individually dated.
+Entries before the first commit (2026-10-25) are reconstructed from the code
+and project notes; later entries follow the git history.
 
 ## 2026-10-25 — WordPress boot work (in progress)
 
@@ -14,10 +14,29 @@ the code and project notes; entries are not individually dated.
   `link`/`symlink`/`readlink`, `umask`, `fnmatch`, disk space, stream
   contexts and meta data. Resources (`Value::Resource`) with PHP-exact
   `var_dump` / `gettype` output, including closed resources.
-- Started the batch of ~150 missing built-ins (headers/cookies,
-  serialization, `pack`, URL parsing, `version_compare`, string scanners,
-  HTML entities, hashing, date/time, array gaps) — see
-  [roadmap.md](roadmap.md#1-stdlib-for-wordpress-boot-in-progress).
+- **ext.rs** (new): `serialize`/`unserialize` (`__serialize`, `__sleep`,
+  `__wakeup`, enums, `allowed_classes`), `pack`/`unpack`, `hash`/`hash_file`/
+  `hash_hmac`/`hash_init`/`hash_update`/`hash_final`/`hash_copy`
+  (md5, sha1, sha224/256/384/512, crc32b), `sha1`, `md5_file`, `hash_equals`,
+  `parse_url`, `parse_str`, `version_compare`, `strspn`, `strcspn`,
+  `strpbrk`, `substr_compare`, `stristr`, `strtok`, `addcslashes`,
+  `stripcslashes`, `chunk_split`, `utf8_encode`/`decode`, IP helpers.
+- **misc.rs** (new): `header`, `header_remove`, `headers_list`,
+  `headers_sent` (tracks where output started), `http_response_code`,
+  `setcookie`, `register_shutdown_function`, `assert`, `class_alias`,
+  `func_get_arg`, `next`/`prev`/`reset`/`end`/`current`/`key` with a real
+  internal pointer, `html_entity_decode`/`htmlentities`, `filter_var`,
+  bcrypt `password_hash`/`password_verify`/`crypt`, `gz*`/`zlib_*`,
+  `str_getcsv`/`fputcsv`/`fgetcsv`, `sscanf`, `levenshtein`,
+  `similar_text`, `soundex`, `get_class_methods`, `get_class_vars`,
+  `class_parents`, `class_uses`, `vprintf`/`fprintf`, include path.
+- Built-ins can take several by-reference arguments (`sscanf`,
+  `headers_sent`).
+- Fixed: `"\xE9"`-style escapes now produce raw bytes (was UTF-8 encoded);
+  `random_bytes` uses the OS CSPRNG; `PHP_VERSION` reports 8.5.10;
+  `extension_loaded` reports implemented extensions.
+- WordPress `wp-admin/setup-config.php` probe now passes PHP version and
+  extension checks; next blocker is the mysqli extension.
 - Documentation set (`docs/`) written.
 
 ## Dynamic PHP support — WordPress and Drupal parse 100%
