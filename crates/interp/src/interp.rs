@@ -929,24 +929,41 @@ impl Interp {
                 }
             }
             StmtKind::While { cond, body } => {
+                let mut n = 0u32;
                 while self.eval(f, cond)?.truthy() {
                     if let Some(fl) = Self::loop_flow(self.exec_block(f, body)?) {
                         return Ok(fl);
                     }
+                    n += 1;
+                    if n == crate::compiler::OSR_ITERATIONS {
+                        if let Some(r) = self.try_osr(f, s) {
+                            return Ok(Flow::Return(r?));
+                        }
+                    }
                 }
             }
-            StmtKind::DoWhile { body, cond } => loop {
-                if let Some(fl) = Self::loop_flow(self.exec_block(f, body)?) {
-                    return Ok(fl);
+            StmtKind::DoWhile { body, cond } => {
+                let mut n = 0u32;
+                loop {
+                    if let Some(fl) = Self::loop_flow(self.exec_block(f, body)?) {
+                        return Ok(fl);
+                    }
+                    n += 1;
+                    if n == crate::compiler::OSR_ITERATIONS {
+                        if let Some(r) = self.try_osr(f, s) {
+                            return Ok(Flow::Return(r?));
+                        }
+                    }
+                    if !self.eval(f, cond)?.truthy() {
+                        break;
+                    }
                 }
-                if !self.eval(f, cond)?.truthy() {
-                    break;
-                }
-            },
+            }
             StmtKind::For { init, cond, step, body } => {
                 for e in init {
                     self.eval(f, e)?;
                 }
+                let mut n = 0u32;
                 loop {
                     // Only the last condition expression decides.
                     let mut ok = true;
@@ -964,6 +981,12 @@ impl Interp {
                     }
                     for e in step {
                         self.eval(f, e)?;
+                    }
+                    n += 1;
+                    if n == crate::compiler::OSR_ITERATIONS {
+                        if let Some(r) = self.try_osr(f, s) {
+                            return Ok(Flow::Return(r?));
+                        }
                     }
                 }
             }

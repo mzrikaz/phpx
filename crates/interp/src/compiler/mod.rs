@@ -1,7 +1,10 @@
 //! Native compiler for whole PHP functions (Cranelift).
 //!
-//! A function is compiled the second time it is called (`PHPX_NATIVE=all`:
-//! the first time; `=off`: never). Unsupported functions stay interpreted.
+//! A function is compiled once it is hot: after DEFAULT_THRESHOLD calls
+//! (`PHPX_NATIVE_THRESHOLD=n`; `PHPX_NATIVE=all`: the first call; `=off`:
+//! never), or mid-call when one of its loops runs long (on-stack
+//! replacement: an entry that starts at that loop with the interpreter's
+//! locals). Unsupported functions stay interpreted.
 //! Compiled code runs with the interpreter's semantics: everything beyond
 //! inline int fast paths goes through `rt` helpers that reuse interpreter
 //! methods. `PHPX_NATIVE_LOG=1` reports what compiled and why not.
@@ -32,6 +35,7 @@ use rt::{CallSite, Cx, LocalsSpec};
 pub type Entry = unsafe extern "C" fn(*mut Cx, *mut Value, u64, *mut Value) -> u64;
 
 /// What the compiler needs to know about a function.
+#[derive(Clone)]
 pub struct Target {
     pub fn_id: usize,
     pub display: std::rc::Rc<str>,
@@ -44,12 +48,23 @@ pub struct Target {
     pub ret: Option<&'static ast::Type>,
 }
 
+/// Calls before a function is compiled.
+const DEFAULT_THRESHOLD: u32 = 1000;
+/// Iterations of an interpreted loop (in one run) before it moves to
+/// native code.
+pub const OSR_ITERATIONS: u32 = 500;
+
 pub struct Native {
     module: JITModule,
     helpers: HashMap<&'static str, FuncId>,
     compiled: HashMap<usize, Option<Entry>>,
     hot: HashMap<usize, u32>,
     threshold: u32,
+    /// Functions seen running interpreted, for on-stack replacement.
+    osr_info: HashMap<usize, Target>,
+    /// OSR entries by loop statement.
+    osr: HashMap<usize, Option<Entry>>,
+    compile_ns: u64,
     consts: Vec<Box<Value>>,
     sites: Vec<Box<CallSite>>,
     msites: Vec<Box<rt::MethodSite>>,
@@ -317,7 +332,10 @@ impl Native {
         let threshold = match mode.as_str() {
             "off" | "0" => return None,
             "all" => 1,
-            _ => 2,
+            // Hot functions only: compiling costs about a millisecond, so
+            // cold code (most of a framework's boot) stays interpreted.
+            // Long loops switch over mid-call (on-stack replacement).
+            _ => std::env::var("PHPX_NATIVE_THRESHOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_THRESHOLD),
         };
         Native::new(threshold)
     }
@@ -354,6 +372,9 @@ impl Native {
             compiled: HashMap::new(),
             hot: HashMap::new(),
             threshold,
+            osr_info: HashMap::new(),
+            osr: HashMap::new(),
+            compile_ns: 0,
             consts: vec![],
             sites: vec![],
             msites: vec![],
@@ -372,18 +393,22 @@ impl Native {
         if let Some(e) = self.compiled.get(&fn_id) {
             return *e;
         }
-        let t = &mk();
-        // A function with a loop can be hot within a single call.
-        let has_loop = matches!(t.body, Body::Block(b) if has_loop(b));
-        let n = self.hot.entry(t.fn_id).or_default();
+        let n = self.hot.entry(fn_id).or_default();
         *n += 1;
-        if *n < self.threshold && !has_loop {
+        if *n < self.threshold {
+            // Remembered for on-stack replacement of its loops.
+            if !self.osr_info.contains_key(&fn_id) {
+                let t = mk();
+                if matches!(t.body, Body::Block(b) if has_loop(b)) {
+                    self.osr_info.insert(fn_id, t);
+                }
+            }
             return None;
         }
+        let t = &mk();
         // A compiler bug must never take the program down: treat a panic
         // as "not compiled" and keep interpreting.
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.compile(it, t)))
-            .unwrap_or(Err("internal compiler error"));
+        let r = self.timed(|n| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| n.compile(it, t))).unwrap_or(Err("internal compiler error")));
         match &r {
             Ok(_) if self.log => eprintln!("[native] {} compiled", t.display),
             Err(why) if self.log => eprintln!("[native] {}: not compiled: {why}", t.display),
@@ -395,12 +420,25 @@ impl Native {
     }
 
     fn compile(&mut self, it: &Interp, t: &Target) -> Result<Entry, &'static str> {
-        self.compile_mode(it, t, false)
+        self.compile_mode(it, t, false, None)
+    }
+
+    /// CPU time spent compiling, for PHPX_NATIVE_LOG.
+    fn timed<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        if !self.log {
+            return f(self);
+        }
+        let start = thread_cpu();
+        let r = f(self);
+        self.compile_ns += thread_cpu() - start;
+        r
     }
 
     /// `top_level`: a file segment. Returns exit with status 3 (value in
     /// out); every exit writes locals back to the frame.
-    fn compile_mode(&mut self, it: &Interp, t: &Target, top_level: bool) -> Result<Entry, &'static str> {
+    /// `osr`: compile an entry that starts at that loop statement (locals
+    /// come from the interpreter frame).
+    fn compile_mode(&mut self, it: &Interp, t: &Target, top_level: bool, osr: Option<usize>) -> Result<Entry, &'static str> {
         if self.skip.iter().any(|s| t.display.contains(s.as_str())) || self.max.is_some_and(|m| self.count >= m) {
             return Err("excluded (PHPX_NATIVE_MAX / PHPX_NATIVE_SKIP)");
         }
@@ -460,9 +498,11 @@ impl Native {
                 b, &mut self.module, &self.helpers, &a.locals, locals_slot, exit_ok, unwind, cxv, outv, pos_addr, t.ctx.file as u32,
                 &mut consts, &mut sites,
             );
-            // The call-stack record (functions and methods, not files).
+            l.osr_target = osr;
+            // The call-stack record (functions and methods, not files; an
+            // OSR entry continues a call the interpreter already recorded).
             // (Pushed in `init`, before parameters bind; popped on every exit.)
-            let call_rec = (!top_level).then(|| {
+            let call_rec = (!top_level && osr.is_none()).then(|| {
                 l.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, std::mem::size_of::<crate::trace::CallRec>() as u32, 3))
             });
             let top_rcs = if top_level {
@@ -612,7 +652,15 @@ impl Native {
             let failed = l.b.ins().icmp_imm_s(IntCC::Equal, st, 1);
             l.b.ins().brif(failed, unwind, &[], ok_b, &[]);
             l.b.switch_to_block(ok_b);
-            l.b.ins().jump(start, &[]);
+            match osr {
+                Some(_) => {
+                    let Some(head) = l.osr_entry else { return Err("loop not enterable (inside foreach, switch or try)") };
+                    l.b.ins().jump(head, &[]);
+                }
+                None => {
+                    l.b.ins().jump(start, &[]);
+                }
+            }
             l.b.seal_all_blocks();
             let msites = std::mem::take(&mut l.msites);
             let psites = std::mem::take(&mut l.psites);
@@ -634,6 +682,20 @@ impl Native {
         let _ = &mut a;
         // SAFETY: generated with exactly the Entry signature.
         Ok(unsafe { std::mem::transmute::<*const u8, Entry>(ptr) })
+    }
+}
+
+fn thread_cpu() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
+impl Drop for Native {
+    fn drop(&mut self) {
+        if self.log {
+            eprintln!("[native] {} entries compiled in {:.1} ms CPU", self.count, self.compile_ns as f64 / 1e6);
+        }
     }
 }
 
@@ -715,7 +777,7 @@ impl Interp {
                         class: None,
                         ret: None,
                     };
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| n.compile_mode(self, &t, true)))
+                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| n.compile_mode(self, &t, true, None)))
                         .unwrap_or(Err("internal compiler error"));
                     if n.log {
                         match &r {
@@ -738,6 +800,53 @@ impl Interp {
             3 => Some(Ok(crate::interp::Flow::Return(out))),
             1 => Some(Err(self.pending.borrow_mut().take().expect("native error without pending exception"))),
             _ => None,
+        }
+    }
+
+    /// On-stack replacement: an interpreted loop that ran long continues
+    /// (with the rest of its function) in native code. Some(result of the
+    /// function) when it did; None = keep interpreting.
+    pub fn try_osr(&self, f: &mut crate::interp::Frame, loop_stmt: &'static ast::Stmt) -> Option<R<Value>> {
+        if f.fn_id == 0 || f.gen.is_some() {
+            return None;
+        }
+        let key = loop_stmt as *const ast::Stmt as usize;
+        let entry = {
+            let mut guard = self.native.try_borrow_mut().ok()?;
+            let n = guard.as_mut()?;
+            match n.osr.get(&key) {
+                Some(e) => (*e)?,
+                None => {
+                    let t = n.osr_info.get(&f.fn_id)?.clone();
+                    let r = n.timed(|n| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| n.compile_mode(self, &t, false, Some(key)))).unwrap_or(Err("internal compiler error")));
+                    if n.log {
+                        match &r {
+                            Ok(_) => eprintln!("[native] {} compiled (loop entry)", t.display),
+                            Err(why) => eprintln!("[native] {} loop entry: not compiled: {why}", t.display),
+                        }
+                    }
+                    let e = r.ok();
+                    n.osr.insert(key, e);
+                    e?
+                }
+            }
+        };
+        let mut cx = Cx { it: self as *const Interp, frame: f as *mut _ };
+        let mut out = Value::Null;
+        // SAFETY: entry follows the Entry ABI (no args: locals from the frame).
+        let st = unsafe { entry(&mut cx, std::ptr::null_mut(), 0, &mut out) };
+        match st {
+            0 => Some(Ok(out)),
+            1 => Some(Err(self.pending.borrow_mut().take().expect("native error without pending exception"))),
+            _ => {
+                // Declined (shared variables): never retry this loop.
+                if let Ok(mut g) = self.native.try_borrow_mut() {
+                    if let Some(n) = g.as_mut() {
+                        n.osr.insert(key, None);
+                    }
+                }
+                None
+            }
         }
     }
 

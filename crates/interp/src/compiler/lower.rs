@@ -79,6 +79,13 @@ pub struct Lower<'a> {
     /// Per pending call (innermost last): arguments to write back to
     /// their place if the callee took them by reference.
     write_backs: Vec<Vec<WriteBack>>,
+    /// On-stack replacement: the loop statement to enter at, and its
+    /// header block once lowered.
+    pub osr_target: Option<usize>,
+    pub osr_entry: Option<Block>,
+    /// Inside a construct an OSR entry can't jump into (foreach holds an
+    /// iterator, switch a subject, try a handler).
+    no_osr: usize,
 }
 
 /// A property or array-element argument (`sort($this->items)`): passed
@@ -196,6 +203,16 @@ impl<'a> Lower<'a> {
             psites: vec![],
             exit_ret: None,
             write_backs: vec![],
+            osr_target: None,
+            osr_entry: None,
+            no_osr: 0,
+        }
+    }
+
+    /// `head` is where an OSR entry into loop `s` lands.
+    fn osr_mark(&mut self, s: &'static Stmt, head: Block) {
+        if self.no_osr == 0 && self.osr_target == Some(s as *const Stmt as usize) {
+            self.osr_entry = Some(head);
         }
     }
 
@@ -661,6 +678,7 @@ impl<'a> Lower<'a> {
             }
             StmtKind::While { cond, body } => {
                 let (head, bodyb, exit) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+                self.osr_mark(s, head);
                 self.b.ins().jump(head, &[]);
                 self.b.switch_to_block(head);
                 let op = self.expr(cond)?;
@@ -672,6 +690,7 @@ impl<'a> Lower<'a> {
             }
             StmtKind::DoWhile { body, cond } => {
                 let (bodyb, test, exit) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+                self.osr_mark(s, test);
                 self.b.ins().jump(bodyb, &[]);
                 self.b.switch_to_block(bodyb);
                 self.loop_body(body, test, exit)?;
@@ -686,6 +705,7 @@ impl<'a> Lower<'a> {
                     self.discard(e)?;
                 }
                 let (head, bodyb, stepb, exit) = (self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block());
+                self.osr_mark(s, head);
                 self.b.ins().jump(head, &[]);
                 self.b.switch_to_block(head);
                 if cond.is_empty() {
@@ -707,8 +727,18 @@ impl<'a> Lower<'a> {
                 self.b.ins().jump(head, &[]);
                 self.b.switch_to_block(exit);
             }
-            StmtKind::Foreach { subject, key, value, body, .. } => self.foreach(subject, key.as_ref(), value, body)?,
-            StmtKind::Switch { subject, cases } => self.switch(subject, cases)?,
+            StmtKind::Foreach { subject, key, value, body, .. } => {
+                self.no_osr += 1;
+                let r = self.foreach(subject, key.as_ref(), value, body);
+                self.no_osr -= 1;
+                r?
+            }
+            StmtKind::Switch { subject, cases } => {
+                self.no_osr += 1;
+                let r = self.switch(subject, cases);
+                self.no_osr -= 1;
+                r?
+            }
             StmtKind::Break(lvl) | StmtKind::Continue(lvl) => {
                 let n = match lvl {
                     None => 1,
@@ -727,7 +757,12 @@ impl<'a> Lower<'a> {
                 self.terminated = true;
             }
             StmtKind::Block(b) => self.stmts(b)?,
-            StmtKind::Try { body, catches, finally } => self.try_stmt(body, catches, finally.as_deref())?,
+            StmtKind::Try { body, catches, finally } => {
+                self.no_osr += 1;
+                let r = self.try_stmt(body, catches, finally.as_deref());
+                self.no_osr -= 1;
+                r?
+            }
             StmtKind::Nop => {}
             StmtKind::Unset(es) => {
                 for e in es {
