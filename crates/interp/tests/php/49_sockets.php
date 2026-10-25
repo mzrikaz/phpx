@@ -1,0 +1,26 @@
+<?php
+$r = @fsockopen("127.0.0.1", 1, $en, $es, 1);
+var_dump($r, $en, $es);
+$r = @stream_socket_client("unix:///nonexistent/phpx.sock", $en, $es);
+var_dump($r, $es);
+$s = stream_socket_server("tcp://127.0.0.1:0");
+$name = stream_socket_get_name($s, false);
+var_dump(str_starts_with($name, "127.0.0.1:"));
+$c = stream_socket_client("tcp://$name");
+$a = stream_socket_accept($s, 1, $peer);
+var_dump(is_string($peer));
+$m = stream_get_meta_data($c);
+unset($m['uri']);
+print_r($m);
+fwrite($a, "hello\nworld");
+var_dump(fgets($c), fread($c, 100), ftell($c));
+$rd = [$c, $a]; $wr = []; $ex = null;
+var_dump(stream_select($rd, $wr, $ex, 0, 1000), $rd);
+fwrite($a, "x");
+$rd = ['k' => $c]; $wr = null;
+var_dump(stream_select($rd, $wr, $ex, 1), array_keys($rd));
+var_dump(fgetc($c));
+stream_set_timeout($c, 0, 100000);
+var_dump(fread($c, 100), stream_get_meta_data($c)['timed_out']);
+fclose($a);
+var_dump(fread($c, 10), feof($c), get_resource_type($c));

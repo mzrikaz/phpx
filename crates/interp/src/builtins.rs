@@ -94,6 +94,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::preg::register(&mut t);
     crate::fs::register(&mut t);
     crate::streams::register(&mut t);
+    crate::sockets::register(&mut t);
     crate::ext::register(&mut t);
     crate::misc::register(&mut t);
     crate::ini::register(&mut t);
@@ -135,6 +136,7 @@ pub fn constants() -> HashMap<String, Value> {
     add("M_SQRT2", Value::Float(std::f64::consts::SQRT_2));
     add("E_ALL", Value::Int(30719));
     crate::streams::std_constants(&mut add);
+    crate::sockets::constants(&mut add);
     crate::ext::constants(&mut add);
     for k in ["PASSWORD_DEFAULT", "PASSWORD_BCRYPT"] {
         add(k, Value::str("2y"));

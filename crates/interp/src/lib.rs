@@ -28,6 +28,7 @@ mod ops;
 mod preg;
 mod props;
 mod pstr;
+mod sockets;
 mod streams;
 mod strings;
 mod timeout;

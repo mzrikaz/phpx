@@ -11,8 +11,9 @@ use crate::builtins::{arg, has, int, s};
 use crate::interp::{BuiltinFn, Interp, R};
 use crate::value::{Key, PhpArray, Resource, Value};
 
-enum Backend {
+pub(crate) enum Backend {
     File(File),
+    Socket(crate::sockets::Sock),
     Memory(Vec<u8>),
     Stdin,
     Stdout,
@@ -23,7 +24,7 @@ enum Backend {
 /// Read-ahead for file streams: a buffer and a cursor into it (consuming
 /// from the front doesn't move the rest).
 #[derive(Default)]
-struct ReadBuf {
+pub(crate) struct ReadBuf {
     buf: Vec<u8>,
     at: usize,
 }
@@ -33,7 +34,7 @@ impl ReadBuf {
         self.buf.len() - self.at
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
@@ -66,12 +67,18 @@ impl ReadBuf {
 }
 
 pub struct Stream {
-    backend: Backend,
+    pub(crate) backend: Backend,
     /// Position for memory streams.
     pos: usize,
-    /// Read-ahead buffer for files (fgets reads lines).
-    rbuf: ReadBuf,
-    eof: bool,
+    /// Read-ahead buffer for files and sockets (fgets reads lines).
+    pub(crate) rbuf: ReadBuf,
+    pub(crate) eof: bool,
+    /// Sockets: read/write timeout (None: wait forever), whether the last
+    /// read timed out, blocking mode, the stream context.
+    pub(crate) timeout: Option<std::time::Duration>,
+    timed_out: bool,
+    pub(crate) blocking: bool,
+    pub(crate) context: Option<Value>,
     mode: String,
     uri: String,
     wrapper: &'static str,
@@ -105,11 +112,26 @@ fn with_stream<T>(it: &Interp, v: &Value, fname: &str, g: impl FnOnce(&mut Strea
 }
 
 impl Stream {
-    fn new(backend: Backend, mode: &str, uri: &str, wrapper: &'static str) -> Stream {
-        Stream { backend, pos: 0, rbuf: ReadBuf::default(), eof: false, mode: mode.to_string(), uri: uri.to_string(), wrapper, append: mode.starts_with('a') }
+    pub(crate) fn new(backend: Backend, mode: &str, uri: &str, wrapper: &'static str) -> Stream {
+        Stream { backend, pos: 0, rbuf: ReadBuf::default(), eof: false, timeout: None, timed_out: false, blocking: true, context: None, mode: mode.to_string(), uri: uri.to_string(), wrapper, append: mode.starts_with('a') }
     }
 
     fn fill(&mut self, want: usize) -> usize {
+        if let Backend::Socket(sk) = &mut self.backend {
+            // Sockets: one read of whatever has arrived.
+            if self.rbuf.len() < want && !self.eof {
+                let mut chunk = [0u8; 16384];
+                let now = std::time::Instant::now();
+                let deadline = if self.blocking { self.timeout.map(|t| now + t) } else { Some(now) };
+                self.timed_out = false;
+                match sk.read(&mut chunk, deadline) {
+                    Ok(0) => self.eof = true,
+                    Ok(n) => self.rbuf.extend_from_slice(&chunk[..n]),
+                    Err(crate::sockets::TimedOut) => self.timed_out = self.blocking,
+                }
+            }
+            return self.rbuf.len();
+        }
         if let Backend::File(f) = &mut self.backend {
             while self.rbuf.len() < want {
                 let mut chunk = vec![0u8; (want - self.rbuf.len()).max(8192)];
@@ -134,6 +156,12 @@ impl Stream {
                 self.fill(n);
                 self.rbuf.take(n)
             }
+            Backend::Socket(_) => {
+                if self.rbuf.is_empty() {
+                    self.fill(1);
+                }
+                return self.rbuf.take(n);
+            }
             Backend::Stdin => {
                 it.flush();
                 let mut buf = vec![0u8; n];
@@ -151,8 +179,8 @@ impl Stream {
 
     fn read_line(&mut self, max: Option<usize>, it: &Interp) -> Option<Vec<u8>> {
         let mut out = vec![];
-        if let Backend::File(_) = self.backend {
-            // Files: find the newline in the read-ahead buffer, a chunk at a
+        if let Backend::File(_) | Backend::Socket(_) = self.backend {
+            // Files and sockets: find the newline in the read-ahead buffer, a chunk at a
             // time.
             loop {
                 let room = max.map_or(usize::MAX, |m| m.saturating_sub(out.len()));
@@ -160,6 +188,9 @@ impl Stream {
                     break;
                 }
                 if self.rbuf.is_empty() && self.fill(1) == 0 {
+                    break;
+                }
+                if self.rbuf.is_empty() {
                     break;
                 }
                 let avail = &self.rbuf.bytes()[..self.rbuf.len().min(room)];
@@ -175,7 +206,7 @@ impl Stream {
                 }
             }
             // PHP reports EOF once a read hits the end.
-            if self.fill(1) == 0 {
+            if matches!(self.backend, Backend::File(_)) && self.fill(1) == 0 {
                 self.eof = true;
             }
             return (!out.is_empty()).then_some(out);
@@ -239,6 +270,16 @@ impl Stream {
                 let _ = std::io::stderr().write_all(data);
                 data.len()
             }
+            Backend::Socket(sk) => {
+                let deadline = self.timeout.map(|t| std::time::Instant::now() + t);
+                match sk.write_all(data, deadline) {
+                    Ok(()) => data.len(),
+                    Err((code, msg)) => {
+                        it.notice(&format!("fwrite(): Send of {} bytes failed with errno={code} {msg}", data.len()));
+                        0
+                    }
+                }
+            }
             Backend::Stdin => 0,
         }
     }
@@ -246,6 +287,7 @@ impl Stream {
     fn tell(&mut self) -> i64 {
         match &mut self.backend {
             Backend::Memory(_) => self.pos as i64,
+            Backend::Socket(sk) => sk.read_total as i64 - self.rbuf.len() as i64,
             Backend::File(f) => f.stream_position().map(|p| p as i64 - self.rbuf.len() as i64).unwrap_or(-1),
             _ => 0,
         }
@@ -513,7 +555,15 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             return Err(it.error("ValueError", "fread(): Argument #2 ($length) must be greater than 0"));
         }
         let v = arg(a, 0);
-        with_stream(it, &v, "fread", |st| Value::bytes(st.read(n as usize, it)))
+        with_stream(it, &v, "fread", |st| {
+            let b = st.read(n as usize, it);
+            // A socket read that timed out gives false.
+            if b.is_empty() && st.timed_out {
+                Value::Bool(false)
+            } else {
+                Value::bytes(b)
+            }
+        })
     });
     for name in ["fwrite", "fputs"] {
         t.insert(name, |it, _, a| {
@@ -658,9 +708,24 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             let mut put = |k: &str, v: Value| {
                 m.insert(Key::Str(crate::value::pstr(k)), v);
             };
-            put("timed_out", Value::Bool(false));
-            put("blocked", Value::Bool(true));
+            if let Backend::Socket(sk) = &st.backend {
+                if let Some(c) = sk.crypto_meta() {
+                    put("crypto", c);
+                }
+            }
+            put("timed_out", Value::Bool(st.timed_out));
+            put("blocked", Value::Bool(st.blocking));
             put("eof", Value::Bool(st.eof));
+            if let Backend::Socket(sk) = &st.backend {
+                put("stream_type", Value::str(sk.stream_type()));
+                put("mode", Value::str(&st.mode));
+                put("unread_bytes", Value::Int(st.rbuf.len() as i64));
+                put("seekable", Value::Bool(false));
+                if !st.uri.is_empty() {
+                    put("uri", Value::str(&st.uri));
+                }
+                return Value::array(m);
+            }
             put("wrapper_type", Value::str(if st.wrapper == "plainfile" { "plainfile" } else { "PHP" }));
             put("stream_type", Value::str(match st.wrapper {
                 "plainfile" => "STDIO",
@@ -708,8 +773,6 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("stream_context_get_default", |_, _, _| {
         Ok(Resource::new("stream-context", Box::new(std::cell::RefCell::new(Value::array(PhpArray::new())))))
     });
-    t.insert("stream_set_timeout", |_, _, _| Ok(Value::Bool(true)));
-    t.insert("stream_set_blocking", |_, _, _| Ok(Value::Bool(true)));
     t.insert("stream_set_write_buffer", |_, _, _| Ok(Value::Int(0)));
     t.insert("stream_is_local", |_, _, _| Ok(Value::Bool(true)));
     t.insert("stream_isatty", |_, _, _| Ok(Value::Bool(false)));

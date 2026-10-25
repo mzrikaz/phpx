@@ -1,0 +1,35 @@
+bool(false)
+int(111)
+string(18) "Connection refused"
+bool(false)
+string(25) "No such file or directory"
+bool(true)
+bool(true)
+Array
+(
+    [timed_out] => 
+    [blocked] => 1
+    [eof] => 
+    [stream_type] => tcp_socket/ssl
+    [mode] => r+
+    [unread_bytes] => 0
+    [seekable] => 
+)
+string(6) "hello
+"
+string(5) "world"
+int(11)
+int(0)
+array(0) {
+}
+int(1)
+array(1) {
+  [0]=>
+  string(1) "k"
+}
+string(1) "x"
+bool(false)
+bool(true)
+string(0) ""
+bool(true)
+string(6) "stream"
