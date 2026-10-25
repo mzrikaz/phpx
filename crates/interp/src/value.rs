@@ -27,7 +27,9 @@ pub fn pbytes(b: &[u8]) -> PStr {
 pub type Slot = Rc<RefCell<Value>>;
 
 /// Layout is fixed (`repr(C, u8)`): tag byte at offset 0, payload at 8,
-/// 16 bytes total. Native code relies on it (see `tag` below).
+/// 16 bytes total. Native code relies on it (see `tag` below). (The tag
+/// stays a byte: a wider one would cost `Option<Value>` its niche, which
+/// property slots rely on.)
 #[derive(Clone, Default)]
 #[repr(C, u8)]
 pub enum Value {

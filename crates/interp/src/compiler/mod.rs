@@ -7,6 +7,7 @@
 //! methods. `PHPX_NATIVE_LOG=1` reports what compiled and why not.
 
 pub(crate) mod analyze;
+pub mod fastbi;
 mod lower;
 pub mod rt;
 
@@ -70,6 +71,34 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_check_ret: 3 => true,
     rt_site_reset: 1 => false,
     rt_destruct_now: 1 => true,
+    rt_fast_ord: 3 => true,
+    rt_fast_chr: 3 => true,
+    rt_fast_key_exists: 3 => true,
+    rt_fast_in_array: 3 => true,
+    rt_fast_str_contains: 3 => true,
+    rt_fast_str_starts_with: 3 => true,
+    rt_fast_str_ends_with: 3 => true,
+    rt_fast_strpos: 3 => true,
+    rt_fast_substr: 3 => true,
+    rt_fast_strtolower: 3 => true,
+    rt_fast_strtoupper: 3 => true,
+    rt_fast_trim: 3 => true,
+    rt_fast_str_replace: 3 => true,
+    rt_fast_implode: 3 => true,
+    rt_fast_abs: 3 => true,
+    rt_fast_min: 3 => true,
+    rt_fast_max: 3 => true,
+    rt_fast_floor: 3 => true,
+    rt_fast_ceil: 3 => true,
+    rt_fast_intval: 3 => true,
+    rt_fast_explode: 3 => true,
+    rt_fast_array_keys: 3 => true,
+    rt_fast_array_values: 3 => true,
+    rt_fast_array_key_first: 3 => true,
+    rt_fast_array_key_last: 3 => true,
+    rt_fast_ucfirst: 3 => true,
+    rt_fast_lcfirst: 3 => true,
+    rt_fast_str_repeat: 3 => true,
     rt_store_locals: 3 => false,
     rt_bind_slots: 4 => true,
     rt_unbind_slots: 2 => false,
@@ -512,11 +541,11 @@ impl Native {
                     let rc = l.b.ins().iadd_imm_s(rc, 1);
                     l.b.ins().store(flags, rc, raw, 0);
                     let dst = l.b.ins().stack_addr(types::I64, locals_slot, (ts * 16) as i32);
-                    let t = l.b.ins().iconst(types::I8, tag::OBJECT as i64);
+                    let t = l.b.ins().iconst(types::I64, tag::OBJECT as i64);
                     l.b.ins().store(flags, t, dst, 0);
                     l.b.ins().store(flags, raw, dst, tag::PAYLOAD);
                 }
-                let null = l.b.ins().iconst(types::I8, tag::NULL as i64);
+                let null = l.b.ins().iconst(types::I64, tag::NULL as i64);
                 for i in 0..nparams {
                     let src = l.b.ins().iadd_imm_s(argsv, (i * 16) as i64);
                     let dst = l.b.ins().stack_addr(types::I64, locals_slot, (i * 16) as i32);
@@ -581,7 +610,7 @@ fn has_loop(stmts: &[ast::Stmt]) -> bool {
 
 impl lower::Lower<'_> {
     fn init_slots(&mut self, nlocals: usize) {
-        let null = self.b.ins().iconst(types::I8, tag::NULL as i64);
+        let null = self.b.ins().iconst(types::I64, tag::NULL as i64);
         let nlocals = if self.top_ptrs.is_some() { 0 } else { nlocals };
         for i in 0..nlocals {
             let a = self.b.ins().stack_addr(types::I64, self.locals_slot, (i * 16) as i32);

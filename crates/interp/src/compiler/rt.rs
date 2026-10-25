@@ -20,6 +20,16 @@ use phpx_syntax::ast::{self, BinOp};
 use crate::interp::{slot, Callable, Ctrl, Frame, Interp, R};
 use crate::value::{Internal, Key, Obj, PhpArray, Value};
 
+// Fast built-in entries are registered with the other helpers.
+pub use super::fastbi::{
+    rt_fast_chr, rt_fast_implode, rt_fast_in_array, rt_fast_key_exists, rt_fast_ord, rt_fast_str_contains, rt_fast_str_ends_with,
+    rt_fast_str_replace, rt_fast_str_starts_with, rt_fast_strpos, rt_fast_strtolower, rt_fast_strtoupper, rt_fast_substr, rt_fast_trim,
+};
+pub use super::fastbi::{
+    rt_fast_abs, rt_fast_array_key_first, rt_fast_array_key_last, rt_fast_array_keys, rt_fast_array_values, rt_fast_ceil, rt_fast_explode,
+    rt_fast_floor, rt_fast_intval, rt_fast_lcfirst, rt_fast_max, rt_fast_min, rt_fast_str_repeat, rt_fast_ucfirst,
+};
+
 #[repr(C)]
 pub struct Cx {
     pub it: *const Interp,

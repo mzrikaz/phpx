@@ -282,7 +282,9 @@ impl<'a> Lower<'a> {
     }
 
     fn store_tag(&mut self, addr: CValue, t: u8) {
-        let v = self.b.ins().iconst(types::I8, t as i64);
+        // The tag and its padding as one word: later 8-byte copies of the
+        // Value then read it straight from the store buffer.
+        let v = self.b.ins().iconst(types::I64, t as i64);
         self.b.ins().store(flags(), v, addr, 0);
     }
 
@@ -1481,9 +1483,41 @@ impl<'a> Lower<'a> {
                 let (aa, la, n_) = self.args(args, ByRef::for_function(n))?;
                 let sp = self.iconst(sp);
                 let meta = self.arg_meta(args);
-                let r = match super::layout().filter(|_| args.iter().all(|a| !a.spread && a.name.is_none())) {
+                let plain = args.iter().all(|a| !a.spread && a.name.is_none());
+                // A common built-in: its fast entry first (unless a
+                // namespaced function shadows a built-in name).
+                let unqualified = n.trim_start_matches('\\');
+                let fast = if plain && !unqualified.contains('\\') { super::fastbi::lookup(&unqualified.to_ascii_lowercase(), args.len()) } else { None };
+                let (t, merge) = match fast {
+                    Some(h) => {
+                        let t = self.alloc_temp();
+                        let (try_b, generic, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+                        let flag = self.iconst(&crate::value::BUILTIN_SHADOWED as *const _ as i64);
+                        let shadowed = self.b.ins().load(types::I8, flags(), flag, 0);
+                        self.b.ins().brif(shadowed, generic, &[], try_b, &[]);
+                        self.b.switch_to_block(try_b);
+                        let ta = self.temp_addr(t);
+                        let st = self.call(h, &[aa, n_, ta]).unwrap();
+                        self.b.ins().brif(st, generic, &[], merge, &[]);
+                        self.b.set_cold_block(generic);
+                        self.b.switch_to_block(generic);
+                        (Some(t), Some(merge))
+                    }
+                    None => (None, None),
+                };
+                let r = match super::layout().filter(|_| plain) {
                     Some(lay) => self.direct_call(lay, sp, aa, n_, la, meta),
                     None => self.helper_value("rt_call", |l| vec![l.cx, sp, aa, n_, la, meta])?,
+                };
+                let r = match (t, merge) {
+                    (Some(t), Some(merge)) => {
+                        let ta = self.temp_addr(t);
+                        self.store_into(ta, r);
+                        self.b.ins().jump(merge, &[]);
+                        self.b.switch_to_block(merge);
+                        Op::Ptr(self.temp_addr(t), Some(t))
+                    }
+                    _ => r,
                 };
                 self.write_back(la, args.len())?;
                 r

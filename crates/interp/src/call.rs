@@ -334,6 +334,16 @@ impl Interp {
         // Built-ins that read the caller's scope.
         match bname {
             "compact" => return self.compact(f, args),
+            // Direct two-argument min()/max(): PHP 8.4+ compiles these to
+            // "frameless" calls with their own tie rules.
+            "min" | "max" if args.len() == 2 && args.iter().all(|a| !a.spread && a.name.is_none()) => {
+                let (a, b) = (self.eval(f, &args[0].value)?.into_deref(), self.eval(f, &args[1].value)?.into_deref());
+                if !matches!(a, Value::Object(_)) && !matches!(b, Value::Object(_)) {
+                    return Ok(crate::compiler::fastbi::frameless_pick(&a, &b, bname == "max"));
+                }
+                let mut vals = vec![a, b];
+                return crate::builtins::invoke(self, bname, crate::arginfo::spec(bname), fun, f, &mut vals);
+            }
             "extract" => return self.extract(f, args),
             "eval" => return self.eval_code(f, args),
             "func_get_args" => return Ok(Value::array(PhpArray::from_list(f.args.clone()))),
