@@ -485,7 +485,7 @@ pub struct Obj {
     pub class: Rc<Class>,
     /// Initialized properties in declaration order. Typed properties without
     /// a default are absent until assigned.
-    pub props: RefCell<FxIndexMap<Rc<str>, Value>>,
+    pub props: RefCell<crate::props::Props>,
     pub internal: RefCell<Internal>,
     /// `__destruct` already ran (or was queued).
     pub destructed: Cell<bool>,
@@ -498,7 +498,7 @@ impl Obj {
         let o = Rc::new(Obj {
             id: alloc_id(),
             class,
-            props: RefCell::new(FxIndexMap::default()),
+            props: RefCell::new(Default::default()),
             internal: RefCell::new(internal),
             destructed: Cell::new(false),
             gc_index: Cell::new(u32::MAX),
@@ -525,18 +525,9 @@ impl Obj {
             }
             return;
         }
-        // Declared properties keep declaration order (parent's first), no
-        // matter when they're first assigned; dynamic ones go last.
-        let decl = &self.class.props;
-        match decl.iter().position(|d| &*d.name == name) {
-            Some(pos) => {
-                let at = p.keys().filter(|k| decl[..pos].iter().any(|d| d.name == **k)).count();
-                p.shift_insert(at, Rc::from(name), v);
-            }
-            None => {
-                p.insert(Rc::from(name), v);
-            }
-        }
+        // Declared properties already have their slot (declaration order,
+        // from the class shape); new ones are appended.
+        p.insert(Rc::from(name), v);
     }
 }
 

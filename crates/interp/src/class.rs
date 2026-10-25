@@ -105,7 +105,13 @@ pub struct Class {
     /// Traits used directly by this class.
     pub traits: Vec<Rc<str>>,
     /// Initial property map of a new instance (built on first instantiation).
-    pub prop_template: RefCell<Option<crate::value::FxIndexMap<Rc<str>, crate::value::Value>>>,
+    pub prop_template: RefCell<Option<Vec<Option<crate::value::Value>>>>,
+    /// `__construct` (own or inherited), resolved once.
+    pub ctor: Option<Rc<Method>>,
+    /// Can be `new`ed (a concrete class) and is not Throwable: the fast path.
+    pub plain_new: bool,
+    /// Shape of new instances: the declared properties in order.
+    pub shape: Rc<crate::props::Shape>,
 }
 
 impl Class {

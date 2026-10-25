@@ -1154,10 +1154,10 @@ impl Interp {
         }
         let o = Obj::new(cls.clone(), Internal::None);
         self.init_props(&o, cls)?;
-        if cls.is_a("throwable") {
+        if !cls.plain_new && cls.is_a("throwable") {
             self.set_throw_site(&o);
         }
-        if let Some(ctor) = cls.find_method("__construct").cloned() {
+        if let Some(ctor) = cls.ctor.clone() {
             if !self.member_visible(f.class.as_deref(), ctor.vis, &ctor.declaring) {
                 let vis = if ctor.vis == Vis::Private { "private" } else { "protected" };
                 let scope = f.class.as_ref().map(|c| format!("scope {}", c.name)).unwrap_or_else(|| "global scope".into());
@@ -1192,9 +1192,10 @@ impl Interp {
         // Defaults are constant expressions: evaluate once per class, then
         // copy the whole map.
         if let Some(t) = &*cls.prop_template.borrow() {
-            *o.props.borrow_mut() = t.clone();
+            *o.props.borrow_mut() = crate::props::Props::with_shape(cls.shape.clone(), t.clone());
             return Ok(());
         }
+        let mut vals = Vec::with_capacity(cls.props.len());
         for p in &cls.props {
             let v = match &p.default {
                 PropDefault::Uninit => continue,
@@ -1207,9 +1208,18 @@ impl Interp {
                     self.eval(&mut fr, e)?
                 }
             };
-            o.props.borrow_mut().insert(p.name.clone(), v);
+            vals.push(Some(v));
         }
-        *cls.prop_template.borrow_mut() = Some(o.props.borrow().clone());
+        // Typed properties without a default stay uninitialized (empty slot).
+        let vals: Vec<Option<Value>> = {
+            let mut it = vals.into_iter();
+            cls.props
+                .iter()
+                .map(|p| if matches!(p.default, PropDefault::Uninit) { None } else { it.next().flatten() })
+                .collect()
+        };
+        *o.props.borrow_mut() = crate::props::Props::with_shape(cls.shape.clone(), vals.clone());
+        *cls.prop_template.borrow_mut() = Some(vals);
         Ok(())
     }
 
@@ -1539,6 +1549,9 @@ impl Interp {
                 ));
             }
         }
+        let shape = crate::props::Shape::declared(props.iter().map(|p| p.name.clone()).collect());
+        let ctor = methods.get("__construct").cloned();
+        let plain_new = c.kind == ClassKind::Class && !is_abstract && !ancestors.iter().any(|a| &**a == "throwable");
         let cls = Rc::new(Class {
             name: display.clone(),
             lname: lname.clone(),
@@ -1552,6 +1565,9 @@ impl Interp {
             has_destruct: methods.contains_key("__destruct"),
             traits: used_traits,
             prop_template: Default::default(),
+            ctor,
+            plain_new,
+            shape,
             methods,
             cases: cases.clone(),
             enum_backed: c.enum_type.is_some(),

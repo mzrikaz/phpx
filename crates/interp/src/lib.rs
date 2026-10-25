@@ -23,6 +23,7 @@ mod misc;
 mod native;
 mod ops;
 mod preg;
+mod props;
 mod streams;
 mod strings;
 mod timeout;

@@ -131,11 +131,11 @@ pub fn parse(text: &str) -> Vec<(Option<String>, String, String)> {
     out
 }
 
-/// phpx values are larger than PHP's (objects ~3x, see
+/// phpx values are larger than PHP's (objects ~1.6x, see
 /// docs/security-and-memory.md), so the limit is enforced at this multiple
 /// of memory_limit; messages report the configured value. Goes back to 1 once
 /// compact object layout lands.
-pub const MEMORY_OVERHEAD: usize = 3;
+pub const MEMORY_OVERHEAD: usize = 2;
 
 fn find_ini(script: &Path) -> Option<PathBuf> {
     if let Ok(rc) = std::env::var("PHPRC") {

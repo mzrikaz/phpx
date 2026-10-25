@@ -1203,7 +1203,7 @@ impl Interp {
             }
             Root::Prop(o, name) => {
                 let mut props = o.props.borrow_mut();
-                let raw = props.entry(name.clone()).or_default();
+                let raw = props.slot_or_default(name.clone());
                 if p.path.is_empty() {
                     return Ok(cell_of(raw));
                 }

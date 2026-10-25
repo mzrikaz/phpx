@@ -225,7 +225,7 @@ pub fn collect() -> usize {
     }
     let count = garbage.len();
     // Break the cycles: move the contents out, then drop everything.
-    let mut doomed: Vec<(crate::value::FxIndexMap<Rc<str>, Value>, Internal)> = Vec::with_capacity(count);
+    let mut doomed: Vec<(crate::props::Props, Internal)> = Vec::with_capacity(count);
     for o in &garbage {
         let props = o.props.try_borrow_mut().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default();
         let internal = o.internal.try_borrow_mut().map(|mut i| std::mem::take(&mut *i)).unwrap_or_default();
