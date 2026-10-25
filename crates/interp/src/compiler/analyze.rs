@@ -261,6 +261,9 @@ impl Analysis {
 
     fn expr(&mut self, e: &'static Expr) -> Result<(), Reject> {
         use ExprKind::*;
+        if crate::value::stack_low() {
+            return Err("expression nested too deeply");
+        }
         match &e.kind {
             Int(_) | Float(_) | Str(_) | Bytes(_) | Bool(_) | Null | Name(_) | MagicConst(_) => Ok(()),
             Var(n) if n == "this" => {

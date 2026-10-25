@@ -1087,6 +1087,9 @@ impl<'a> Lower<'a> {
 
     pub fn expr(&mut self, e: &'static Expr) -> L<Op> {
         use ExprKind::*;
+        if crate::value::stack_low() {
+            return Err("expression nested too deeply");
+        }
         Ok(match &e.kind {
             Int(n) => Op::Int(self.iconst(*n)),
             Float(f) => Op::Float(self.b.ins().f64const(*f)),

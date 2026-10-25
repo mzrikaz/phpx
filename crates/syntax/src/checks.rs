@@ -54,6 +54,9 @@ fn walk_opt<'a>(e: &'a Option<Expr>, fe: &mut dyn FnMut(&'a Expr), fm: &mut dyn 
 }
 
 fn walk_stmt<'a>(s: &'a Stmt, fe: &mut dyn FnMut(&'a Expr), fm: &mut dyn FnMut(&'a Member)) {
+    if crate::stack::exhausted() {
+        return;
+    }
     use StmtKind::*;
     match &s.kind {
         Expr(e) => walk_expr(e, fe, fm),
@@ -174,6 +177,9 @@ fn walk_member_name<'a>(n: &'a MemberName, fe: &mut dyn FnMut(&'a Expr), fm: &mu
 }
 
 pub fn walk_expr<'a>(e: &'a Expr, fe: &mut dyn FnMut(&'a Expr), fm: &mut dyn FnMut(&'a Member)) {
+    if crate::stack::exhausted() {
+        return;
+    }
     fe(e);
     use ExprKind::*;
     match &e.kind {

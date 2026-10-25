@@ -552,7 +552,12 @@ impl Interp {
         // to memory_limit.
         let before = crate::alloc::raw_used();
         let src: &'static str = Box::leak(src.into_boxed_str());
-        let (file, diags) = phpx_syntax::check(src);
+        // Inside a task, parse within the stack it has left (eval/include
+        // can run deep in recursion).
+        let (file, diags) = match phpx_runtime::stack_remaining() {
+            Some(r) => phpx_syntax::stack::with_budget(r.saturating_sub(256 * 1024), || phpx_syntax::check(src)),
+            None => phpx_syntax::check(src),
+        };
         crate::alloc::exclude(crate::alloc::raw_used().saturating_sub(before));
         let id = self.add_file(path.to_path_buf(), src);
         let errors: Vec<String> = diags

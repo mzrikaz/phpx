@@ -18,6 +18,10 @@ const INSTANCEOF_LBP: u8 = 39;
 
 /// Parse a whole `.php` file.
 pub fn parse(src: &str) -> (File, Vec<Diagnostic>) {
+    crate::stack::with_default_budget(|| parse_inner(src))
+}
+
+fn parse_inner(src: &str) -> (File, Vec<Diagnostic>) {
     let (toks, mut diags) = Lexer::new(src).tokenize();
     let mut p = Parser::from_tokens(toks);
     let stmts = p.stmt_list(|_| false);
@@ -333,7 +337,20 @@ impl Parser {
         Ok(e)
     }
 
+    /// Nested too deeply for the stack budget: give up on the rest of the
+    /// file (the caller reports `stack::TOO_DEEP`).
+    fn too_deep(&mut self) -> bool {
+        if crate::stack::exhausted() {
+            self.pos = self.toks.len() - 1;
+            return true;
+        }
+        false
+    }
+
     pub fn statement(&mut self) -> PResult<Stmt> {
+        if self.too_deep() {
+            return Err(());
+        }
         let start = self.span();
         let kind = self.statement_kind()?;
         Ok(Stmt { kind, span: self.since(start) })
@@ -1116,6 +1133,9 @@ impl Parser {
     }
 
     fn expr_bp(&mut self, min_bp: u8) -> PResult<Expr> {
+        if self.too_deep() {
+            return Err(());
+        }
         let lhs = self.prefix()?;
         let lhs = self.postfix(lhs)?;
         self.infix(lhs, min_bp)

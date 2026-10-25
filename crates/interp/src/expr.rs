@@ -108,6 +108,9 @@ impl Interp {
                 Some(s) => Ok(s.borrow().clone()),
                 None => self.read_var(f, n),
             },
+            // Expressions nested deeper than the stack allows (e.g. a chain
+            // of 100k `+`): an error, not a crash.
+            _ if crate::value::stack_low() => Err(self.stack_overflow()),
             ExprKind::Binary { op, left, right } if !matches!(op, BinOp::And | BinOp::Or | BinOp::Coalesce) => {
                 let a = self.eval(f, left)?;
                 let b = self.eval(f, right)?;
