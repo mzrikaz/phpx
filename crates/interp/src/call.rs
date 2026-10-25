@@ -358,8 +358,14 @@ impl Interp {
             let idxs: Vec<usize> = BY_REF.iter().filter(|(n, _)| *n == bname).map(|(_, i)| *i).collect();
             return self.call_by_ref_builtin(f, bname, fun, args, &idxs);
         }
-        let callable = Callable::Builtin(bname, fun);
         let (pos, named) = self.eval_args(f, args)?;
+        if named.is_empty() {
+            // Run with the caller's frame: scope-dependent built-ins
+            // (get_object_vars, get_class_methods, ...) see its class.
+            let mut vals: Vec<Value> = pos.into_iter().map(Value::into_deref).collect();
+            return crate::builtins::guarded(self, bname, || fun(self, f, &mut vals));
+        }
+        let callable = Callable::Builtin(bname, fun);
         self.call_callable(&callable, pos, named)
     }
 
@@ -1303,6 +1309,7 @@ impl Interp {
         let mut consts: IndexMap<Rc<str>, ConstSlot> = IndexMap::new();
         let mut methods: crate::value::FxIndexMap<Rc<str>, Rc<Method>> = Default::default();
         let mut used_traits: Vec<Rc<str>> = vec![];
+        let mut shadowed: Vec<(Rc<str>, Rc<str>, Rc<str>)> = parent.as_ref().map(|p| p.shadowed.clone()).unwrap_or_default();
         let mut trait_keys: Vec<Rc<str>> = vec![];
         let mut props: Vec<PropDecl> = vec![];
         let mut static_props: IndexMap<Rc<str>, Rc<StaticProp>> = IndexMap::new();
@@ -1395,7 +1402,7 @@ impl Interp {
                         for p in &tc.props {
                             let mut np = p.clone();
                             np.declaring = display.clone();
-                            upsert_prop(&mut props, np);
+                            upsert_prop(&mut props, np, &mut shadowed);
                         }
                         for (k, sp) in &tc.static_props {
                             static_props.insert(
@@ -1451,6 +1458,7 @@ impl Interp {
                                 declaring: display.clone(),
                                 ctx: ctx.clone(),
                             },
+                            &mut shadowed,
                         );
                     }
                 }
@@ -1469,6 +1477,7 @@ impl Interp {
                                     declaring: display.clone(),
                                     ctx: ctx.clone(),
                                 },
+                                &mut shadowed,
                             );
                         }
                     }
@@ -1567,6 +1576,7 @@ impl Interp {
             prop_template: Default::default(),
             ctor,
             plain_new,
+            shadowed,
             shape,
             methods,
             cases: cases.clone(),
@@ -1771,10 +1781,28 @@ fn is_null_default(p: &ast::Param) -> bool {
     matches!(p.default.as_ref().map(|d| &d.kind), Some(ast::ExprKind::Null))
 }
 
-fn upsert_prop(props: &mut Vec<PropDecl>, p: PropDecl) {
-    match props.iter_mut().find(|x| x.name == p.name) {
-        Some(slot) => *slot = p,
+/// Add or override a declared property. Redeclaring an ancestor's private
+/// property creates a second, separate property (PHP semantics): the
+/// ancestor's moves to a mangled key `\0Class\0name`.
+fn upsert_prop(props: &mut Vec<PropDecl>, p: PropDecl, shadowed: &mut Vec<(Rc<str>, Rc<str>, Rc<str>)>) {
+    match props.iter().position(|x| x.name == p.name) {
+        Some(i) if props[i].vis == Vis::Private && !props[i].declaring.eq_ignore_ascii_case(&p.declaring) => {
+            let old = &mut props[i];
+            let mangled: Rc<str> = Rc::from(format!("\0{}\0{}", old.declaring, old.name).as_str());
+            shadowed.push((Rc::from(old.declaring.to_ascii_lowercase().as_str()), old.name.clone(), mangled.clone()));
+            old.name = mangled;
+            props.push(p);
+        }
+        Some(i) => props[i] = p,
         None => props.push(p),
+    }
+}
+
+/// A property key as shown to PHP code (`\0Class\0name` -> `name`).
+pub fn plain_prop(name: &str) -> &str {
+    match name.strip_prefix('\0') {
+        Some(rest) => rest.split_once('\0').map_or(name, |(_, n)| n),
+        None => name,
     }
 }
 

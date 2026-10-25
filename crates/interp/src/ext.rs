@@ -63,6 +63,9 @@ fn ser_key(k: &Key, out: &mut Vec<u8>) {
 /// Property name as serialize()/(array) cast spell it: `\0Class\0p`
 /// (private), `\0*\0p` (protected).
 pub fn mangled(o: &Obj, name: &str) -> Vec<u8> {
+    if name.starts_with('\0') {
+        return name.as_bytes().to_vec();
+    }
     match o.class.find_prop(name) {
         Some(d) if d.vis == Vis::Private => [b"\0", d.declaring.as_bytes(), b"\0", name.as_bytes()].concat(),
         Some(d) if d.vis == Vis::Protected => [b"\0*\0", name.as_bytes()].concat(),
@@ -315,10 +318,15 @@ impl Unser<'_> {
                             Key::Str(s) => String::from_utf8_lossy(&s).into_owned(),
                             Key::Int(i) => i.to_string(),
                         };
-                        // Strip visibility mangling: "\0Class\0name" / "\0*\0name".
-                        let plain = match k.strip_prefix('\0') {
-                            Some(rest) => rest.split_once('\0').map(|(_, p)| p.to_string()).unwrap_or(k.clone()),
-                            None => k,
+                        // Strip visibility mangling ("\0Class\0name" / "\0*\0name"),
+                        // unless it names a shadowed ancestor private.
+                        let plain = if cls.shadowed.iter().any(|(_, _, m)| **m == *k) {
+                            k
+                        } else {
+                            match k.strip_prefix('\0') {
+                                Some(rest) => rest.split_once('\0').map(|(_, p)| p.to_string()).unwrap_or(k.clone()),
+                                None => k,
+                            }
                         };
                         o.props.borrow_mut().insert(Rc::from(plain.as_str()), v);
                     }

@@ -1052,7 +1052,7 @@ impl Interp {
                     .borrow()
                     .iter()
                     .filter(|(n, _)| self.prop_visible(f, &o, n))
-                    .map(|(n, v)| (n.clone(), v.clone()))
+                    .map(|(n, v)| (Rc::from(crate::call::plain_prop(n)), v.clone()))
                     .collect();
                 for (n, v) in props {
                     if let Some(ke) = key {

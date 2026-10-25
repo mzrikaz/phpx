@@ -1,0 +1,26 @@
+AB a0b0 a1b1 
+object(B)#1 (4) {
+  ["q":"A":private]=>
+  string(2) "a2"
+  ["p"]=>
+  string(2) "pB"
+  ["pub"]=>
+  int(1)
+  ["q":"B":private]=>
+  string(2) "b2"
+}
+B Object
+(
+    [q:A:private] => a2
+    [p] => pB
+    [pub] => 1
+    [q:B:private] => b2
+)
+
+{"q":"a2","p":"pB","pub":1}{"p":"pB","pub":1,"q":"b2"}{"p":"pB","pub":1}
+O:1:"B":4:{s:4:"\0A\0q";s:2:"a2";s:1:"p";s:2:"pB";s:3:"pub";i:1;s:4:"\0B\0q";s:2:"b2";}
+a2b2
+["\u0000A\u0000q","p","pub","\u0000B\u0000q"]
+a2cAb2
+p=pB pub=1 
+bool(true)

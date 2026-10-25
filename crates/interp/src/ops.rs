@@ -306,8 +306,9 @@ impl Interp {
                 Value::Object(o) if o.class.is_a("closure") => Value::array(PhpArray::from_list([Value::Object(o)])),
                 Value::Object(o) => {
                     let mut a = PhpArray::new();
+                    // (array) cast: private/protected keys are mangled.
                     for (k, val) in o.props.borrow().iter() {
-                        a.insert(Key::from_bytes(k.as_bytes()), val.clone());
+                        a.insert(Key::from_bytes(&crate::ext::mangled(&o, k)), val.clone());
                     }
                     Value::array(a)
                 }

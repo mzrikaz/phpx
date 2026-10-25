@@ -520,6 +520,7 @@ impl Interp {
             ExprKind::Var(n) => &**n != "this",
             ExprKind::Prop { object, name: MemberName::Ident(name), nullsafe: false } => {
                 matches!(&object.kind, ExprKind::Var(v) if &**v == "this")
+                    && f.this.as_ref().is_some_and(|o| o.class.shadowed.is_empty())
                     && f.this.as_ref().is_some_and(|o| {
                         o.props.borrow().get(&*name.name).is_some_and(|v| !matches!(v, Value::Ref(_)))
                             && o.class.find_prop(&name.name).is_none_or(|d| !d.readonly && d.ty.is_none())
@@ -920,6 +921,7 @@ impl Interp {
                 let Some(b) = self.eval_quiet(f, object)? else { return Ok(None) };
                 let Value::Object(o) = b else { return Ok(None) };
                 let name = self.member_name(f, name)?;
+                let name = self.prop_key_rc(f, &o, name);
                 if self.prop_visible(f, &o, &name) {
                     if let Some(v) = o.get_prop(&name) {
                         return Ok(Some(v));
@@ -990,7 +992,10 @@ impl Interp {
                     _ => self.eval(f, object)?,
                 };
                 match obj {
-                    Value::Object(o) => Ok(Place { root: Root::Prop(o, name), path: vec![] }),
+                    Value::Object(o) => {
+                        let name = self.prop_key_rc(f, &o, name);
+                        Ok(Place { root: Root::Prop(o, name), path: vec![] })
+                    }
                     other => Err(self.error("Error", &format!("Attempt to assign property \"{name}\" on {}", other.type_name()))),
                 }
             }
@@ -1454,6 +1459,7 @@ impl Interp {
             ExprKind::Prop { object, name, .. } => {
                 let name = self.member_name(f, name)?;
                 if let Value::Object(o) = self.eval(f, object)? {
+                    let name = self.prop_key_rc(f, &o, name);
                     if o.props.borrow().contains_key(&*name) {
                         if o.class.find_prop(&name).is_some_and(|d| d.readonly) {
                             return Err(self.error("Error", &format!("Cannot unset readonly property {}::${name}", o.class.name)));
@@ -1472,8 +1478,33 @@ impl Interp {
 
     // ---- properties ----------------------------------------------------------
 
-    pub fn prop_visible(&self, f: &Frame, o: &Obj, name: &str) -> bool {
-        let Some(d) = o.class.find_prop(name) else { return true };
+    /// Storage key of `$o->name` seen from the running scope: the plain name,
+    /// or the mangled key of an ancestor's private property that a subclass
+    /// redeclared (only when the scope is that ancestor).
+    pub fn prop_key<'a>(&self, f: &Frame, o: &Obj, name: &'a str) -> std::borrow::Cow<'a, str> {
+        if !o.class.shadowed.is_empty() {
+            if let Some(scope) = &f.class {
+                for (decl, plain, mangled) in &o.class.shadowed {
+                    if &**plain == name && **decl == *scope.lname {
+                        return std::borrow::Cow::Owned(mangled.to_string());
+                    }
+                }
+            }
+        }
+        std::borrow::Cow::Borrowed(name)
+    }
+
+    pub fn prop_key_rc(&self, f: &Frame, o: &Obj, name: Rc<str>) -> Rc<str> {
+        match self.prop_key(f, o, &name) {
+            std::borrow::Cow::Owned(k) => Rc::from(k.as_str()),
+            std::borrow::Cow::Borrowed(_) => name,
+        }
+    }
+
+    /// Is the property stored under `key` (already mapped with `prop_key`)
+    /// visible from the running scope?
+    pub fn prop_visible(&self, f: &Frame, o: &Obj, key: &str) -> bool {
+        let Some(d) = o.class.find_prop(key) else { return true };
         self.member_visible(f.class.as_deref(), d.vis, &d.declaring)
     }
 
@@ -1489,6 +1520,8 @@ impl Interp {
     }
 
     pub fn get_prop(&self, f: &Frame, o: &Rc<Obj>, name: &str) -> R<Value> {
+        let key = self.prop_key(f, o, name);
+        let name = &*key;
         let visible = self.prop_visible(f, o, name);
         if visible {
             if let Some(v) = o.get_prop(name) {
@@ -1514,6 +1547,8 @@ impl Interp {
     }
 
     pub fn set_prop(&self, f: &Frame, o: &Rc<Obj>, name: &str, v: Value) -> R<()> {
+        let key = self.prop_key(f, o, name);
+        let name = &*key;
         if o.class.is_enum() {
             return Err(self.error("Error", &format!("Cannot modify readonly property {}::${name}", o.class.name)));
         }

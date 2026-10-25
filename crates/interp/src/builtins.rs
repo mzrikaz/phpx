@@ -418,7 +418,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let mut out = PhpArray::new();
         for (k, v) in o.props.borrow().iter() {
             if it.prop_visible(f, &o, k) {
-                out.insert(Key::from_bytes(k.as_bytes()), v.clone());
+                out.insert(Key::from_bytes(crate::call::plain_prop(k).as_bytes()), v.clone());
             }
         }
         Ok(Value::array(out))

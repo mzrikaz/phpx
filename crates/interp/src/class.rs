@@ -106,6 +106,10 @@ pub struct Class {
     pub traits: Vec<Rc<str>>,
     /// Initial property map of a new instance (built on first instantiation).
     pub prop_template: RefCell<Option<Vec<Option<crate::value::Value>>>>,
+    /// Private properties of ancestors that a subclass redeclared: each
+    /// object keeps both, the ancestor's under a mangled key
+    /// (declaring lname, plain name, mangled key).
+    pub shadowed: Vec<(Rc<str>, Rc<str>, Rc<str>)>,
     /// `__construct` (own or inherited), resolved once.
     pub ctor: Option<Rc<Method>>,
     /// Can be `new`ed (a concrete class) and is not Throwable: the fast path.

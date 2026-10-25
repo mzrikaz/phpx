@@ -476,6 +476,8 @@ pub unsafe extern "C" fn rt_quiet_prop(c: *mut Cx, obj: *const Value, name: *con
     let (it, f) = cx(c);
     let name = name_of(name, len);
     let Value::Object(o) = &*obj else { return 0 };
+    let key = it.prop_key(f, o, name);
+    let name = &*key;
     if it.prop_visible(f, o, name) {
         if let Some(v) = o.get_prop(name) {
             put(dst, v);
@@ -583,7 +585,7 @@ pub unsafe extern "C" fn rt_place_assign(
             let Value::Object(o) = &*root else {
                 return Err(it.error("Error", &format!("Attempt to assign property \"{}\" on {}", name_of(name, len), (*root).type_name())));
             };
-            let place = crate::expr::Place { root: crate::expr::Root::Prop(o.clone(), Rc::from(name_of(name, len))), path };
+            let place = crate::expr::Place { root: crate::expr::Root::Prop(o.clone(), it.prop_key_rc(f, o, Rc::from(name_of(name, len)))), path };
             it.place_set(f, &place, v.clone())?;
         }
         Ok(())
@@ -686,9 +688,10 @@ pub unsafe extern "C" fn rt_prop_read(c: *mut Cx, obj: *const Value, site: *cons
     let site = &*site;
     if let Value::Object(o) = &*obj {
         // Cache only plain visible, present properties (no __get path).
-        if it.prop_visible(f, o, site.name) {
+        let key = it.prop_key(f, o, site.name);
+        if it.prop_visible(f, o, &key) {
             let props = o.props.borrow();
-            if let Some((i, _, v)) = props.get_full(site.name) {
+            if let Some((i, _, v)) = props.get_full(&key) {
                 if !matches!(v, Value::Ref(_)) {
                     if let Some(k) = shape_key(o) {
                         site.shape.set(k);
@@ -717,13 +720,14 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
     };
     let r = it.set_prop(f, o, site.name, v.clone());
     if r.is_ok() {
-        let plain = match o.class.find_prop(site.name) {
+        let plain = match o.class.find_prop(&it.prop_key(f, o, site.name)) {
             Some(d) => d.ty.is_none() && !d.readonly && it.member_visible(f.class.as_deref(), d.vis, &d.declaring),
             None => true,
         };
         if plain {
+            let key = it.prop_key(f, o, site.name);
             let props = o.props.borrow();
-            if let Some((i, _, cur)) = props.get_full(site.name) {
+            if let Some((i, _, cur)) = props.get_full(&key) {
                 if !matches!(cur, Value::Ref(_)) {
                     if let Some(k) = shape_key(o) {
                         site.wshape.set(k);
@@ -737,8 +741,10 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
     status(it, r, |_| put(dst, v))
 }
 
-fn place_for(root_obj: Option<Rc<Obj>>, name: &'static str, path: Vec<Option<Key>>) -> crate::expr::Place {
-    crate::expr::Place { root: crate::expr::Root::Prop(root_obj.unwrap(), Rc::from(name)), path }
+fn place_for(it: &Interp, f: &Frame, root_obj: Option<Rc<Obj>>, name: &'static str, path: Vec<Option<Key>>) -> crate::expr::Place {
+    let o = root_obj.unwrap();
+    let key = it.prop_key_rc(f, &o, Rc::from(name));
+    crate::expr::Place { root: crate::expr::Root::Prop(o, key), path }
 }
 
 /// Read-modify-write on a place. mode: 0..=24 = BinOp code (`op=`),
@@ -784,7 +790,7 @@ pub unsafe extern "C" fn rt_place_update(
                     }
                     Ok(Some(cur))
                 }
-                Some(o) => it.place_get(f, &place_for(Some(o.clone()), name_of(name, len), path.clone())),
+                Some(o) => it.place_get(f, &place_for(it, f, Some(o.clone()), name_of(name, len), path.clone())),
             }
         };
         let cur = read(it, f)?;
@@ -821,7 +827,7 @@ pub unsafe extern "C" fn rt_place_update(
                     it.finish_pending(p)?;
                 }
             }
-            Some(o) => it.place_set(f, &place_for(Some(o.clone()), name_of(name, len), path), new)?,
+            Some(o) => it.place_set(f, &place_for(it, f, Some(o.clone()), name_of(name, len), path), new)?,
         }
         Ok(result)
     })();
@@ -834,12 +840,13 @@ pub unsafe extern "C" fn rt_place_update(
 
 /// `unset(root[keys...])` / `unset($obj->name)`.
 pub unsafe extern "C" fn rt_unset_place(c: *mut Cx, root: *mut Value, name: *const u8, len: u64, keys: *const Value, n: u64) -> u64 {
-    let (it, _) = cx(c);
+    let (it, f) = cx(c);
     let r = (|| -> R<()> {
         let path = keys_of(it, keys, n, 0)?;
         if !name.is_null() {
             let Value::Object(o) = &*root else { return Ok(()) };
-            let pname = name_of(name, len);
+            let pkey = it.prop_key(f, o, name_of(name, len));
+            let pname = &*pkey;
             if path.is_empty() {
                 if o.props.borrow().contains_key(pname) {
                     if o.class.find_prop(pname).is_some_and(|d| d.readonly) {
@@ -1468,7 +1475,7 @@ pub unsafe extern "C" fn rt_iter_new(c: *mut Cx, subject: *const Value, out: *mu
                     .prop_list()
                     .into_iter()
                     .filter(|(n, _)| it.prop_visible(f, o, n))
-                    .map(|(n, v)| (Value::str(&n), v))
+                    .map(|(n, v)| (Value::str(crate::call::plain_prop(&n)), v))
                     .collect();
                 Iter::Items { items, i: 0 }
             }
