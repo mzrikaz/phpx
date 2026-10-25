@@ -332,3 +332,67 @@ impl TcpStream {
         self.0.shutdown_write()
     }
 }
+
+/// A non-blocking pipe end (a child process's stdin/stdout/stderr).
+pub struct Pipe {
+    fd: std::os::fd::OwnedFd,
+}
+
+impl Pipe {
+    /// Take ownership of `fd`, make it non-blocking and register it.
+    pub fn from_fd(fd: std::os::fd::OwnedFd) -> Result<Self> {
+        // SAFETY: fcntl on an fd we own.
+        unsafe {
+            let raw = fd.as_raw_fd();
+            let flags = libc::fcntl(raw, libc::F_GETFL);
+            libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+        register(&fd)?;
+        Ok(Pipe { fd })
+    }
+
+    fn sys<R>(&self, readable: bool, deadline: Option<Instant>, op: impl FnMut() -> io::Result<R>) -> Result<R> {
+        retry(self.fd.as_fd(), readable, deadline, op)
+    }
+
+    /// Read some bytes; Ok(0) at end of stream.
+    pub fn read(&mut self, buf: &mut [u8], deadline: Option<Instant>) -> Result<usize> {
+        let fd = self.fd.as_raw_fd();
+        self.sys(true, deadline, || {
+            // SAFETY: valid buffer and fd.
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+            if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
+        })
+    }
+
+    pub fn write(&mut self, buf: &[u8], deadline: Option<Instant>) -> Result<usize> {
+        let fd = self.fd.as_raw_fd();
+        self.sys(false, deadline, || {
+            // SAFETY: valid buffer and fd.
+            let n = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
+            if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
+        })
+    }
+
+    pub fn write_all(&mut self, mut buf: &[u8], deadline: Option<Instant>) -> Result<()> {
+        while !buf.is_empty() {
+            match self.write(buf, deadline)? {
+                0 => return Err(io::Error::from(io::ErrorKind::WriteZero).into()),
+                n => buf = &buf[n..],
+            }
+        }
+        Ok(())
+    }
+}
+
+impl AsFd for Pipe {
+    fn as_fd(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
+    }
+}
+
+impl Drop for Pipe {
+    fn drop(&mut self) {
+        scheduler::deregister_io(self.fd.as_fd());
+    }
+}
