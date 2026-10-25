@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use digest::Digest;
 
 use crate::builtins::{arg, has, int, s};
 use crate::class::Vis;
@@ -624,64 +623,21 @@ fn unpack(it: &Interp, a: &[Value]) -> R<Value> {
 
 // ---- hashing ------------------------------------------------------------------
 
-#[derive(Clone)]
-pub(crate) enum Hasher {
-    Md5(md5::Md5),
-    Sha1(sha1::Sha1),
-    Sha224(sha2::Sha224),
-    Sha256(sha2::Sha256),
-    Sha384(sha2::Sha384),
-    Sha512(sha2::Sha512),
-    Crc32b(Vec<u8>),
-}
+pub(crate) use crate::hash_algos::Hasher;
+use crate::hash_algos::ALGOS;
 
-const ALGOS: &[&str] = &["md5", "sha1", "sha224", "sha256", "sha384", "sha512", "crc32b"];
-
-impl Hasher {
-    pub(crate) fn new(algo: &str) -> Option<Hasher> {
-        Some(match algo.to_ascii_lowercase().as_str() {
-            "md5" => Hasher::Md5(md5::Md5::new()),
-            "sha1" => Hasher::Sha1(sha1::Sha1::new()),
-            "sha224" => Hasher::Sha224(sha2::Sha224::new()),
-            "sha256" => Hasher::Sha256(sha2::Sha256::new()),
-            "sha384" => Hasher::Sha384(sha2::Sha384::new()),
-            "sha512" => Hasher::Sha512(sha2::Sha512::new()),
-            "crc32b" => Hasher::Crc32b(vec![]),
-            _ => return None,
-        })
-    }
-
-    pub(crate) fn update(&mut self, d: &[u8]) {
-        match self {
-            Hasher::Md5(h) => h.update(d),
-            Hasher::Sha1(h) => h.update(d),
-            Hasher::Sha224(h) => h.update(d),
-            Hasher::Sha256(h) => h.update(d),
-            Hasher::Sha384(h) => h.update(d),
-            Hasher::Sha512(h) => h.update(d),
-            Hasher::Crc32b(b) => b.extend_from_slice(d),
-        }
-    }
-
-    pub(crate) fn finish(self) -> Vec<u8> {
-        match self {
-            Hasher::Md5(h) => h.finalize().to_vec(),
-            Hasher::Sha1(h) => h.finalize().to_vec(),
-            Hasher::Sha224(h) => h.finalize().to_vec(),
-            Hasher::Sha256(h) => h.finalize().to_vec(),
-            Hasher::Sha384(h) => h.finalize().to_vec(),
-            Hasher::Sha512(h) => h.finalize().to_vec(),
-            Hasher::Crc32b(b) => crate::strings::crc32(&b).to_be_bytes().to_vec(),
-        }
-    }
-
-    fn block_size(&self) -> usize {
-        match self {
-            Hasher::Sha384(_) | Hasher::Sha512(_) => 128,
-            Hasher::Crc32b(_) => 4,
-            _ => 64,
-        }
-    }
+/// hash()/hash_init() options: (seed, secret) for murmur and xxHash.
+fn hash_options(it: &Interp, v: &Value) -> R<(u64, Option<Vec<u8>>)> {
+    let Value::Array(o) = v.deref() else { return Ok((0, None)) };
+    let seed = match o.get(&Key::from_bytes(b"seed")) {
+        Some(v) => it.to_int(&v)? as u64,
+        None => 0,
+    };
+    let secret = match o.get(&Key::from_bytes(b"secret")) {
+        Some(v) => Some(it.to_str(&v)?.to_vec()),
+        None => None,
+    };
+    Ok((seed, secret))
 }
 
 pub fn hex(b: &[u8]) -> String {
@@ -697,6 +653,9 @@ pub(crate) fn digest_out(raw: Vec<u8>, binary: bool) -> Value {
 }
 
 pub(crate) fn hmac(algo: &str, key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
+    if !crate::hash_algos::is_crypto(&algo.to_ascii_lowercase()) {
+        return None;
+    }
     let proto = Hasher::new(algo)?;
     let bs = proto.block_size();
     let mut k = if key.len() > bs {
@@ -1109,7 +1068,8 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     // hashing
     t.insert("hash", |it, _, a| {
         let algo = bstr(it, a, 0)?;
-        let Some(mut h) = Hasher::new(&algo) else { return Err(unknown_algo(it, "hash", &algo)) };
+        let (seed, secret) = hash_options(it, &arg(a, 3))?;
+        let Some(mut h) = Hasher::with_options(&algo, seed, secret) else { return Err(unknown_algo(it, "hash", &algo)) };
         h.update(&s(it, a, 1)?);
         Ok(digest_out(h.finish(), arg(a, 2).truthy()))
     });
@@ -1128,11 +1088,11 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let algo = bstr(it, a, 0)?;
         match hmac(&algo, &s(it, a, 2)?, &s(it, a, 1)?) {
             Some(r) => Ok(digest_out(r, arg(a, 3).truthy())),
-            None => Err(it.error("ValueError", &format!("hash_hmac(): Argument #1 ($algo) must be a valid cryptographic hashing algorithm, \"{algo}\" given"))),
+            None => Err(it.error("ValueError", "hash_hmac(): Argument #1 ($algo) must be a valid cryptographic hashing algorithm")),
         }
     });
     t.insert("hash_algos", |_, _, _| Ok(Value::array(PhpArray::from_list(ALGOS.iter().map(|a| Value::str(a))))));
-    t.insert("hash_hmac_algos", |_, _, _| Ok(Value::array(PhpArray::from_list(ALGOS[..6].iter().map(|a| Value::str(a))))));
+    t.insert("hash_hmac_algos", |_, _, _| Ok(Value::array(PhpArray::from_list(ALGOS.iter().filter(|a| crate::hash_algos::is_crypto(a)).map(|a| Value::str(a))))));
     t.insert("hash_equals", |it, _, a| {
         let (x, y) = (arg(a, 0), arg(a, 1));
         for (i, v) in [(1, &x), (2, &y)] {
@@ -1146,7 +1106,8 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("hash_init", |it, _, a| {
         let algo = bstr(it, a, 0)?;
-        let Some(h) = Hasher::new(&algo) else { return Err(unknown_algo(it, "hash_init", &algo)) };
+        let (seed, secret) = hash_options(it, &arg(a, 3))?;
+        let Some(h) = Hasher::with_options(&algo, seed, secret) else { return Err(unknown_algo(it, "hash_init", &algo)) };
         let flags = if has(a, 1) { int(it, a, 1)? } else { 0 };
         let hmac_key = if flags & 1 != 0 { Some((algo.clone(), s(it, a, 2)?.to_vec())) } else { None };
         let mut h = h;

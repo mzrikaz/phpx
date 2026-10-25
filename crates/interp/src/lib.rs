@@ -54,6 +54,7 @@ mod dom;
 mod xmlwriter;
 mod xml_ext;
 mod redis;
+mod hash_algos;
 mod db;
 mod pdo;
 mod process;
