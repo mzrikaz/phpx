@@ -133,6 +133,65 @@ final class StreamBucket
     public int $datalen;
 }
 
+interface SessionHandlerInterface
+{
+    public function open(string $path, string $name): bool;
+    public function close(): bool;
+    public function read(string $id): string|false;
+    public function write(string $id, string $data): bool;
+    public function destroy(string $id): bool;
+    public function gc(int $max_lifetime): int|false;
+}
+
+interface SessionIdInterface
+{
+    public function create_sid(): string;
+}
+
+interface SessionUpdateTimestampHandlerInterface
+{
+    public function validateId(string $id): bool;
+    public function updateTimestamp(string $id, string $data): bool;
+}
+
+class SessionHandler implements SessionHandlerInterface, SessionIdInterface
+{
+    public function open(string $path, string $name): bool
+    {
+        return \__phpx_session_files('open', $path, $name);
+    }
+
+    public function close(): bool
+    {
+        return \__phpx_session_files('close');
+    }
+
+    public function read(string $id): string|false
+    {
+        return \__phpx_session_files('read', $id);
+    }
+
+    public function write(string $id, string $data): bool
+    {
+        return \__phpx_session_files('write', $id, $data);
+    }
+
+    public function destroy(string $id): bool
+    {
+        return \__phpx_session_files('destroy', $id);
+    }
+
+    public function gc(int $max_lifetime): int|false
+    {
+        return \__phpx_session_files('gc', $max_lifetime);
+    }
+
+    public function create_sid(): string
+    {
+        return \__phpx_session_files('create_sid');
+    }
+}
+
 final class DeflateContext
 {
 }

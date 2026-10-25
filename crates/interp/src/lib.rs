@@ -18,6 +18,7 @@ mod sysinfo;
 mod wrappers;
 mod ext_more;
 mod zlib_more;
+mod session;
 mod filters;
 mod iconv_conv;
 mod builtins;
@@ -221,7 +222,12 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
             }
             _ => code,
         };
-        // Then open output buffers flush through their handlers.
+        // An active session is written, then open output buffers flush
+        // through their handlers.
+        let code = match crate::session::finish(&main_it) {
+            Err(Ctrl::Throw(e)) if code == 0 => crate::errors::uncaught(&main_it, e),
+            _ => code,
+        };
         let code = match crate::ob::end_all(&main_it) {
             Err(Ctrl::Throw(e)) if code == 0 => crate::errors::uncaught(&main_it, e),
             _ => code,

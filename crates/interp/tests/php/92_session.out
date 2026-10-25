@@ -1,0 +1,62 @@
+bool(true)
+string(9) "PHPSESSID"
+string(0) ""
+bool(true)
+bool(true)
+bool(true)
+string(106) "count|i:1;list|a:3:{i:0;i:1;i:1;s:3:"two";i:2;a:1:{s:5:"three";d:3.5;}}obj|O:8:"stdClass":1:{s:1:"p";b:1;}"
+bool(true)
+bool(true)
+string(106) "count|i:1;list|a:3:{i:0;i:1;i:1;s:3:"two";i:2;a:1:{s:5:"three";d:3.5;}}obj|O:8:"stdClass":1:{s:1:"p";b:1;}"
+bool(true)
+int(1)
+float(3.5)
+bool(true)
+bool(true)
+string(3) "yes"
+bool(true)
+bool(true)
+bool(false)
+array(0) {
+}
+bool(true)
+bool(true)
+array(0) {
+}
+bool(true)
+bool(false)
+bool(true)
+array(7) {
+  ["lifetime"]=>
+  int(0)
+  ["path"]=>
+  string(1) "/"
+  ["domain"]=>
+  string(0) ""
+  ["secure"]=>
+  bool(false)
+  ["partitioned"]=>
+  bool(false)
+  ["httponly"]=>
+  bool(false)
+  ["samesite"]=>
+  string(0) ""
+}
+string(4) "/app"
+string(7) "nocache"
+int(180)
+string(5) "files"
+bool(true)
+open PHPSESSID
+read
+write user|s:5:"alice";
+close
+array(1) {
+  ["fixedid123"]=>
+  string(17) "user|s:5:"alice";"
+}
+open PHPSESSID
+read
+close
+array(0) {
+}

@@ -125,6 +125,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::iconv_conv::register(&mut t);
     crate::ext_more::register(&mut t);
     crate::zlib_more::register(&mut t);
+    crate::session::register(&mut t);
     crate::errors::register(&mut t);
     t
 }
