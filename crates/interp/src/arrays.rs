@@ -308,20 +308,52 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
         Ok(acc)
     });
+    // Walks the array as it is at each step (a property passed in is a
+    // reference: elements the callback adds are visited too, as in PHP);
+    // a by-reference first parameter updates the element.
     t.insert("array_walk", |it, f, a| {
-        let x = by_ref_array(it, a, "array_walk")?;
-        let mut c = it.callback(callable(it, f, a, 1)?);
+        let cb = callable(it, f, a, 1)?;
+        let by_ref = crate::call::callable_params(&cb).and_then(|ps| ps.first()).is_some_and(|p| p.by_ref);
         let extra = if has(a, 2) { vec![arg(a, 2)] } else { vec![] };
-        let restore = Value::array(x.clone());
-        for (k, v) in x.iter() {
-            let mut args = vec![v.clone(), k.to_value()];
-            args.extend(extra.iter().cloned());
-            if let Err(e) = c.call(&mut args) {
-                a[0] = restore;
-                return Err(e);
+        let current = |a: &[Value]| match &a[0] {
+            Value::Ref(s) => s.borrow().clone(),
+            v => v.clone(),
+        };
+        match current(a) {
+            Value::Array(_) | Value::Object(_) => {}
+            other => {
+                return Err(it.error("TypeError", &format!("array_walk(): Argument #1 ($array) must be of type array, {} given", other.debug_type())));
             }
         }
-        a[0] = restore;
+        let mut pos = 0;
+        loop {
+            let Value::Array(arr) = current(a) else { break };
+            let Some((k, v)) = arr.get_index(pos) else { break };
+            drop(arr);
+            pos += 1;
+            if !by_ref {
+                let mut args = vec![v, k.to_value()];
+                args.extend(extra.iter().cloned());
+                it.call_callable(&cb, args, vec![])?;
+                continue;
+            }
+            let cell = crate::interp::slot(v);
+            let mut args = vec![Value::Ref(cell.clone()), k.to_value()];
+            args.extend(extra.iter().cloned());
+            it.call_callable(&cb, args, vec![])?;
+            let nv = cell.borrow().clone();
+            let write = |arr: &mut Value| {
+                if let Value::Array(x) = arr {
+                    if x.get(&k).is_some() {
+                        Rc::make_mut(x).insert(k.clone(), nv.clone());
+                    }
+                }
+            };
+            match &mut a[0] {
+                Value::Ref(s) => write(&mut s.borrow_mut()),
+                v => write(v),
+            }
+        }
         Ok(Value::Bool(true))
     });
     t.insert("array_sum", |it, _, a| {

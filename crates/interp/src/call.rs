@@ -560,13 +560,45 @@ impl Interp {
                 vals.push(self.eval(f, &a.value)?);
             }
         }
-        // Drop the variables' own references so in-place edits don't copy.
-        for (_, p) in &places {
-            self.place_set(f, p, Value::Null)?;
+        // Drop plain variables' own references so in-place edits don't copy
+        // (not properties: a typed one can't hold null). Arrays left in a
+        // property are remembered: if the built-in hands the same one back,
+        // there's nothing to write (and writing would undo changes the call
+        // made to that property meanwhile, as array_walk() callbacks do).
+        let mut kept: Vec<Option<usize>> = vec![];
+        let mut live = vec![];
+        for (i, p) in &places {
+            if name == "array_walk" && !(p.path.is_empty() && matches!(p.root, crate::expr::Root::Var(_))) {
+                // array_walk() over a property: make it a reference, so the
+                // walk sees what the callback does to it.
+                let cell = crate::interp::slot(std::mem::take(&mut vals[*i]));
+                self.place_set(f, p, Value::Ref(cell.clone()))?;
+                vals[*i] = Value::Ref(cell);
+                live.push(*i);
+                kept.push(None);
+                continue;
+            }
+            if p.path.is_empty() && matches!(p.root, crate::expr::Root::Var(_)) {
+                self.place_set(f, p, Value::Null)?;
+                kept.push(None);
+            } else {
+                kept.push(match &vals[*i] {
+                    Value::Array(a) => Some(Rc::as_ptr(a) as usize),
+                    _ => None,
+                });
+            }
         }
         let r = crate::builtins::invoke(self, name, crate::arginfo::spec(name), fun, f, &mut vals);
-        for (i, p) in places {
+        for ((i, p), orig) in places.into_iter().zip(kept) {
+            if live.contains(&i) {
+                continue;
+            }
             let v = std::mem::take(&mut vals[i]);
+            if let (Some(o), Value::Array(a)) = (orig, &v) {
+                if Rc::as_ptr(a) as usize == o {
+                    continue;
+                }
+            }
             self.place_set(f, &p, v)?;
         }
         r

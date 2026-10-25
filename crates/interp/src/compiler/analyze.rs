@@ -354,6 +354,12 @@ impl Analysis {
                         if SCOPE_FNS.contains(&l.as_str()) {
                             return Err("scope-reading function");
                         }
+                        // array_walk() over a property or element must see
+                        // what its callback does to that array meanwhile
+                        // (compiled code would walk a copy and write it back).
+                        if l == "array_walk" && args.first().is_some_and(|a| !matches!(a.value.kind, Var(_))) {
+                            return Err("array_walk on a property or element");
+                        }
                     }
                     _ => self.expr(callee)?,
                 }
