@@ -663,6 +663,36 @@ fn method_order(c: &Rc<Class>) -> Vec<Rc<crate::class::Method>> {
 }
 
 pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
+    // ReflectionReference::fromArrayElement(): an id for a referenced
+    // element (stable for the reference cell), null for a plain value.
+    t.insert("__phpx_reflection_reference_id", |it, _, a| {
+        let Some(Value::Array(arr)) = a.first().map(|v| v.deref()) else { return Ok(Value::Null) };
+        let key = crate::value::Key::from_bytes(&it.to_str(&a[1])?);
+        let key = match &a[1] {
+            Value::Int(n) => crate::value::Key::Int(*n),
+            _ => key,
+        };
+        for (k, v) in arr.iter_raw() {
+            if k == key {
+                return Ok(match v {
+                    Value::Ref(cell) => {
+                        let addr = std::rc::Rc::as_ptr(cell) as usize as u64;
+                        // 20 bytes like PHP's SHA-1 based id.
+                        let mut id = Vec::with_capacity(20);
+                        let mut x = addr ^ 0x9E37_79B9_7F4A_7C15;
+                        for _ in 0..20 {
+                            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                            id.push((x >> 56) as u8);
+                        }
+                        Value::bytes(id)
+                    }
+                    _ => Value::Null,
+                });
+            }
+        }
+        Ok(Value::Null)
+    });
+
     // E_DEPRECATED from prelude code, reported at the caller's line.
     t.insert("__phpx_deprecated", |it, _, a| {
         it.deprecated(&str_arg(it, a, 0)?);

@@ -1057,3 +1057,31 @@ class ReflectionEnumBackedCase extends ReflectionEnumUnitCase
 {
     public function getBackingValue(): int|string { return $this->getValue()->value; }
 }
+
+final class ReflectionReference
+{
+    private string $id;
+
+    private function __construct()
+    {
+    }
+
+    public static function fromArrayElement(array $array, int|string $key): ?ReflectionReference
+    {
+        if (!array_key_exists($key, $array)) {
+            throw new ReflectionException('Array key not found');
+        }
+        $id = \__phpx_reflection_reference_id($array, $key);
+        if ($id === null) {
+            return null;
+        }
+        $r = new self();
+        $r->id = $id;
+        return $r;
+    }
+
+    public function getId(): string
+    {
+        return $this->id;
+    }
+}
