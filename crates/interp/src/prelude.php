@@ -135,34 +135,5 @@ final class AggregateException extends RuntimeException
     public function getErrors(): array { return $this->errors; }
 }
 
-class ArrayIterator implements Iterator, Countable, ArrayAccess
-{
-    private array $keys;
-    private int $pos = 0;
-
-    public function __construct(private array $array = [])
-    {
-        $this->keys = array_keys($array);
-    }
-
-    public function current(): mixed { return $this->array[$this->keys[$this->pos]]; }
-    public function key(): mixed { return $this->keys[$this->pos] ?? null; }
-    public function next(): void { $this->pos++; }
-    public function rewind(): void { $this->keys = array_keys($this->array); $this->pos = 0; }
-    public function valid(): bool { return $this->pos < count($this->keys); }
-    public function count(): int { return count($this->array); }
-    public function offsetExists(mixed $offset): bool { return isset($this->array[$offset]); }
-    public function offsetGet(mixed $offset): mixed { return $this->array[$offset]; }
-    public function offsetSet(mixed $offset, mixed $value): void
-    {
-        if ($offset === null) {
-            $this->array[] = $value;
-        } else {
-            $this->array[$offset] = $value;
-        }
-    }
-    public function offsetUnset(mixed $offset): void { unset($this->array[$offset]); }
-    public function getArrayCopy(): array { return $this->array; }
-}
 final class HashContext { private function __construct() {} }
 class __PHP_Incomplete_Class {}

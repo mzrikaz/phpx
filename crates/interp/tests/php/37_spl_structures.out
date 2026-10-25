@@ -1,0 +1,105 @@
+== stack
+object(SplStack)#1 (2) {
+  ["flags":"SplDoublyLinkedList":private]=>
+  int(6)
+  ["dllist":"SplDoublyLinkedList":private]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    int(3)
+  }
+}
+332n
+1:2 0:1 
+== queue
+object(SplQueue)#2 (2) {
+  ["flags":"SplDoublyLinkedList":private]=>
+  int(4)
+  ["dllist":"SplDoublyLinkedList":private]=>
+  array(3) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+    [2]=>
+    string(1) "c"
+  }
+}
+abc2
+0:b 1:c 
+RuntimeException: Can't pop from an empty datastructure
+RuntimeException: Can't shift from an empty datastructure
+RuntimeException: Can't peek at an empty datastructure
+50444,50,6,7
+7 6 50 4 
+7,6,50,99,4
+OutOfRangeException: SplDoublyLinkedList::offsetGet(): Argument #1 ($index) is out of range
+16 1 2 3 5 8 9 0
+== maxheap
+object(SplMaxHeap)#6 (3) {
+  ["flags":"SplHeap":private]=>
+  int(0)
+  ["isCorrupted":"SplHeap":private]=>
+  bool(false)
+  ["heap":"SplHeap":private]=>
+  array(4) {
+    [0]=>
+    int(8)
+    [1]=>
+    int(3)
+    [2]=>
+    int(5)
+    [3]=>
+    int(1)
+  }
+}
+85
+RuntimeException: Can't extract from an empty heap
+5 a aecdb
+array(2) {
+  ["data"]=>
+  string(1) "y"
+  ["priority"]=>
+  int(20)
+}
+a bb ccc 
+== fixed
+object(SplFixedArray)#8 (3) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  NULL
+  [2]=>
+  string(1) "z"
+}
+33["x",null,"z"]
+0='x' 1=NULL 2='z' 
+OutOfBoundsException: Index invalid or out of range
+4
+6
+2ydata2
+0:1=data1 1:2=data2 
+1n
+== storage
+object(SplObjectStorage)#10 (1) {
+  ["storage":"SplObjectStorage":private]=>
+  array(1) {
+    [0]=>
+    array(2) {
+      ["obj"]=>
+      object(stdClass)#12 (1) {
+        ["id"]=>
+        int(2)
+      }
+      ["inf"]=>
+      string(5) "data2"
+    }
+  }
+}
+3 0
+1,2
+2,4
+1233

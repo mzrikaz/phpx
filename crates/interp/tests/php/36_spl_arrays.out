@@ -1,0 +1,105 @@
+== ao
+object(ArrayObject)#1 (1) {
+  ["storage":"ArrayObject":private]=>
+  array(3) {
+    ["b"]=>
+    int(2)
+    ["a"]=>
+    int(1)
+    [3]=>
+    string(1) "x"
+  }
+}
+ArrayObject Object
+(
+    [storage:ArrayObject:private] => Array
+        (
+            [b] => 2
+            [a] => 1
+            [3] => x
+        )
+
+)
+
+3 1 n y
+a=1 3=x c=3 4=pushed 
+array(4) {
+  ["a"]=>
+  int(1)
+  [3]=>
+  string(1) "x"
+  ["c"]=>
+  int(3)
+  [4]=>
+  string(6) "pushed"
+}
+array(4) {
+  ["a"]=>
+  int(1)
+  [3]=>
+  string(1) "x"
+  ["c"]=>
+  int(3)
+  [4]=>
+  string(6) "pushed"
+}
+array(4) {
+  ["a"]=>
+  int(1)
+  [3]=>
+  string(1) "x"
+  ["c"]=>
+  int(3)
+  [4]=>
+  string(6) "pushed"
+}
+string(34) "{"a":1,"3":"x","c":3,"4":"pushed"}"
+array(0) {
+}
+3,4,a,c
+1,3,pushed,x
+x,pushed,3,1
+4 2
+9,8,7 ArrayIterator ArrayIterator
+O:11:"ArrayObject":4:{i:0;i:0;i:1;a:3:{i:0;i:9;i:1;i:8;i:2;i:7;}i:2;a:0:{}i:3;N;}
+bool(true)
+array(3) {
+  [0]=>
+  int(9)
+  [1]=>
+  int(8)
+  [2]=>
+  int(7)
+}
+== it
+object(ArrayIterator)#3 (1) {
+  ["storage":"ArrayIterator":private]=>
+  array(4) {
+    [0]=>
+    int(10)
+    [1]=>
+    int(20)
+    [2]=>
+    int(30)
+    [3]=>
+    int(40)
+  }
+}
+0:10 1:20 2:30 3:40 
+2=30
+OutOfBoundsException: Seek position 10 is out of range
+10;20;30;40;
+NULL
+NULL
+int(4)
+0:1(d0) 0:2(d1) 1:3(d1) 0:4(d2) 2:5(d0) 
+a=1 b=arr c=2 
+3,4,5
+3,6,9
+1,2,3
+x,y,z
+5,6
+12121
+3 0
+1,2
+2,4
