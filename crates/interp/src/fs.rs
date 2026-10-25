@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(dirname("/a/b/c", 2), "/a");
         assert_eq!(basename("/a/b/c.php", ".php"), "c");
         assert_eq!(basename("/a/b/", ""), "b");
-        assert!(wildcard(b"*.php", b"index.php"));
-        assert!(!wildcard(b"*.php", b"index.phpx"));
+        assert!(crate::streams::fnmatch(b"*.php", b"index.php"));
+        assert!(!crate::streams::fnmatch(b"*.php", b"index.phpx"));
     }
 }
