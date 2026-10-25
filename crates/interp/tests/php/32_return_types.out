@@ -1,0 +1,80 @@
+array (
+  0 => 3.0,
+  1 => 42,
+  2 => '12',
+  3 => NULL,
+  4 => true,
+  5 => 
+  array (
+    0 => 1,
+  ),
+  6 => 'B',
+  7 => 'B',
+  8 => 'B',
+  9 => NULL,
+  10 => 1,
+)
+f6(): Return value must be of type array, string returned
+never
+f10(): Return value must be of type int, array returned @18
+8
+array (
+  0 => 3.0,
+  1 => 42,
+  2 => '12',
+  3 => NULL,
+  4 => true,
+  5 => 
+  array (
+    0 => 1,
+  ),
+  6 => 'B',
+  7 => 'B',
+  8 => 'B',
+  9 => NULL,
+  10 => 1,
+)
+f6(): Return value must be of type array, string returned
+never
+f10(): Return value must be of type int, array returned @18
+8
+array (
+  0 => 3.0,
+  1 => 42,
+  2 => '12',
+  3 => NULL,
+  4 => true,
+  5 => 
+  array (
+    0 => 1,
+  ),
+  6 => 'B',
+  7 => 'B',
+  8 => 'B',
+  9 => NULL,
+  10 => 1,
+)
+f6(): Return value must be of type array, string returned
+never
+f10(): Return value must be of type int, array returned @18
+8
+array (
+  0 => 3.0,
+  1 => 42,
+  2 => '12',
+  3 => NULL,
+  4 => true,
+  5 => 
+  array (
+    0 => 1,
+  ),
+  6 => 'B',
+  7 => 'B',
+  8 => 'B',
+  9 => NULL,
+  10 => 1,
+)
+f6(): Return value must be of type array, string returned
+never
+f10(): Return value must be of type int, array returned @18
+8

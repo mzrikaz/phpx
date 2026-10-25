@@ -662,12 +662,13 @@ impl Interp {
                 },
                 ctx: cd.ctx.clone(),
                 class: cd.scope.clone(),
+                ret,
             });
             if let Some(entry) = entry {
                 let mut frame = Frame::for_call(cd.ctx.clone(), cd.name.clone(), fn_id);
                 let mut out = Value::Null;
                 // SAFETY: `pos` outlives the call; consumed slots are left null.
-                let st = unsafe { crate::compiler::rt::enter_closure(self, cd, entry, ret, &mut frame, pos.as_mut_ptr(), pos.len() as u64, &mut out) };
+                let st = unsafe { crate::compiler::rt::enter_closure(self, cd, entry, &mut frame, pos.as_mut_ptr(), pos.len() as u64, &mut out) };
                 match st {
                     Some(0) => return Ok(out),
                     Some(_) => return Err(self.pending.borrow_mut().take().expect("native error without pending exception")),
@@ -790,12 +791,9 @@ impl Interp {
             return Ok(self.start_generator(f, inv.body, saved_pos));
         }
         if let Some(r) = self.native_call(&inv, &mut f) {
+            // (Compiled code checked the declared return type.)
             self.pos.set(saved_pos);
-            let result = r?;
-            if inv.ret.is_none() {
-                return Ok(result);
-            }
-            return self.check_return(&inv, result);
+            return r;
         }
         let result = match inv.body {
             Body::Block(stmts) => match self.exec_block(&mut f, stmts)? {
@@ -804,11 +802,10 @@ impl Interp {
             },
             Body::Expr(e) => self.eval(&mut f, e)?,
         };
+        // Checked before leaving: a TypeError points at the `return`.
+        let result = if inv.ret.is_none() { result } else { self.check_return(&inv, result)? };
         self.pos.set(saved_pos);
-        if inv.ret.is_none() {
-            return Ok(result);
-        }
-        self.check_return(&inv, result)
+        Ok(result)
     }
 
     #[inline(never)]
@@ -827,6 +824,7 @@ impl Interp {
             },
             ctx: inv.ctx.clone(),
             class: inv.class.clone(),
+            ret: inv.ret,
         };
         self.try_native(inv.fn_id, mk, f)
     }

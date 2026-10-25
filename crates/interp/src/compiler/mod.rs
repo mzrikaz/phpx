@@ -39,6 +39,8 @@ pub struct Target {
     pub body: Body,
     pub ctx: std::rc::Rc<crate::interp::NsCtx>,
     pub class: Option<std::rc::Rc<crate::class::Class>>,
+    /// Declared return type: compiled code checks it before returning.
+    pub ret: Option<&'static ast::Type>,
 }
 
 pub struct Native {
@@ -65,6 +67,7 @@ macro_rules! helpers {
 const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_load_locals: 3 => true,
     rt_bind_args: 5 => true,
+    rt_check_ret: 3 => true,
     rt_store_locals: 3 => false,
     rt_bind_slots: 4 => true,
     rt_unbind_slots: 2 => false,
@@ -325,6 +328,8 @@ impl Native {
             class: t.class.clone(),
             simple: t.captured.is_empty() && t.params.iter().all(|p| p.ty.is_none() && !p.by_ref && !p.variadic && p.promote.is_none()),
             captured_slots: t.captured.iter().map(|c| a.locals.index[c] as usize).collect(),
+            ret: t.ret,
+            ret_quick: rt::Quick::of(t.ret),
             quick: t.params.iter().map(|p| rt::Quick::of(p.ty.as_ref())).collect(),
         });
         let simple = spec.simple;
@@ -392,6 +397,16 @@ impl Native {
             // locals back to the frame first).
             for (blk, status) in [(exit_ok, 0i64), (unwind, 1), (exit_ret, 3)] {
                 l.b.switch_to_block(blk);
+                if status == 0 && t.ret.is_some() {
+                    // Declared return type (coerces the value in place).
+                    use cranelift_codegen::ir::condcodes::IntCC;
+                    let sp = l.b.ins().iconst(types::I64, spec_addr);
+                    let st = l.call("rt_check_ret", &[cxv, outv, sp]).unwrap();
+                    let bad = l.b.ins().icmp_imm_s(IntCC::NotEqual, st, 0);
+                    let ok = l.b.create_block();
+                    l.b.ins().brif(bad, unwind, &[], ok, &[]);
+                    l.b.switch_to_block(ok);
+                }
                 l.cleanup(nlocals);
                 if let Some(rcs) = top_rcs {
                     let ra = l.b.ins().stack_addr(types::I64, rcs, 0);
@@ -587,6 +602,7 @@ impl Interp {
                         body: Body::Block(body),
                         ctx: f.ctx.clone(),
                         class: None,
+                        ret: None,
                     };
                     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| n.compile_mode(self, &t, true)))
                         .unwrap_or(Err("internal compiler error"));

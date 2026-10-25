@@ -43,6 +43,30 @@ pub struct LocalsSpec {
     pub quick: Vec<(Quick, bool)>,
     /// Closures: the local slot of each captured variable (in `use` order).
     pub captured_slots: Vec<usize>,
+    pub ret: Option<&'static ast::Type>,
+    pub ret_quick: (Quick, bool),
+}
+
+/// The declared return type, checked (and the value coerced) in the
+/// callee before it returns.
+pub unsafe extern "C" fn rt_check_ret(c: *mut Cx, out: *mut Value, spec: *const LocalsSpec) -> u64 {
+    let (it, f) = cx(c);
+    let spec = &*spec;
+    if Quick::accepts(spec.ret_quick, &*out) {
+        return 0;
+    }
+    let Some(ty) = spec.ret else { return 0 };
+    let v = take(out);
+    match it.check_return_type(ty, v, &spec.ctx, spec.class.as_ref(), f.static_class.as_ref(), &spec.display) {
+        Ok(v) => {
+            put(out, v);
+            0
+        }
+        Err(e) => {
+            *it.pending.borrow_mut() = Some(e);
+            1
+        }
+    }
 }
 
 /// A declared parameter type, reduced for a fast acceptance test.
@@ -1106,8 +1130,6 @@ pub struct MethodCache {
     entry: crate::compiler::Entry,
     method: *const crate::class::Method,
     decl_class: *const crate::class::Class,
-    /// Leaked once per site: only used in error messages.
-    display: *const str,
     /// Static call sites (`A::m()`): the frame's `static` class, and the
     /// caller's `static` and `$this` classes the entry is valid for.
     sc: *const crate::class::Class,
@@ -1125,7 +1147,7 @@ unsafe fn rc_from(p: *const crate::class::Class) -> Option<Rc<crate::class::Clas
 }
 
 /// Native entry for a user method (None: abstract, native, or doesn't compile).
-unsafe fn method_entry(it: &Interp, m: &Rc<crate::class::Method>) -> Option<(crate::compiler::Entry, Option<Rc<crate::class::Class>>, Rc<str>)> {
+unsafe fn method_entry(it: &Interp, m: &Rc<crate::class::Method>) -> Option<(crate::compiler::Entry, Option<Rc<crate::class::Class>>)> {
     let crate::class::MethodBody::User(func) = &m.body else { return None };
     let body = func.body.as_deref()?;
     let fn_id = *func as *const ast::Function as usize;
@@ -1133,14 +1155,15 @@ unsafe fn method_entry(it: &Interp, m: &Rc<crate::class::Method>) -> Option<(cra
     let display: Rc<str> = Rc::from(format!("{}::{}", decl_class.as_ref().map(|c| &*c.name).unwrap_or(""), m.name));
     let entry = it.native_entry(fn_id, || crate::compiler::Target {
         fn_id,
-        display: display.clone(),
+        display,
         params: &func.params,
         captured: vec![],
         body: crate::compiler::Body::Block(body),
         ctx: m.ctx.clone(),
         class: decl_class.clone(),
+        ret: func.ret.as_ref(),
     })?;
-    Some((entry, decl_class, display))
+    Some((entry, decl_class))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1185,7 +1208,7 @@ pub unsafe extern "C" fn rt_call(
     if let Some((entry, u)) = (*site).cached.get() {
         let u = &*u;
         let make = || Frame::for_call(u.ctx.clone(), u.name.clone(), u.decl as *const ast::Function as usize);
-        if let Some(st) = (*site).frame.with(make, |frame| enter(it, entry, frame, args, n, dst, u.decl.ret.as_ref(), None, &u.name)) {
+        if let Some(st) = (*site).frame.with(make, |frame| enter(it, entry, frame, args, n, dst)) {
             return st;
         }
     }
@@ -1261,6 +1284,7 @@ unsafe fn fast_user_call(it: &Interp, u: &Rc<crate::interp::UserFn>, args: *mut 
         body: crate::compiler::Body::Block(u.decl.body.as_deref().unwrap_or(&[])),
         ctx: u.ctx.clone(),
         class: None,
+        ret: u.decl.ret.as_ref(),
     })?;
     // Remember the native target at this call site, unless the numeric JIT
     // may still take this function later (all-numeric args, not rejected):
@@ -1274,7 +1298,7 @@ unsafe fn fast_user_call(it: &Interp, u: &Rc<crate::interp::UserFn>, args: *mut 
         site.frame.invalidate();
     }
     let mut frame = Frame::for_call(u.ctx.clone(), u.name.clone(), fn_id);
-    enter(it, entry, &mut frame, args, n, dst, u.decl.ret.as_ref(), None, &u.name)
+    enter(it, entry, &mut frame, args, n, dst)
 }
 
 /// The JIT ran this call: cache its entry at the site for these argument
@@ -1301,40 +1325,18 @@ unsafe fn remember_jit(it: &Interp, u: &crate::interp::UserFn, args: *mut Value,
 
 /// Run a native entry with a fresh frame; applies the declared return type.
 #[allow(clippy::too_many_arguments)]
-unsafe fn enter(
-    it: &Interp,
-    entry: crate::compiler::Entry,
-    frame: &mut Frame,
-    args: *mut Value,
-    n: u64,
-    dst: *mut Value,
-    ret: Option<&ast::Type>,
-    class: Option<&Rc<crate::class::Class>>,
-    display: &str,
-) -> Option<u64> {
+unsafe fn enter(it: &Interp, entry: crate::compiler::Entry, frame: &mut Frame, args: *mut Value, n: u64, dst: *mut Value) -> Option<u64> {
     if phpx_runtime::stack_remaining().is_some_and(|r| r < 256 * 1024) {
         return None; // the general path raises the proper error
     }
     let saved = it.pos.get();
     let mut cx2 = Cx { it, frame };
+    // (The callee checks its declared return type itself.)
     let st = entry(&mut cx2, args, n, dst);
     it.pos.set(saved);
-    match (st, ret) {
-        (2, _) => None,
-        (0, Some(ty)) => {
-            let v = take(dst);
-            match it.check_return_type(ty, v, &frame.ctx, class, frame.static_class.as_ref(), display) {
-                Ok(v) => {
-                    put(dst, v);
-                    Some(0)
-                }
-                Err(e) => {
-                    *it.pending.borrow_mut() = Some(e);
-                    Some(1)
-                }
-            }
-        }
-        (st, _) => Some(st),
+    match st {
+        2 => None,
+        st => Some(st),
     }
 }
 
@@ -1366,14 +1368,13 @@ pub unsafe extern "C" fn rt_method_call(
             if !it.member_visible(f.class.as_deref(), m.vis, &m.declaring) {
                 return None;
             }
-            let (entry, decl_class, display) = method_entry(it, &m)?;
+            let (entry, decl_class) = method_entry(it, &m)?;
             let mc = MethodCache {
                 class: Rc::as_ptr(&o.class),
                 scope,
                 entry,
                 method: Rc::as_ptr(&m),
                 decl_class: decl_class.as_ref().map_or(ptr::null(), Rc::as_ptr),
-                display: Box::leak(display.to_string().into_boxed_str()),
                 sc: ptr::null(),
                 static_cls: ptr::null(),
                 this_cls: ptr::null(),
@@ -1396,9 +1397,7 @@ pub unsafe extern "C" fn rt_method_call(
                 if !m.is_static {
                     frame.this = Some(o.clone());
                 }
-                // Only needed to check a declared return type.
-                let ret_class = if func.ret.is_some() { frame.class.clone() } else { None };
-                enter(it, mc.entry, frame, args, n, dst, func.ret.as_ref(), ret_class.as_ref(), &*mc.display)
+                enter(it, mc.entry, frame, args, n, dst)
             });
             if let Some(st) = r {
                 return st;
@@ -1529,6 +1528,7 @@ unsafe fn closure_call(it: &Interp, o: &Rc<crate::value::Obj>, site: &MethodSite
                 body,
                 ctx: cd.ctx.clone(),
                 class: cd.scope.clone(),
+                ret,
             })?;
             // (The cache's class field holds the closure's AST node here.)
             site.cached.set(Some(MethodCache {
@@ -1537,7 +1537,6 @@ unsafe fn closure_call(it: &Interp, o: &Rc<crate::value::Obj>, site: &MethodSite
                 entry,
                 method: ptr::null(),
                 decl_class: ptr::null(),
-                display: "" as *const str,
                 sc: ptr::null(),
                 static_cls: ptr::null(),
                 this_cls: ptr::null(),
@@ -1547,7 +1546,7 @@ unsafe fn closure_call(it: &Interp, o: &Rc<crate::value::Obj>, site: &MethodSite
         }
     };
     let make = || Frame::for_call(cd.ctx.clone(), cd.name.clone(), node);
-    site.frame.with(make, |frame| enter_closure(it, &cd, entry, ret, frame, args, n, dst))
+    site.frame.with(make, |frame| enter_closure(it, &cd, entry, frame, args, n, dst))
 }
 
 /// Run a closure's native entry in `frame` (set up here for this closure).
@@ -1556,7 +1555,6 @@ pub unsafe fn enter_closure(
     it: &Interp,
     cd: &Rc<crate::interp::ClosureData>,
     entry: crate::compiler::Entry,
-    ret: Option<&ast::Type>,
     frame: &mut Frame,
     args: *mut Value,
     n: u64,
@@ -1567,7 +1565,7 @@ pub unsafe fn enter_closure(
     frame.static_class = cd.static_class.clone();
     frame.func = cd.name.clone();
     frame.closure = Some(cd.clone());
-    enter(it, entry, frame, args, n, dst, ret, cd.scope.as_ref(), &cd.name)
+    enter(it, entry, frame, args, n, dst)
 }
 
 /// `$obj->$name(...)`.
@@ -1656,8 +1654,7 @@ pub unsafe extern "C" fn rt_static_call(
         let this = if m.is_static { None } else { f.this.clone() };
         let r = site.frame.with(make, |frame| {
             frame.this = this;
-            let ret_class = if func.ret.is_some() { frame.class.clone() } else { None };
-            enter(it, mc.entry, frame, args, n, dst, func.ret.as_ref(), ret_class.as_ref(), &*mc.display)
+            enter(it, mc.entry, frame, args, n, dst)
         });
         if let Some(st) = r {
             return st;
@@ -1698,7 +1695,7 @@ unsafe fn static_lookup(
         let this = f.this.as_ref().filter(|o| o.class.is_subclass_of(cls))?;
         this.class.clone()
     };
-    let (entry, decl_class, display) = method_entry(it, &m)?;
+    let (entry, decl_class) = method_entry(it, &m)?;
     // Classes live for the whole run: the cache holds plain pointers.
     let mc = MethodCache {
         class: Rc::as_ptr(cls),
@@ -1706,7 +1703,6 @@ unsafe fn static_lookup(
         entry,
         method: Rc::as_ptr(&m),
         decl_class: decl_class.as_ref().map_or(ptr::null(), Rc::as_ptr),
-        display: Box::leak(display.to_string().into_boxed_str()),
         sc: Rc::as_ptr(&sc),
         static_cls: stc,
         this_cls: thc,
@@ -1796,15 +1792,15 @@ unsafe fn new_cached(it: &Interp, f: &mut Frame, cref: &'static ast::ClassRef, s
             if cls.kind != ast::ClassKind::Class || cls.is_abstract || cls.is_a("throwable") {
                 return None;
             }
-            let (entry, decl_class, method, display) = match &cls.ctor {
+            let (entry, decl_class, method) = match &cls.ctor {
                 Some(ctor) => {
                     if !it.member_visible(f.class.as_deref(), ctor.vis, &ctor.declaring) {
                         return None;
                     }
-                    let (entry, decl_class, display) = method_entry(it, ctor)?;
-                    (Some(entry), decl_class, Rc::as_ptr(ctor), Box::leak(display.to_string().into_boxed_str()) as *const str)
+                    let (entry, decl_class) = method_entry(it, ctor)?;
+                    (Some(entry), decl_class, Rc::as_ptr(ctor))
                 }
-                None if cls.plain_new => (None, None, ptr::null(), "" as *const str),
+                None if cls.plain_new => (None, None, ptr::null()),
                 None => return None,
             };
             let mc = MethodCache {
@@ -1814,7 +1810,6 @@ unsafe fn new_cached(it: &Interp, f: &mut Frame, cref: &'static ast::ClassRef, s
                 entry: entry.unwrap_or(no_ctor),
                 method,
                 decl_class: decl_class.as_ref().map_or(ptr::null(), Rc::as_ptr),
-                display,
                 sc: Rc::as_ptr(&cls),
                 static_cls: stc,
                 this_cls: ptr::null(),
@@ -1846,7 +1841,7 @@ unsafe fn new_cached(it: &Interp, f: &mut Frame, cref: &'static ast::ClassRef, s
     let mut out = Value::Null;
     let r = site.frame.with(make, |frame| {
         frame.this = Some(o.clone());
-        enter(it, mc.entry, frame, args, n, &mut out, None, None, &*mc.display)
+        enter(it, mc.entry, frame, args, n, &mut out)
     });
     match r {
         Some(0) => {
