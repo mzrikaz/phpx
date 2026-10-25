@@ -113,6 +113,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_iter_next: 4 => true,
     rt_iter_free: 1 => false,
     rt_throw: 2 => true,
+    rt_prop_write: 5 => true,
     rt_destruct: 1 => true,
     rt_catch: 3 => true,
     rt_pending_save: 2 => true,
@@ -124,6 +125,57 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
 
 thread_local! {
     static INLINE_RC: bool = rc_layout_ok();
+    static LAYOUT: Option<Layout> = probe_layout();
+}
+
+/// Offsets generated code uses for inline property access.
+#[derive(Clone, Copy)]
+pub struct Layout {
+    /// From the Rc pointer of an object to its `Props`.
+    pub obj_props: i32,
+    /// Tag byte of `Option::<Value>::None` (an empty property slot).
+    pub none_tag: u8,
+    /// `Cx::frame`, and `Frame::class` within the frame.
+    pub cx_frame: i32,
+    pub frame_class: i32,
+}
+
+pub fn layout() -> Option<Layout> {
+    LAYOUT.with(|l| *l)
+}
+
+fn probe_layout() -> Option<Layout> {
+    use std::mem::{offset_of, size_of};
+    if !rc_layout_ok() {
+        return None;
+    }
+    // An empty slot must be told apart from every Value by its tag byte, and
+    // a full slot must look exactly like a Value.
+    let none: Option<Value> = None;
+    let none_tag = unsafe { *(&none as *const Option<Value> as *const u8) };
+    if none_tag <= tag::RESOURCE {
+        return None;
+    }
+    let some: Option<Value> = Some(Value::Int(7));
+    let (t, p) = unsafe {
+        let b = &some as *const Option<Value> as *const u8;
+        (*b, *(b.add(tag::PAYLOAD as usize) as *const i64))
+    };
+    if t != tag::INT || p != 7 {
+        return None;
+    }
+    // RefCell<Props>: where the value sits inside the cell.
+    let cell = std::cell::RefCell::new(crate::props::Props::default());
+    let in_cell = cell.as_ptr() as usize - &cell as *const _ as usize;
+    if size_of::<Option<std::rc::Rc<crate::class::Class>>>() != 8 {
+        return None;
+    }
+    Some(Layout {
+        obj_props: (2 * size_of::<usize>() + offset_of!(crate::value::Obj, props) + in_cell) as i32,
+        none_tag,
+        cx_frame: offset_of!(rt::Cx, frame) as i32,
+        frame_class: offset_of!(crate::interp::Frame, class) as i32,
+    })
 }
 
 /// Generated code inlines Rc strong-count updates: the count is the first

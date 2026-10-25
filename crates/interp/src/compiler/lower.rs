@@ -1266,19 +1266,11 @@ impl<'a> Lower<'a> {
                 let o = self.materialize(o);
                 let oa = self.addr(o).unwrap();
                 let (np, nl) = self.name_parts(name);
-                let site = Box::new(super::rt::PropSite { name, cached: Default::default() });
+                let site = Box::new(super::rt::PropSite::new(name));
                 let sp = &*site as *const super::rt::PropSite as i64;
                 self.psites.push(site);
                 let _ = (np, nl);
-                let r = if *nullsafe {
-                    self.nullsafe(oa, |l| {
-                        let sp = l.iconst(sp);
-                        l.helper_value("rt_prop_read", |l| vec![l.cx, oa, sp])
-                    })?
-                } else {
-                    let sp = self.iconst(sp);
-                    self.helper_value("rt_prop_read", |l| vec![l.cx, oa, sp])?
-                };
+                let r = if *nullsafe { self.nullsafe(oa, |l| l.prop_read(oa, sp))? } else { self.prop_read(oa, sp)? };
                 self.release(o);
                 r
             }
@@ -1403,6 +1395,116 @@ impl<'a> Lower<'a> {
         self.call_checked(name, &a);
         let ta = self.temp_addr(t);
         Ok(Op::Ptr(ta, Some(t)))
+    }
+
+    /// Inline-cache guard for a property site: branches to `slow` unless the
+    /// value at `oa` is an object whose shape and the caller's scope match
+    /// the cache at `site + off_shape/off_scope`. Returns (props pointer)
+    /// in the fall-through block.
+    fn prop_guard(&mut self, lay: super::Layout, oa: CValue, site: CValue, off_shape: i32, off_scope: i32, slow: Block) -> CValue {
+        let tg = self.load_tag(oa);
+        let is_obj = self.b.ins().icmp_imm_s(IntCC::Equal, tg, tag::OBJECT as i64);
+        let (c1, c2, ok) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(is_obj, c1, &[], slow, &[]);
+        self.b.switch_to_block(c1);
+        let rc = self.b.ins().load(types::I64, flags(), oa, tag::PAYLOAD);
+        let props = self.b.ins().iadd_imm_s(rc, lay.obj_props as i64);
+        let shape = self.b.ins().load(types::I64, flags(), props, 0);
+        let cached = self.b.ins().load(types::I64, flags(), site, off_shape);
+        let same = self.b.ins().icmp(IntCC::Equal, shape, cached);
+        self.b.ins().brif(same, c2, &[], slow, &[]);
+        self.b.switch_to_block(c2);
+        let frame = self.b.ins().load(types::I64, flags(), self.cx, lay.cx_frame);
+        let scope = self.b.ins().load(types::I64, flags(), frame, lay.frame_class);
+        let cs = self.b.ins().load(types::I64, flags(), site, off_scope);
+        let same = self.b.ins().icmp(IntCC::Equal, scope, cs);
+        self.b.ins().brif(same, ok, &[], slow, &[]);
+        self.b.switch_to_block(ok);
+        props
+    }
+
+    /// Address of the cached slot; branches to `slow` if it's empty or a
+    /// reference.
+    fn prop_slot(&mut self, lay: super::Layout, props: CValue, site: CValue, off_slot: i32, slow: Block) -> CValue {
+        let data = self.b.ins().load(types::I64, flags(), props, 8);
+        let slot = self.b.ins().load(types::I64, flags(), site, off_slot);
+        let off = self.b.ins().ishl_imm_u(slot, 4);
+        let p = self.b.ins().iadd(data, off);
+        let vt = self.load_tag(p);
+        let empty = self.b.ins().icmp_imm_s(IntCC::Equal, vt, lay.none_tag as i8 as i64);
+        let is_ref = self.b.ins().icmp_imm_s(IntCC::Equal, vt, tag::REF as i64);
+        let bad = self.b.ins().bor(empty, is_ref);
+        let ok = self.b.create_block();
+        self.b.ins().brif(bad, slow, &[], ok, &[]);
+        self.b.switch_to_block(ok);
+        p
+    }
+
+    /// `$obj->name` read with an inline cache; the miss path fills it.
+    fn prop_read(&mut self, oa: CValue, sp: i64) -> L<Op> {
+        let Some(lay) = super::layout() else {
+            let sp = self.iconst(sp);
+            return self.helper_value("rt_prop_read", |l| vec![l.cx, oa, sp]);
+        };
+        let t = self.alloc_temp();
+        let ta = self.temp_addr(t);
+        let site = self.iconst(sp);
+        let (slow, merge) = (self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(slow);
+        let props = self.prop_guard(lay, oa, site, super::rt::PROPSITE_SHAPE, super::rt::PROPSITE_SCOPE, slow);
+        let p = self.prop_slot(lay, props, site, super::rt::PROPSITE_SLOT, slow);
+        self.store_into(ta, Op::Ptr(p, None));
+        self.b.ins().jump(merge, &[]);
+        self.b.switch_to_block(slow);
+        let site = self.iconst(sp);
+        let ta2 = self.temp_addr(t);
+        self.call_checked("rt_prop_read", &[self.cx, oa, site, ta2]);
+        self.b.ins().jump(merge, &[]);
+        self.b.switch_to_block(merge);
+        let ta = self.temp_addr(t);
+        Ok(Op::Ptr(ta, Some(t)))
+    }
+
+    /// `$obj->name = value` with an inline cache (plain properties only).
+    fn prop_write(&mut self, object: &'static Expr, name: &'static str, value: &'static Expr) -> L<Op> {
+        let o = self.expr(object)?;
+        let o = self.own(o);
+        let o = self.materialize(o);
+        let oa = self.addr(o).unwrap();
+        let v = self.expr(value)?;
+        let v = self.own(v);
+        let v = self.materialize(v);
+        let va = self.addr(v).unwrap();
+        let site = Box::new(super::rt::PropSite::new(name));
+        let sp = &*site as *const super::rt::PropSite as i64;
+        self.psites.push(site);
+        let Some(lay) = super::layout() else {
+            let s = self.iconst(sp);
+            self.call_checked("rt_prop_write", &[self.cx, oa, s, va, va]);
+            self.release(o);
+            return Ok(v);
+        };
+        let old_t = self.alloc_temp();
+        let site_v = self.iconst(sp);
+        let (slow, merge) = (self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(slow);
+        let props = self.prop_guard(lay, oa, site_v, super::rt::PROPSITE_WSHAPE, super::rt::PROPSITE_WSCOPE, slow);
+        let p = self.prop_slot(lay, props, site_v, super::rt::PROPSITE_WSLOT, slow);
+        // Old value out, a copy of the new value in; the old one is
+        // released after the merge (its destructor may run PHP code).
+        let olda = self.temp_addr(old_t);
+        self.copy16(olda, p);
+        self.store_into(p, Op::Ptr(va, None));
+        self.b.ins().jump(merge, &[]);
+        self.b.switch_to_block(slow);
+        let s = self.iconst(sp);
+        self.call_checked("rt_prop_write", &[self.cx, oa, s, va, va]);
+        self.b.ins().jump(merge, &[]);
+        self.b.switch_to_block(merge);
+        let olda = self.temp_addr(old_t);
+        self.release(Op::Ptr(olda, Some(old_t)));
+        self.release(o);
+        Ok(v)
     }
 
     /// `?->`: if the object is null the whole call/fetch is null (args unevaluated).
@@ -1650,6 +1752,7 @@ impl<'a> Lower<'a> {
                 self.assign_local(i, v);
                 Ok(Op::Local(i))
             }
+            ExprKind::Prop { object, name: MemberName::Ident(name), nullsafe: false } => self.prop_write(object, &name.name, value),
             ExprKind::Array(items) => {
                 // [$a, $b] = expr / ['k' => $a] = expr
                 let v = self.expr(value)?;

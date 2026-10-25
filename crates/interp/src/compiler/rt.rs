@@ -640,32 +640,62 @@ pub unsafe extern "C" fn rt_local_store(c: *mut Cx, local: *mut Value, key: *con
     rt_place_assign(c, local, ptr::null(), 0, key, n, append, val, dst)
 }
 
-/// A `$obj->name` read site: caches, per (class, scope), that the property
-/// is visible and where it sits in the object's property table.
+/// A `$obj->name` site. Generated code checks (object shape, caller
+/// scope) against the cached key and then reads/writes the slot directly;
+/// these helpers are the miss path and fill the cache. `#[repr(C)]`: field
+/// offsets are used by generated code.
+#[repr(C)]
 pub struct PropSite {
+    /// Read cache: shape key (0 = empty), slot, scope key.
+    pub shape: std::cell::Cell<usize>,
+    pub slot: std::cell::Cell<usize>,
+    pub scope: std::cell::Cell<usize>,
+    /// Write cache (only plain, untyped, non-readonly, visible properties).
+    pub wshape: std::cell::Cell<usize>,
+    pub wslot: std::cell::Cell<usize>,
+    pub wscope: std::cell::Cell<usize>,
     pub name: &'static str,
-    pub cached: std::cell::Cell<(usize, usize, usize)>,
+}
+
+impl PropSite {
+    pub fn new(name: &'static str) -> PropSite {
+        PropSite { shape: Default::default(), slot: Default::default(), scope: Default::default(), wshape: Default::default(), wslot: Default::default(), wscope: Default::default(), name }
+    }
+}
+
+pub const PROPSITE_SHAPE: i32 = 0;
+pub const PROPSITE_SLOT: i32 = 8;
+pub const PROPSITE_SCOPE: i32 = 16;
+pub const PROPSITE_WSHAPE: i32 = 24;
+pub const PROPSITE_WSLOT: i32 = 32;
+pub const PROPSITE_WSCOPE: i32 = 40;
+
+/// The words generated code compares: the object's shape pointer (first
+/// word of its `Props`), and the frame's `class` field.
+unsafe fn shape_key(o: &Obj) -> Option<usize> {
+    let p = o.props.as_ptr();
+    (*p).shape().shared.then(|| *(p as *const usize))
+}
+
+unsafe fn scope_key(f: &Frame) -> usize {
+    *(std::ptr::addr_of!(f.class) as *const usize)
 }
 
 pub unsafe extern "C" fn rt_prop_read(c: *mut Cx, obj: *const Value, site: *const PropSite, dst: *mut Value) -> u64 {
     let (it, f) = cx(c);
     let site = &*site;
     if let Value::Object(o) = &*obj {
-        let scope = f.class.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize);
-        let class = Rc::as_ptr(&o.class) as usize;
-        let (cc, cs, idx) = site.cached.get();
-        if cc == class && cs == scope {
-            if let Some((k, v)) = o.props.borrow().get_index(idx) {
-                if &**k == site.name {
-                    put(dst, v.deref());
-                    return 0;
-                }
-            }
-        }
-        // Miss: cache only plain visible, present properties (no __get path).
+        // Cache only plain visible, present properties (no __get path).
         if it.prop_visible(f, o, site.name) {
-            if let Some((i, _, v)) = o.props.borrow().get_full(site.name) {
-                site.cached.set((class, scope, i));
+            let props = o.props.borrow();
+            if let Some((i, _, v)) = props.get_full(site.name) {
+                if !matches!(v, Value::Ref(_)) {
+                    if let Some(k) = shape_key(o) {
+                        site.shape.set(k);
+                        site.slot.set(i);
+                        site.scope.set(scope_key(f));
+                    }
+                }
                 put(dst, v.deref());
                 return 0;
             }
@@ -673,6 +703,38 @@ pub unsafe extern "C" fn rt_prop_read(c: *mut Cx, obj: *const Value, site: *cons
     }
     let name = site.name;
     rt_prop_get(c, obj, name.as_ptr(), name.len() as u64, dst)
+}
+
+/// `$obj->name = val` miss path. `val` is consumed; a copy goes to `dst`.
+pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *const PropSite, val: *mut Value, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    let site = &*site;
+    let v = take(val);
+    let Value::Object(o) = &*obj else {
+        let e = it.error("Error", &format!("Attempt to assign property \"{}\" on {}", site.name, (*obj).type_name()));
+        *it.pending.borrow_mut() = Some(e);
+        return 1;
+    };
+    let r = it.set_prop(f, o, site.name, v.clone());
+    if r.is_ok() {
+        let plain = match o.class.find_prop(site.name) {
+            Some(d) => d.ty.is_none() && !d.readonly && it.member_visible(f.class.as_deref(), d.vis, &d.declaring),
+            None => true,
+        };
+        if plain {
+            let props = o.props.borrow();
+            if let Some((i, _, cur)) = props.get_full(site.name) {
+                if !matches!(cur, Value::Ref(_)) {
+                    if let Some(k) = shape_key(o) {
+                        site.wshape.set(k);
+                        site.wslot.set(i);
+                        site.wscope.set(scope_key(f));
+                    }
+                }
+            }
+        }
+    }
+    status(it, r, |_| put(dst, v))
 }
 
 fn place_for(root_obj: Option<Rc<Obj>>, name: &'static str, path: Vec<Option<Key>>) -> crate::expr::Place {
