@@ -84,8 +84,12 @@ pub fn guarded(it: &Interp, name: &str, f: impl FnOnce() -> R<Value>) -> R<Value
 /// Extensions phpx implements (enough for feature checks to pass).
 pub const EXTENSIONS: &[&str] = &["Core", "date", "libxml", "pcre", "zlib", "ctype", "dom", "filter", "hash", "json", "mbstring", "SPL", "PDO", "pdo_mysql", "random", "Reflection", "standard", "tokenizer", "xml", "xmlwriter"];
 
+/// When the first interpreter started (gc_status()'s application_time).
+static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 /// All built-in functions.
 pub fn table() -> HashMap<&'static str, BuiltinFn> {
+    PROCESS_START.get_or_init(std::time::Instant::now);
     let mut t: HashMap<&'static str, BuiltinFn> = HashMap::new();
     register(&mut t);
     crate::strings::register(&mut t);
@@ -762,9 +766,19 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("gc_status", |_, _, _| {
         let (runs, collected, threshold, roots) = crate::gc::status();
         let mut m = PhpArray::new();
-        for (k, v) in [("runs", runs as i64), ("collected", collected as i64), ("threshold", threshold as i64), ("roots", roots as i64)] {
-            m.insert(Key::Str(value::pstr(k)), Value::Int(v));
-        }
+        let mut put = |k: &str, v: Value| m.insert(Key::Str(value::pstr(k)), v);
+        put("running", Value::Bool(false));
+        put("protected", Value::Bool(false));
+        put("full", Value::Bool(false));
+        put("runs", Value::Int(runs as i64));
+        put("collected", Value::Int(collected as i64));
+        put("threshold", Value::Int(threshold as i64));
+        put("buffer_size", Value::Int(16384));
+        put("roots", Value::Int(roots as i64));
+        put("application_time", Value::Float(PROCESS_START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64()));
+        put("collector_time", Value::Float(0.0));
+        put("destructor_time", Value::Float(0.0));
+        put("free_time", Value::Float(0.0));
         Ok(Value::array(m))
     });
     t.insert("getenv", |it, _, a| {
