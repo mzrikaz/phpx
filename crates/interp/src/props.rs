@@ -36,6 +36,10 @@ pub struct Shape {
     /// again, as in PHP). Later names are dynamic.
     declared: usize,
     transitions: RefCell<FxHashMap<Rc<str>, Rc<Shape>>>,
+    /// Declared slots emptied by `unset()` (private shapes only): unlike
+    /// never-initialized typed properties, these reach __get/__set/__isset
+    /// (PHP's IS_PROP_UNINIT flag, inverted).
+    unset: Vec<u32>,
 }
 
 /// Beyond this many properties, or this many distinct successor shapes,
@@ -51,7 +55,7 @@ impl Shape {
     pub fn new(names: Vec<Rc<str>>, declared: usize, shared: bool) -> Shape {
         let index = names.iter().enumerate().map(|(i, n)| (n.clone(), i as u32)).collect();
         let hidden = names.iter().any(|n| n.starts_with(HIDDEN_PREFIX));
-        Shape { names, index, hidden, declared, shared, transitions: RefCell::new(FxHashMap::default()) }
+        Shape { names, index, hidden, declared, shared, transitions: RefCell::new(FxHashMap::default()), unset: vec![] }
     }
 
     /// Shape for a class's declared properties (lives with the class).
@@ -93,7 +97,9 @@ impl Shape {
     }
 
     fn private_copy(&self) -> Shape {
-        Shape::new(self.names.clone(), self.declared, false)
+        let mut s = Shape::new(self.names.clone(), self.declared, false);
+        s.unset = self.unset.clone();
+        s
     }
 }
 
@@ -337,11 +343,41 @@ impl Props {
         self.vals[i].get_or_insert(Value::Null)
     }
 
+    /// A declared property that was never initialized (typed, no default)
+    /// and not unset since: reads fail and magic methods are bypassed.
+    pub fn is_uninit(&self, name: &str) -> bool {
+        self.shape.slot(name).is_some_and(|i| {
+            i < self.shape.declared && self.vals[i].is_none() && !self.shape.unset.contains(&(i as u32))
+        })
+    }
+
+    /// `unset()` of an uninitialized declared property: from now on it is
+    /// unset (magic methods apply).
+    pub fn mark_unset(&mut self, name: &str) {
+        if let Some(i) = self.shape.slot(name).filter(|&i| i < self.shape.declared) {
+            self.note_unset(i);
+        }
+    }
+
+    /// Record declared slot `i` as unset: the object moves to a private
+    /// shape carrying the mark (unset() of declared properties is rare).
+    fn note_unset(&mut self, i: usize) {
+        if self.shape.unset.contains(&(i as u32)) {
+            return;
+        }
+        let mut p = self.shape.private_copy();
+        p.unset.push(i as u32);
+        self.shape = Rc::new(p);
+    }
+
     /// `unset($o->p)`.
     pub fn shift_remove(&mut self, name: &str) -> Option<Value> {
         let i = self.shape.slot(name)?;
         let old = self.vals[i].take();
         old.as_ref()?;
+        if i < self.shape.declared {
+            self.note_unset(i);
+        }
         if i >= self.shape.declared {
             // Dynamic property: drop it from this object's shape so a later
             // assignment appends it at the end, like PHP. The object gets a
@@ -349,7 +385,9 @@ impl Props {
             let mut names = self.shape.names.clone();
             names.remove(i);
             self.vals.remove(i);
-            self.shape = Rc::new(Shape::new(names, self.shape.declared, false));
+            let mut sh = Shape::new(names, self.shape.declared, false);
+            sh.unset = self.shape.unset.clone();
+            self.shape = Rc::new(sh);
         }
         old
     }

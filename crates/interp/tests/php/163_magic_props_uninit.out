@@ -1,0 +1,55 @@
+array(1) {
+  [0]=>
+  string(1) "x"
+}
+bool(false)
+string(1) "d"
+array(1) {
+  [0]=>
+  int(1)
+}
+bool(false)
+string(3) "def"
+Typed property D::$n must not be accessed before initialization
+__get n
+int(5)
+array(1) {
+  [0]=>
+  int(1)
+}
+__isset n
+bool(true)
+__get n
+int(7)
+__set n
+__get n
+int(7)
+__unset n
+__set n
+__get n
+int(7)
+__get plain
+int(7)
+__set plain
+bool(false)
+bool(true)
+array(1) {
+  ["plain"]=>
+  NULL
+}
+__get n
+int(7)
+get x
+isset x
+string(4) "dflt"
+set y
+int(5)
+isset z
+bool(false)
+unset w
+get data
+array(0) {
+}
+load lazy
+int(42)
+int(42)

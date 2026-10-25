@@ -358,6 +358,9 @@ pub struct Interp {
     pub want_ref: Cell<Option<u32>>,
     /// Depth of the frame whose `return` yields a reference (usize::MAX: none).
     pub ref_return_depth: Cell<usize>,
+    /// Magic property methods running now: (object id, property, MAGIC_*).
+    /// PHP's guards: inside `__get('x')`, `$this->x` is a plain access.
+    pub magic_guards: RefCell<Vec<(u32, Rc<str>, u8)>>,
     /// See `file_ctx`.
     pub file_ctxs: RefCell<Vec<Option<Rc<NsCtx>>>>,
     /// Native compiler for whole functions (None when disabled).
@@ -419,6 +422,7 @@ impl Interp {
             pending: RefCell::new(None),
             want_ref: Cell::new(None),
             ref_return_depth: Cell::new(usize::MAX),
+            magic_guards: RefCell::new(Vec::new()),
             file_ctxs: RefCell::new(vec![]),
             native: RefCell::new(crate::compiler::Native::from_env()),
             decl_ctx: RefCell::new(FxHashMap::default()),

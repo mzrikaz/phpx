@@ -1435,7 +1435,7 @@ impl<'a> Lower<'a> {
                 self.b.append_block_param(merge, types::I8);
                 for x in es {
                     let t = self.alloc_temp();
-                    let found = self.quiet(x, t)?;
+                    let found = self.quiet_mode(x, t, true)?;
                     let ta = self.temp_addr(t);
                     self.clear(ta);
                     self.free.push(t);
@@ -2421,6 +2421,12 @@ impl<'a> Lower<'a> {
     /// isset/??/empty operand: writes the value (if any) into temp `t` and
     /// returns found (i8).
     fn quiet(&mut self, e: &'static Expr, t: usize) -> L<CValue> {
+        self.quiet_mode(e, t, false)
+    }
+
+    /// `quiet`; `isset_only` for isset()'s own operand, where a magic
+    /// property asks only __isset (not __get).
+    fn quiet_mode(&mut self, e: &'static Expr, t: usize, isset_only: bool) -> L<CValue> {
         match &e.kind {
             ExprKind::Var(n) => {
                 let i = *self.locals.index.get(n.as_str()).ok_or("unknown local")?;
@@ -2454,7 +2460,7 @@ impl<'a> Lower<'a> {
                     ExprKind::Prop { name, .. } => {
                         let name = self.member(name)?;
                         let (np, nl) = self.name_parts(name);
-                        self.call("rt_quiet_prop", &[self.cx, ba, np, nl, ta]).unwrap()
+                        self.call(if isset_only { "rt_isset_prop" } else { "rt_quiet_prop" }, &[self.cx, ba, np, nl, ta]).unwrap()
                     }
                     _ => unreachable!(),
                 };

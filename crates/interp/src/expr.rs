@@ -12,6 +12,13 @@ use crate::class::{StaticProp, Vis};
 use crate::interp::{slot, ClosureData, ClosureKind, Ctrl, Frame, Interp, Slot, R};
 use crate::value::{identical, Internal, Key, Obj, PhpArray, Value};
 
+/// Magic property methods, indexing MAGIC_NAMES (and keying guards).
+pub(crate) const MAGIC_GET: u8 = 0;
+pub(crate) const MAGIC_SET: u8 = 1;
+pub(crate) const MAGIC_UNSET: u8 = 2;
+pub(crate) const MAGIC_ISSET: u8 = 3;
+const MAGIC_NAMES: [&str; 4] = ["__get", "__set", "__unset", "__isset"];
+
 #[derive(Clone)]
 pub enum Root {
     Var(Slot),
@@ -1025,16 +1032,11 @@ impl Interp {
                     if let Some(v) = o.get_prop(&name) {
                         return Ok(Some(v));
                     }
-                }
-                if o.class.find_method("__isset").is_some() {
-                    if self.call_method(&o, "__isset", vec![Value::str(&name)])?.truthy() {
-                        if isset_only {
-                            return Ok(Some(Value::Bool(true)));
-                        }
-                        return Ok(Some(self.call_method(&o, "__get", vec![Value::str(&name)])?));
+                    if self.prop_uninit(&o, &name) {
+                        return Ok(None);
                     }
                 }
-                Ok(None)
+                self.magic_isset(&o, &name, isset_only)
             }
             ExprKind::StaticProp { class, name } => {
                 let cls = self.class_ref(f, class)?;
@@ -1132,7 +1134,7 @@ impl Interp {
                 if self.prop_visible(f, o, name) {
                     match o.get_prop(name) {
                         Some(v) => v,
-                        None if p.path.is_empty() && o.class.find_method("__get").is_none() => return Ok(None),
+                        None if p.path.is_empty() && (self.prop_uninit(o, name) || !self.has_magic(o, MAGIC_GET, name)) => return Ok(None),
                         None => self.get_prop(f, o, name)?,
                     }
                 } else {
@@ -1183,7 +1185,7 @@ impl Interp {
             Root::Prop(o, name) => {
                 let decl_ro = o.class.find_prop(name).is_some_and(|d| d.readonly) || o.class.is_enum();
                 let present = o.props.borrow().contains_key(&**name);
-                if !present && o.class.find_method("__get").is_some() {
+                if !present && !self.prop_uninit(o, name) && self.has_magic(o, MAGIC_GET, name) {
                     // Indirect modification through __get works only for objects.
                     match self.get_prop(f, o, name)? {
                         Value::Object(inner) => Some(Pending { obj: inner, path: p.path.clone(), value: v }),
@@ -1653,8 +1655,10 @@ impl Interp {
                             return Err(self.error("Error", &format!("Cannot unset readonly property {}::${name}", o.class.name)));
                         }
                         o.props.borrow_mut().shift_remove(&*name);
-                    } else if o.class.find_method("__unset").is_some() {
-                        self.call_method(&o, "__unset", vec![Value::str(&name)])?;
+                    } else if self.prop_visible(f, &o, &name) && self.prop_uninit(&o, &name) {
+                        o.props.borrow_mut().mark_unset(&name);
+                    } else if self.has_magic(&o, MAGIC_UNSET, &name) {
+                        self.call_magic(&o, MAGIC_UNSET, &name, None)?;
                     }
                 }
                 Ok(())
@@ -1707,6 +1711,44 @@ impl Interp {
         }
     }
 
+    /// Whether `$o->name`'s magic method of `kind` runs: defined, and not
+    /// already running for this object and property.
+    pub(crate) fn has_magic(&self, o: &Rc<Obj>, kind: u8, name: &str) -> bool {
+        o.class.find_method(MAGIC_NAMES[kind as usize]).is_some() && !self.magic_guards.borrow().iter().any(|g| g.0 == o.id && g.2 == kind && &*g.1 == name)
+    }
+
+    /// Run `$o`'s magic method of `kind` for property `name` under its guard.
+    pub(crate) fn call_magic(&self, o: &Rc<Obj>, kind: u8, name: &str, extra: Option<Value>) -> R<Value> {
+        let mut args = vec![Value::str(name)];
+        args.extend(extra);
+        self.magic_guards.borrow_mut().push((o.id, Rc::from(name), kind));
+        let r = self.call_method(o, MAGIC_NAMES[kind as usize], args);
+        let mut g = self.magic_guards.borrow_mut();
+        if let Some(i) = g.iter().rposition(|g| g.0 == o.id && g.2 == kind && &*g.1 == name) {
+            g.remove(i);
+        }
+        r
+    }
+
+    /// isset()/`??` of a missing property through __isset (then __get).
+    pub(crate) fn magic_isset(&self, o: &Rc<Obj>, name: &str, isset_only: bool) -> R<Option<Value>> {
+        if !self.has_magic(o, MAGIC_ISSET, name) || !self.call_magic(o, MAGIC_ISSET, name, None)?.truthy() {
+            return Ok(None);
+        }
+        if isset_only {
+            return Ok(Some(Value::Bool(true)));
+        }
+        if self.has_magic(o, MAGIC_GET, name) {
+            return self.call_magic(o, MAGIC_GET, name, None).map(Some);
+        }
+        Ok(o.get_prop(name))
+    }
+
+    /// `$o->name` is a declared property never initialized (and not unset).
+    pub(crate) fn prop_uninit(&self, o: &Obj, name: &str) -> bool {
+        o.props.borrow().is_uninit(name)
+    }
+
     pub fn get_prop(&self, f: &Frame, o: &Rc<Obj>, name: &str) -> R<Value> {
         let key = self.prop_key(f, o, name);
         let name = &*key;
@@ -1716,8 +1758,8 @@ impl Interp {
                 return Ok(v);
             }
         }
-        if o.class.find_method("__get").is_some() {
-            return self.call_method(o, "__get", vec![Value::str(name)]);
+        if !(visible && self.prop_uninit(o, name)) && self.has_magic(o, MAGIC_GET, name) {
+            return self.call_magic(o, MAGIC_GET, name, None);
         }
         if !visible {
             return Err(self.error("Error", &format!("Cannot access {} property {}::${name}", vis_word(o, name), o.class.name)));
@@ -1742,11 +1784,15 @@ impl Interp {
         }
         match o.class.find_prop(name).cloned() {
             Some(d) => {
-                if !self.member_visible(f.class.as_deref(), d.vis, &d.declaring) {
-                    if o.class.find_method("__set").is_some() {
-                        self.call_method(o, "__set", vec![Value::str(name), v])?;
-                        return Ok(());
-                    }
+                let visible = self.member_visible(f.class.as_deref(), d.vis, &d.declaring);
+                // An unset() declared property goes through __set, like an
+                // inaccessible one.
+                let unset = visible && !o.props.borrow().contains_key(name) && !self.prop_uninit(o, name);
+                if (!visible || unset) && self.has_magic(o, MAGIC_SET, name) {
+                    self.call_magic(o, MAGIC_SET, name, Some(v))?;
+                    return Ok(());
+                }
+                if !visible {
                     return Err(self.error("Error", &format!("Cannot modify {} property {}::${name}", vis_word(o, name), o.class.name)));
                 }
                 if d.readonly {
@@ -1784,8 +1830,8 @@ impl Interp {
             None => {
                 if o.props.borrow().contains_key(name) {
                     o.set_prop(name, v);
-                } else if o.class.find_method("__set").is_some() {
-                    self.call_method(o, "__set", vec![Value::str(name), v])?;
+                } else if self.has_magic(o, MAGIC_SET, name) {
+                    self.call_magic(o, MAGIC_SET, name, Some(v))?;
                 } else {
                     if &*o.class.lname != "stdclass" {
                         self.deprecated(&format!("Creation of dynamic property {}::${name} is deprecated", o.class.name));

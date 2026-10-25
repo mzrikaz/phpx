@@ -585,6 +585,16 @@ pub unsafe extern "C" fn rt_prop_get(c: *mut Cx, obj: *const Value, name: *const
 
 /// Quiet `$obj->name`: 1 found, 0 missing, 2 error.
 pub unsafe extern "C" fn rt_quiet_prop(c: *mut Cx, obj: *const Value, name: *const u8, len: u64, dst: *mut Value) -> u64 {
+    quiet_prop(c, obj, name, len, dst, false)
+}
+
+/// `isset($obj->name)`: like rt_quiet_prop, but a magic property only
+/// asks __isset.
+pub unsafe extern "C" fn rt_isset_prop(c: *mut Cx, obj: *const Value, name: *const u8, len: u64, dst: *mut Value) -> u64 {
+    quiet_prop(c, obj, name, len, dst, true)
+}
+
+unsafe fn quiet_prop(c: *mut Cx, obj: *const Value, name: *const u8, len: u64, dst: *mut Value, isset_only: bool) -> u64 {
     let (it, f) = cx(c);
     let name = name_of(name, len);
     let Value::Object(o) = &*obj else { return 0 };
@@ -595,24 +605,21 @@ pub unsafe extern "C" fn rt_quiet_prop(c: *mut Cx, obj: *const Value, name: *con
             put(dst, v);
             return 1;
         }
+        if it.prop_uninit(o, name) {
+            return 0;
+        }
     }
-    if o.class.find_method("__isset").is_some() {
-        let r = it.call_method(o, "__isset", vec![Value::str(name)]).and_then(|set| {
-            if set.truthy() { it.call_method(o, "__get", vec![Value::str(name)]).map(Some) } else { Ok(None) }
-        });
-        return match r {
-            Ok(Some(v)) => {
-                put(dst, v);
-                1
-            }
-            Ok(None) => 0,
-            Err(e) => {
-                *it.pending.borrow_mut() = Some(e);
-                2
-            }
-        };
+    match it.magic_isset(o, name, isset_only) {
+        Ok(Some(v)) => {
+            put(dst, v);
+            1
+        }
+        Ok(None) => 0,
+        Err(e) => {
+            *it.pending.borrow_mut() = Some(e);
+            2
+        }
     }
-    0
 }
 
 pub unsafe extern "C" fn rt_const(c: *mut Cx, name: *const String, dst: *mut Value) -> u64 {
@@ -965,8 +972,10 @@ pub unsafe extern "C" fn rt_unset_place(c: *mut Cx, root: *mut Value, name: *con
                         return Err(it.error("Error", &format!("Cannot unset readonly property {}::${pname}", o.class.name)));
                     }
                     o.props.borrow_mut().shift_remove(pname);
-                } else if o.class.find_method("__unset").is_some() {
-                    it.call_method(o, "__unset", vec![Value::str(pname)])?;
+                } else if it.prop_visible(f, o, pname) && it.prop_uninit(o, pname) {
+                    o.props.borrow_mut().mark_unset(pname);
+                } else if it.has_magic(o, crate::expr::MAGIC_UNSET, pname) {
+                    it.call_magic(o, crate::expr::MAGIC_UNSET, pname, None)?;
                 }
                 return Ok(());
             }
