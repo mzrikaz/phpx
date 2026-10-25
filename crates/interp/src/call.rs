@@ -276,6 +276,15 @@ impl Interp {
     // ---- arguments ---------------------------------------------------------
 
     pub fn eval_args(&self, f: &mut Frame, args: &'static [ast::Arg]) -> R<(Vec<Value>, Vec<(Rc<str>, Value)>)> {
+        // The call keeps its own position: calls nested in the arguments
+        // move it while they run.
+        let at = self.pos.get();
+        let r = self.eval_args_inner(f, args);
+        self.pos.set(at);
+        r
+    }
+
+    fn eval_args_inner(&self, f: &mut Frame, args: &'static [ast::Arg]) -> R<(Vec<Value>, Vec<(Rc<str>, Value)>)> {
         let mut pos = vec![];
         let mut named = vec![];
         for a in args {
@@ -304,6 +313,15 @@ impl Interp {
         Ok((pos, named))
     }
 
+    /// Diagnostics from here on point at `off` (PHP attributes each
+    /// operation in a multi-line statement to its own line).
+    #[inline]
+    pub(crate) fn mark(&self, f: &Frame, off: u32) {
+        if f.ctx.file != crate::interp::PRELUDE_FILE {
+            self.pos.set(crate::interp::Pos { file: f.ctx.file as u32, off });
+        }
+    }
+
     /// Like eval_args, but arguments for `&$x` parameters are passed as the
     /// caller's cell (`Value::Ref`).
     pub fn eval_args_for(
@@ -320,6 +338,7 @@ impl Interp {
         if args.iter().any(|a| a.spread) {
             return self.eval_args(f, args);
         }
+        let at = self.pos.get();
         let mut pos = vec![];
         let mut named = vec![];
         for a in args {
@@ -333,6 +352,7 @@ impl Interp {
                 None => pos.push(v),
             }
         }
+        self.pos.set(at);
         Ok((pos, named))
     }
 

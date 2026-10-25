@@ -106,7 +106,10 @@ impl Interp {
             ExprKind::Null => Ok(Value::Null),
             ExprKind::Var(n) => match f.vars.get_hinted(n, &e.hint) {
                 Some(s) => Ok(s.borrow().clone()),
-                None => self.read_var(f, n),
+                None => {
+                    self.mark(f, e.span.start);
+                    self.read_var(f, n)
+                }
             },
             // Expressions nested deeper than the stack allows (e.g. a chain
             // of 100k `+`): an error, not a crash.
@@ -343,14 +346,21 @@ impl Interp {
                 self.static_prop_slot(&sp)?
             }
             StaticCall { class, name, args } => {
+                if let MemberName::Ident(i) = name {
+                    self.mark(f, i.span.start);
+                }
                 let cls = self.class_ref(f, class)?;
                 let name = self.member_name(f, name)?;
                 let params = cls.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m));
                 let (pos, named) = self.eval_args_for(f, args, params)?;
                 self.static_call(f, class, cls, &name, pos, named)?
             }
-            ClassConst { class, name } => self.class_const(f, class, &name.name)?,
+            ClassConst { class, name } => {
+                self.mark(f, e.span.start);
+                self.class_const(f, class, &name.name)?
+            }
             New { class, args } => {
+                self.mark(f, e.span.start);
                 let cls = match class {
                     ast::ClassRef::Anonymous(c) => self.declare_anon_class(f, c)?,
                     other => self.class_ref(f, other)?,
@@ -820,7 +830,10 @@ impl Interp {
             ExprKind::MethodCall { object, name, args, nullsafe } => self.chain_method(f, object, name, args, *nullsafe),
             ExprKind::Index { base, index } => self.chain_index(f, base, index.as_deref()),
             ExprKind::Call { callee, args } => match &callee.kind {
-                ExprKind::Name(n) => self.call_named(f, n, args).map(Some),
+                ExprKind::Name(n) => {
+                    self.mark(f, callee.span.start);
+                    self.call_named(f, n, args).map(Some)
+                }
                 _ => self.chain_call(f, callee, args),
             },
             _ => self.eval(f, e).map(Some),
@@ -856,6 +869,9 @@ impl Interp {
         if nullsafe && base.is_null() {
             return Ok(None);
         }
+        if let MemberName::Ident(i) = name {
+            self.mark(f, i.span.start);
+        }
         let name = self.member_name(f, name)?;
         let params = match &base {
             Value::Object(o) => o.class.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m)),
@@ -879,6 +895,7 @@ impl Interp {
         let Some(b) = self.chain_base(f, base)? else { return Ok(None) };
         let Some(index) = index else { return Err(self.error("Error", "Cannot use [] for reading")) };
         let k = self.eval(f, index)?;
+        self.mark(f, index.span.start);
         self.read_index(&b, &k).map(Some)
     }
 

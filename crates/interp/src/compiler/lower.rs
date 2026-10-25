@@ -86,6 +86,8 @@ pub struct Lower<'a> {
     /// Inside a construct an OSR entry can't jump into (foreach holds an
     /// iterator, switch a subject, try a handler).
     no_osr: usize,
+    /// Start of the statement being lowered.
+    stmt_start: u32,
 }
 
 /// A property or array-element argument (`sort($this->items)`): passed
@@ -206,6 +208,7 @@ impl<'a> Lower<'a> {
             osr_target: None,
             osr_entry: None,
             no_osr: 0,
+            stmt_start: u32::MAX,
         }
     }
 
@@ -555,7 +558,18 @@ impl<'a> Lower<'a> {
     pub fn stmt(&mut self, s: &'static Stmt) -> L<()> {
         self.boundary_check();
         self.set_pos(s.span.start);
+        self.stmt_start = s.span.start;
         self.stmt_body(s)
+    }
+
+    /// Before a call: point diagnostics and the call's stack frame at
+    /// `off` (PHP's line for it), unless the statement's own position
+    /// already says so and no nested call can have moved it.
+    fn mark_call(&mut self, off: u32, args: &[ast::Arg]) {
+        let simple = |e: &Expr| matches!(e.kind, ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_) | ExprKind::Null | ExprKind::Var(_));
+        if off != self.stmt_start || !args.iter().all(|a| simple(&a.value)) {
+            self.set_pos(off);
+        }
     }
 
     /// Queued destructors only (after releasing a temporary object).
@@ -1501,6 +1515,9 @@ impl<'a> Lower<'a> {
                 r
             }
             ClassConst { class, name } => {
+                if e.span.start != self.stmt_start {
+                    self.set_pos(e.span.start);
+                }
                 let cr = self.iconst(class as *const ClassRef as i64);
                 let (np, nl) = self.name_parts(&name.name);
                 self.helper_value("rt_class_const", |l| vec![l.cx, cr, np, nl])?
@@ -1535,6 +1552,7 @@ impl<'a> Lower<'a> {
                 let sp = &*site as *const CallSite as i64;
                 self.sites.push(site);
                 let (aa, la, n_) = self.args(args, ByRef::for_function(n))?;
+                self.mark_call(callee.span.start, args);
                 let sp = self.iconst(sp);
                 let meta = self.arg_meta(args);
                 let plain = args.iter().all(|a| !a.spread && a.name.is_none());
@@ -1592,8 +1610,12 @@ impl<'a> Lower<'a> {
                 self.release(o);
                 r
             }
-            MethodCall { object, name, args, nullsafe } => {
-                let name = self.member(name)?;
+            MethodCall { object, name: mname, args, nullsafe } => {
+                let name = self.member(mname)?;
+                let name_off = match mname {
+                    MemberName::Ident(i) => i.span.start,
+                    MemberName::Dynamic(d) => d.span.start,
+                };
                 let o = self.expr(object)?;
                 let o = self.own(o);
                 let o = self.materialize(o);
@@ -1606,6 +1628,7 @@ impl<'a> Lower<'a> {
                 let r = if *nullsafe {
                     self.nullsafe(oa, |l| {
                         let (aa, la, n_) = l.args(args, ByRef::Unknown)?;
+                        l.mark_call(name_off, args);
                         let sp = l.iconst(sp);
                         let meta = l.arg_meta(args);
                         let r = l.helper_value("rt_method_call", |l| vec![l.cx, oa, sp, aa, n_, la, meta])?;
@@ -1614,6 +1637,7 @@ impl<'a> Lower<'a> {
                     })?
                 } else {
                     let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
+                    self.mark_call(name_off, args);
                     let sp = self.iconst(sp);
                     let meta = self.arg_meta(args);
                     let r = match super::layout().filter(|_| super::inline_rc() && args.iter().all(|a| !a.spread && a.name.is_none())) {
@@ -1632,14 +1656,19 @@ impl<'a> Lower<'a> {
                 }
                 r
             }
-            StaticCall { class, name, args } => {
-                let name = self.member(name)?;
+            StaticCall { class, name: sname, args } => {
+                let name = self.member(sname)?;
+                let name_off = match sname {
+                    MemberName::Ident(i) => i.span.start,
+                    MemberName::Dynamic(d) => d.span.start,
+                };
                 let cr = self.iconst(class as *const ClassRef as i64);
                 let lname: &'static str = Box::leak(name.to_ascii_lowercase().into_boxed_str());
                 let site = Box::new(super::rt::MethodSite::new(name, lname));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
                 let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
+                self.mark_call(name_off, args);
                 let meta = self.arg_meta(args);
                 let r = match super::layout().filter(|_| args.iter().all(|a| !a.spread && a.name.is_none()) && matches!(class, ClassRef::Name(_))) {
                     Some(lay) => self.direct_static_call(lay, cr, sp, aa, n_, la, meta),
@@ -1649,15 +1678,23 @@ impl<'a> Lower<'a> {
                 r
             }
             New { class, args } => {
+                // `new` reports at its own line (the object exists before
+                // its arguments are evaluated).
+                if e.span.start != self.stmt_start {
+                    self.set_pos(e.span.start);
+                }
                 let cr = self.iconst(class as *const ClassRef as i64);
                 let site = Box::new(super::rt::MethodSite::new("__construct", "__construct"));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
                 let plain = matches!(class, ClassRef::Name(_)) && args.iter().all(|a| !a.spread && a.name.is_none());
                 match super::layout().filter(|_| plain && super::inline_rc()) {
-                    Some(lay) => self.new_native(lay, cr, sp, args)?,
+                    Some(lay) => self.new_native(lay, cr, sp, args, e.span.start)?,
                     None => {
                         let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
+                        if !args.is_empty() {
+                            self.set_pos(e.span.start);
+                        }
                         let meta = self.arg_meta(args);
                         let r = self.helper_value("rt_new", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?;
                         self.write_back(la, args.len())?;
@@ -1778,7 +1815,7 @@ impl<'a> Lower<'a> {
     /// `new C(...)`: the object first (PHP evaluates the arguments after
     /// creating it), then the constructor called directly like a method;
     /// `rt_new` handles what the site can't cache.
-    fn new_native(&mut self, lay: super::Layout, cr: CValue, sp: CValue, args: &'static [ast::Arg]) -> L<Op> {
+    fn new_native(&mut self, lay: super::Layout, cr: CValue, sp: CValue, args: &'static [ast::Arg], off: u32) -> L<Op> {
         let t = self.alloc_temp();
         let ta = self.temp_addr(t);
         let st = self.call("rt_new_object", &[self.cx, cr, sp, ta]).unwrap();
@@ -1825,6 +1862,10 @@ impl<'a> Lower<'a> {
         self.b.ins().jump(done, &[]);
 
         self.b.switch_to_block(slow_b);
+        // Created here, after the arguments: back at the `new`'s line.
+        if off != self.stmt_start || !args.is_empty() {
+            self.set_pos(off);
+        }
         let meta = self.iconst(0);
         self.call_checked("rt_new", &[self.cx, cr, sp, aa, n, la, meta, ta]);
         self.b.ins().jump(done, &[]);
