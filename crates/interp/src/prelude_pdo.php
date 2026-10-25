@@ -112,6 +112,16 @@ class PDO
     const PGSQL_TRANSACTION_INERROR = 3;
     const PGSQL_TRANSACTION_UNKNOWN = 4;
 
+    public static function connect(string $dsn, ?string $username = null, #[\SensitiveParameter] ?string $password = null, ?array $options = null): static
+    {
+        $driver = strtolower(strstr($dsn, ':', true) ?: '');
+        $class = match ($driver) {
+            'mysql' => \Pdo\Mysql::class,
+            default => static::class,
+        };
+        return new $class($dsn, $username, $password, $options);
+    }
+
     public function __sleep(): array { throw new PDOException('You cannot serialize or unserialize PDO instances'); }
     public function __wakeup(): void { throw new PDOException('You cannot serialize or unserialize PDO instances'); }
 }
@@ -159,4 +169,31 @@ class PDOStatement implements IteratorAggregate
 final class PDORow
 {
     public string $queryString = '';
+}
+
+namespace Pdo {
+    class Mysql extends \PDO
+    {
+        const ATTR_USE_BUFFERED_QUERY = 1000;
+        const ATTR_LOCAL_INFILE = 1001;
+        const ATTR_INIT_COMMAND = 1002;
+        const ATTR_COMPRESS = 1003;
+        const ATTR_DIRECT_QUERY = 20;
+        const ATTR_FOUND_ROWS = 1004;
+        const ATTR_IGNORE_SPACE = 1005;
+        const ATTR_SSL_KEY = 1006;
+        const ATTR_SSL_CERT = 1007;
+        const ATTR_SSL_CA = 1008;
+        const ATTR_SSL_CAPATH = 1009;
+        const ATTR_SSL_CIPHER = 1010;
+        const ATTR_SERVER_PUBLIC_KEY = 1011;
+        const ATTR_MULTI_STATEMENTS = 1012;
+        const ATTR_SSL_VERIFY_SERVER_CERT = 1013;
+        const ATTR_LOCAL_INFILE_DIRECTORY = 1014;
+
+        public function getWarningCount(): int
+        {
+            return (int) $this->query('SELECT @@warning_count')->fetchColumn();
+        }
+    }
 }
