@@ -20,12 +20,57 @@ enum Backend {
     Output,
 }
 
+/// Read-ahead for file streams: a buffer and a cursor into it (consuming
+/// from the front doesn't move the rest).
+#[derive(Default)]
+struct ReadBuf {
+    buf: Vec<u8>,
+    at: usize,
+}
+
+impl ReadBuf {
+    fn len(&self) -> usize {
+        self.buf.len() - self.at
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn clear(&mut self) {
+        self.buf.clear();
+        self.at = 0;
+    }
+
+    fn bytes(&self) -> &[u8] {
+        &self.buf[self.at..]
+    }
+
+    fn extend_from_slice(&mut self, b: &[u8]) {
+        if self.at > 0 && self.at == self.buf.len() {
+            self.clear();
+        }
+        self.buf.extend_from_slice(b);
+    }
+
+    /// Take the next `n` buffered bytes.
+    fn take(&mut self, n: usize) -> Vec<u8> {
+        let n = n.min(self.len());
+        let out = self.buf[self.at..self.at + n].to_vec();
+        self.at += n;
+        if self.at == self.buf.len() {
+            self.clear();
+        }
+        out
+    }
+}
+
 pub struct Stream {
     backend: Backend,
     /// Position for memory streams.
     pos: usize,
     /// Read-ahead buffer for files (fgets reads lines).
-    rbuf: Vec<u8>,
+    rbuf: ReadBuf,
     eof: bool,
     mode: String,
     uri: String,
@@ -61,7 +106,7 @@ fn with_stream<T>(it: &Interp, v: &Value, fname: &str, g: impl FnOnce(&mut Strea
 
 impl Stream {
     fn new(backend: Backend, mode: &str, uri: &str, wrapper: &'static str) -> Stream {
-        Stream { backend, pos: 0, rbuf: vec![], eof: false, mode: mode.to_string(), uri: uri.to_string(), wrapper, append: mode.starts_with('a') }
+        Stream { backend, pos: 0, rbuf: ReadBuf::default(), eof: false, mode: mode.to_string(), uri: uri.to_string(), wrapper, append: mode.starts_with('a') }
     }
 
     fn fill(&mut self, want: usize) -> usize {
@@ -87,8 +132,7 @@ impl Stream {
             }
             Backend::File(_) => {
                 self.fill(n);
-                let k = n.min(self.rbuf.len());
-                self.rbuf.drain(..k).collect()
+                self.rbuf.take(n)
             }
             Backend::Stdin => {
                 it.flush();
@@ -107,6 +151,35 @@ impl Stream {
 
     fn read_line(&mut self, max: Option<usize>, it: &Interp) -> Option<Vec<u8>> {
         let mut out = vec![];
+        if let Backend::File(_) = self.backend {
+            // Files: find the newline in the read-ahead buffer, a chunk at a
+            // time.
+            loop {
+                let room = max.map_or(usize::MAX, |m| m.saturating_sub(out.len()));
+                if room == 0 {
+                    break;
+                }
+                if self.rbuf.is_empty() && self.fill(1) == 0 {
+                    break;
+                }
+                let avail = &self.rbuf.bytes()[..self.rbuf.len().min(room)];
+                match memchr::memchr(b'\n', avail) {
+                    Some(i) => {
+                        out.extend(self.rbuf.take(i + 1));
+                        break;
+                    }
+                    None => {
+                        let n = avail.len();
+                        out.extend(self.rbuf.take(n));
+                    }
+                }
+            }
+            // PHP reports EOF once a read hits the end.
+            if self.fill(1) == 0 {
+                self.eof = true;
+            }
+            return (!out.is_empty()).then_some(out);
+        }
         loop {
             if max.is_some_and(|m| out.len() >= m) {
                 break;
