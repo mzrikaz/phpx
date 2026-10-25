@@ -1389,13 +1389,16 @@ impl<'a> Lower<'a> {
             }
             Call { callee, args } => {
                 let ExprKind::Name(n) = &callee.kind else { unreachable!() };
-                let site = Box::new(CallSite { name: n, cached: Default::default(), builtin: Default::default(), jit: Default::default(), frame: Default::default() });
+                let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name: n, cached: Default::default(), builtin: Default::default(), jit: Default::default() });
                 let sp = &*site as *const CallSite as i64;
                 self.sites.push(site);
                 let (aa, la, n_) = self.args(args)?;
                 let sp = self.iconst(sp);
                 let meta = self.arg_meta(args);
-                self.helper_value("rt_call", |l| vec![l.cx, sp, aa, n_, la, meta])?
+                match super::layout().filter(|_| args.iter().all(|a| !a.spread && a.name.is_none())) {
+                    Some(lay) => self.direct_call(lay, sp, aa, n_, la, meta),
+                    None => self.helper_value("rt_call", |l| vec![l.cx, sp, aa, n_, la, meta])?,
+                }
             }
             MethodCall { object, name: MemberName::Dynamic(ne), args, nullsafe: false } => {
                 let o = self.expr(object)?;
@@ -1474,6 +1477,73 @@ impl<'a> Lower<'a> {
     }
 
     /// Call `helper(args..., dst)` with a fresh temp as dst.
+    /// `foo(...)`: once the site has cached a compiled target, call its entry
+    /// directly (with the site's frame) instead of going through `rt_call`;
+    /// `rt_call` handles the first calls, recursion (frame busy) and
+    /// declined bindings (arguments untouched).
+    fn direct_call(&mut self, lay: super::Layout, sp: CValue, aa: CValue, n: CValue, la: CValue, meta: CValue) -> Op {
+        let t = self.alloc_temp();
+        let (c1, c2, fast, chk, slow, done) =
+            (self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block());
+        let entry = self.b.ins().load(types::I64, flags(), sp, lay.site_direct);
+        self.b.ins().brif(entry, c1, &[], slow, &[]);
+        self.b.switch_to_block(c1);
+        let frame = self.b.ins().load(types::I64, flags(), sp, lay.site_frame);
+        self.b.ins().brif(frame, c2, &[], slow, &[]);
+        self.b.switch_to_block(c2);
+        let busy = self.b.ins().load(types::I8, flags(), sp, lay.site_busy);
+        self.b.ins().brif(busy, slow, &[], fast, &[]);
+
+        self.b.switch_to_block(fast);
+        let one = self.b.ins().iconst(types::I8, 1);
+        self.b.ins().store(flags(), one, sp, lay.site_busy);
+        // The callee's Cx: same interpreter, the site's frame.
+        let it = self.b.ins().load(types::I64, flags(), self.cx, 0);
+        let cx2 = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 16, 3));
+        self.b.ins().stack_store(types::I64, it, cx2, 0);
+        self.b.ins().stack_store(types::I64, frame, cx2, lay.cx_frame);
+        let cx2a = self.b.ins().stack_addr(types::I64, cx2, 0);
+        let pa = self.iconst(self.pos_addr);
+        let saved = self.b.ins().load(types::I64, flags(), pa, 0);
+        let mut sig = self.module.make_signature();
+        for _ in 0..4 {
+            sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I64));
+        }
+        sig.returns.push(cranelift_codegen::ir::AbiParam::new(types::I64));
+        let sigref = self.b.import_signature(sig);
+        let ta = self.temp_addr(t);
+        let inst = self.b.ins().call_indirect(sigref, entry, &[cx2a, aa, n, ta]);
+        let st = self.b.inst_results(inst)[0];
+        self.b.ins().store(flags(), saved, pa, 0);
+        let zero = self.b.ins().iconst(types::I8, 0);
+        self.b.ins().store(flags(), zero, sp, lay.site_busy);
+        // Plain functions leave the frame untouched unless they ran
+        // something that needed interpreter variables.
+        let vl = self.b.ins().load(types::I64, flags(), frame, lay.frame_vars_len);
+        let al = self.b.ins().load(types::I64, flags(), frame, lay.frame_args_len);
+        let used = self.b.ins().bor(vl, al);
+        let (reset, after) = (self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(used, reset, &[], after, &[]);
+        self.b.set_cold_block(reset);
+        self.b.switch_to_block(reset);
+        self.call("rt_site_reset", &[frame]);
+        self.b.ins().jump(after, &[]);
+        self.b.switch_to_block(after);
+        self.b.ins().brif(st, chk, &[], done, &[]);
+        self.b.switch_to_block(chk);
+        // 2: declined before binding (try the general path); else an error.
+        let declined = self.b.ins().icmp_imm_s(IntCC::Equal, st, 2);
+        self.b.ins().brif(declined, slow, &[], self.unwind, &[]);
+
+        self.b.switch_to_block(slow);
+        let ta = self.temp_addr(t);
+        self.call_checked("rt_call", &[self.cx, sp, aa, n, la, meta, ta]);
+        self.b.ins().jump(done, &[]);
+        self.b.switch_to_block(done);
+        let ta = self.temp_addr(t);
+        Op::Ptr(ta, Some(t))
+    }
+
     fn helper_value(&mut self, name: &'static str, args: impl FnOnce(&mut Self) -> Vec<CValue>) -> L<Op> {
         let mut a = args(self);
         let t = self.alloc_temp();
@@ -1538,7 +1608,7 @@ impl<'a> Lower<'a> {
         self.b.ins().brif(shadowed, slow, &[], fast, &[]);
         // Generic call: also the fallback for the cases the fast code skips.
         let generic = |l: &mut Self| -> L<()> {
-            let site = Box::new(CallSite { name, cached: Default::default(), builtin: Default::default(), jit: Default::default(), frame: Default::default() });
+            let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name, cached: Default::default(), builtin: Default::default(), jit: Default::default() });
             let sp = &*site as *const CallSite as i64;
             l.sites.push(site);
             let (aa, la, n_) = l.args(args)?;
@@ -1584,7 +1654,7 @@ impl<'a> Lower<'a> {
                 // Other types: the real built-in (errors, Countable, ...)
                 // with the value already evaluated.
                 self.b.switch_to_block(no);
-                let site = Box::new(CallSite { name, cached: Default::default(), builtin: Default::default(), jit: Default::default(), frame: Default::default() });
+                let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name, cached: Default::default(), builtin: Default::default(), jit: Default::default() });
                 let sp = &*site as *const CallSite as i64;
                 self.sites.push(site);
                 let (slot, ids) = self.alloc_array(1);

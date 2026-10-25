@@ -1023,7 +1023,16 @@ unsafe fn with_refs(
 
 /// A `foo(...)` call site. After the first native call it remembers the
 /// target (functions can't be redeclared), skipping lookups.
+/// `#[repr(C)]`: generated code reads `direct` and `frame` to call the
+/// target without going through `rt_call`.
+#[repr(C)]
 pub struct CallSite {
+    /// The cached native entry once compiled code may call it directly
+    /// (0 until then).
+    pub direct: std::cell::Cell<usize>,
+    /// A frame reused by calls from this site (rebuilding one per call is
+    /// a large part of call overhead); recursion falls back to a fresh one.
+    pub frame: SiteFrame,
     pub name: &'static str,
     /// (entry, function). Plain pointer: functions are never freed.
     pub cached: std::cell::Cell<Option<(crate::compiler::Entry, *const crate::interp::UserFn)>>,
@@ -1031,9 +1040,6 @@ pub struct CallSite {
     pub builtin: std::cell::Cell<Option<crate::interp::BuiltinFn>>,
     /// The numeric JIT's entry for the argument types last seen here.
     pub jit: std::cell::Cell<Option<JitSite>>,
-    /// A frame reused by calls from this site (rebuilding one per call is
-    /// a large part of call overhead); recursion falls back to a fresh one.
-    pub frame: SiteFrame,
 }
 
 #[derive(Clone, Copy)]
@@ -1081,11 +1087,19 @@ unsafe fn jit_site_call(site: &CallSite, args: *mut Value, n: u64, dst: *mut Val
     Some(0)
 }
 
-/// A reusable callee frame, lent out while not busy.
+/// A reusable callee frame, lent out while not busy. `#[repr(C)]`: the
+/// frame pointer (0 = none yet) and busy flag are read by generated code.
 #[derive(Default)]
+#[repr(C)]
 pub struct SiteFrame {
     frame: std::cell::UnsafeCell<Option<Box<Frame>>>,
     busy: std::cell::Cell<bool>,
+}
+
+/// After a direct call from generated code: ready the site frame for the
+/// next call.
+pub unsafe extern "C" fn rt_site_reset(frame: *mut Frame) {
+    (*frame).reset_after_call();
 }
 
 impl SiteFrame {
@@ -1296,6 +1310,11 @@ unsafe fn fast_user_call(it: &Interp, u: &Rc<crate::interp::UserFn>, args: *mut 
     if !jit_may_take {
         site.cached.set(Some((entry, Rc::as_ptr(u))));
         site.frame.invalidate();
+        // Direct calls from compiled code, unless binding would always
+        // decline (by-reference or variadic parameters).
+        if u.decl.params.iter().all(|p| !p.by_ref && !p.variadic) {
+            site.direct.set(entry as usize);
+        }
     }
     let mut frame = Frame::for_call(u.ctx.clone(), u.name.clone(), fn_id);
     enter(it, entry, &mut frame, args, n, dst)
@@ -2149,4 +2168,9 @@ pub unsafe extern "C" fn rt_unhandled_match(c: *mut Cx, v: *const Value) -> u64 
     };
     *it.pending.borrow_mut() = Some(it.error("UnhandledMatchError", &format!("Unhandled match case {repr}")));
     1
+}
+
+impl SiteFrame {
+    pub const FRAME: usize = std::mem::offset_of!(SiteFrame, frame);
+    pub const BUSY: usize = std::mem::offset_of!(SiteFrame, busy);
 }

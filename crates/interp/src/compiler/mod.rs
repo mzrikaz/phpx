@@ -68,6 +68,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_load_locals: 3 => true,
     rt_bind_args: 5 => true,
     rt_check_ret: 3 => true,
+    rt_site_reset: 1 => false,
     rt_store_locals: 3 => false,
     rt_bind_slots: 4 => true,
     rt_unbind_slots: 2 => false,
@@ -143,6 +144,14 @@ pub struct Layout {
     pub frame_class: i32,
     /// `Frame::this` (an `Option<Rc<Obj>>`: the Rc's inner pointer or 0).
     pub frame_this: i32,
+    /// `CallSite::direct`, its frame pointer and busy flag.
+    pub site_direct: i32,
+    pub site_frame: i32,
+    pub site_busy: i32,
+    /// Frame variable and argument counts (non-zero: the frame needs a
+    /// reset after a direct call).
+    pub frame_vars_len: i32,
+    pub frame_args_len: i32,
 }
 
 pub fn layout() -> Option<Layout> {
@@ -172,7 +181,11 @@ fn probe_layout() -> Option<Layout> {
     // RefCell<Props>: where the value sits inside the cell.
     let cell = std::cell::RefCell::new(crate::props::Props::default());
     let in_cell = cell.as_ptr() as usize - &cell as *const _ as usize;
-    if size_of::<Option<std::rc::Rc<crate::class::Class>>>() != 8 || size_of::<Option<std::rc::Rc<crate::value::Obj>>>() != 8 {
+    if size_of::<Option<std::rc::Rc<crate::class::Class>>>() != 8
+        || size_of::<Option<std::rc::Rc<crate::value::Obj>>>() != 8
+        || size_of::<std::cell::UnsafeCell<Option<Box<crate::interp::Frame>>>>() != 8
+        || size_of::<std::cell::Cell<bool>>() != 1
+    {
         return None;
     }
     // `Frame::this` holds the same word an object Value's payload does.
@@ -191,12 +204,18 @@ fn probe_layout() -> Option<Layout> {
     if !same || unsafe { *(&none as *const _ as *const usize) } != 0 {
         return None;
     }
+    let (frame_vars_len, frame_args_len) = crate::interp::Frame::len_offsets()?;
     Some(Layout {
         obj_props: (2 * size_of::<usize>() + offset_of!(crate::value::Obj, props) + in_cell) as i32,
         none_tag,
         cx_frame: offset_of!(rt::Cx, frame) as i32,
         frame_class: offset_of!(crate::interp::Frame, class) as i32,
         frame_this: offset_of!(crate::interp::Frame, this) as i32,
+        site_direct: offset_of!(rt::CallSite, direct) as i32,
+        site_frame: (offset_of!(rt::CallSite, frame) + rt::SiteFrame::FRAME) as i32,
+        site_busy: (offset_of!(rt::CallSite, frame) + rt::SiteFrame::BUSY) as i32,
+        frame_vars_len: frame_vars_len as i32,
+        frame_args_len: frame_args_len as i32,
     })
 }
 

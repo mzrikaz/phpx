@@ -204,7 +204,26 @@ pub struct Frame {
     pub closure: Option<Rc<ClosureData>>,
 }
 
+/// Offset of a `Vec`'s length word (probed: std doesn't fix the layout).
+fn vec_len_offset() -> Option<usize> {
+    let mut v: Vec<u64> = Vec::with_capacity(5);
+    v.extend([1, 2, 3]);
+    let words: [usize; 3] = unsafe { std::mem::transmute_copy(&v) };
+    let i = words.iter().position(|&w| w == 3)?;
+    (words.iter().filter(|&&w| w == 3).count() == 1).then_some(i * 8)
+}
+
 impl Frame {
+    /// Offsets of the frame's variable count and argument count, for
+    /// generated code that skips resetting an untouched frame.
+    pub fn len_offsets() -> Option<(usize, usize)> {
+        if std::mem::size_of::<Vec<u64>>() != 24 {
+            return None;
+        }
+        let l = vec_len_offset()?;
+        Some((std::mem::offset_of!(Frame, vars) + std::mem::offset_of!(Vars, items) + l, std::mem::offset_of!(Frame, args) + l))
+    }
+
     /// Frame for a call: named function, no interpreter variables yet.
     pub fn for_call(ctx: Rc<NsCtx>, func: Rc<str>, fn_id: usize) -> Frame {
         Frame {
