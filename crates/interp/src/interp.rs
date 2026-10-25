@@ -640,6 +640,11 @@ impl Interp {
         let full = qualify(&ctx.ns, &f.name.name);
         let key = self.lower.get(&full);
         self.decl_ctx.borrow_mut().insert(f as *const ast::Function as usize, ctx.clone());
+        if !ctx.ns.is_empty() && self.builtins.contains_key(&*f.name.name.to_ascii_lowercase()) {
+            // A namespaced function shadows a built-in for unqualified calls
+            // in that namespace: compiled code stops inlining built-ins.
+            crate::value::BUILTIN_SHADOWED.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         self.functions.borrow_mut().insert(key, Rc::new(UserFn { name: Rc::from(full), decl: f, ctx: ctx.clone() }));
     }
 

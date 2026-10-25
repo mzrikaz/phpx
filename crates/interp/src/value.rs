@@ -146,6 +146,8 @@ pub struct PhpArray {
     /// (null when the array is a hash).
     pk: *mut Value,
     pk_len: usize,
+    /// Element count (packed or hash), also mirrored: `count()` inline.
+    count: usize,
     store: Store,
     next_free: i64,
     /// Internal pointer (current()/next()/reset()), as an index.
@@ -223,7 +225,7 @@ impl PhpArray {
     }
 
     fn make(store: Store, next_free: i64, pos: usize) -> Self {
-        let mut a = PhpArray { pk: std::ptr::null_mut(), pk_len: 0, store, next_free, pos: Cell::new(pos) };
+        let mut a = PhpArray { pk: std::ptr::null_mut(), pk_len: 0, count: 0, store, next_free, pos: Cell::new(pos) };
         a.sync();
         a
     }
@@ -236,10 +238,12 @@ impl PhpArray {
             Store::Packed(v) => {
                 self.pk = v.as_mut_ptr();
                 self.pk_len = v.len();
+                self.count = v.len();
             }
-            Store::Hash(_) => {
+            Store::Hash(m) => {
                 self.pk = std::ptr::null_mut();
                 self.pk_len = 0;
+                self.count = m.len();
             }
         }
     }
@@ -521,6 +525,10 @@ thread_local! {
 /// exception from a destructor can propagate). DESTRUCT_PENDING is a plain
 /// global so compiled code can test it with one load.
 pub static DESTRUCT_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set once any namespaced user function has a built-in's name; compiled
+/// code then stops inlining built-ins (`ns\strlen` could take precedence).
+pub static BUILTIN_SHADOWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 thread_local! {
     pub static DESTRUCT_QUEUE: RefCell<Vec<Rc<Obj>>> = const { RefCell::new(Vec::new()) };

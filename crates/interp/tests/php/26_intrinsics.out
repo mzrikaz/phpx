@@ -1,0 +1,12 @@
+[3,1,false,true,false,false,false,false,false,true][-1,2,true,false,false,false,false,false,false,false][1,1,false,false,true,false,false,false,false,true][3,1,false,false,false,true,false,false,false,true][0,0,false,false,false,false,false,true,false,false][1,1,false,false,false,false,true,false,false,true]
+[f]3[g]22033
+TE: count(): Argument #1 ($value) must be of type Countable|array, int given
+4 4
+[3,1,false,true,false,false,false,false,false,true][-1,2,true,false,false,false,false,false,false,false][1,1,false,false,true,false,false,false,false,true][3,1,false,false,false,true,false,false,false,true][0,0,false,false,false,false,false,true,false,false][1,1,false,false,false,false,true,false,false,true]
+[f]3[g]22033
+TE: count(): Argument #1 ($value) must be of type Countable|array, int given
+4 4
+[3,1,false,true,false,false,false,false,false,true][-1,2,true,false,false,false,false,false,false,false][1,1,false,false,true,false,false,false,false,true][3,1,false,false,false,true,false,false,false,true][0,0,false,false,false,false,false,true,false,false][1,1,false,false,false,false,true,false,false,true]
+[f]3[g]22033
+TE: count(): Argument #1 ($value) must be of type Countable|array, int given
+4 4

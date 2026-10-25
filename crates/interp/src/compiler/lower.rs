@@ -1380,6 +1380,10 @@ impl<'a> Lower<'a> {
                 self.release(cv);
                 r
             }
+            Call { callee, args } if intrinsic_kind(callee, args).is_some() => {
+                let ExprKind::Name(n) = &callee.kind else { unreachable!() };
+                self.intrinsic(intrinsic_kind(callee, args).unwrap(), n, args)?
+            }
             Call { callee, args } => {
                 let ExprKind::Name(n) = &callee.kind else { unreachable!() };
                 let site = Box::new(CallSite { name: n, cached: Default::default(), builtin: Default::default(), frame: Default::default() });
@@ -1512,6 +1516,88 @@ impl<'a> Lower<'a> {
         self.b.ins().brif(bad, slow, &[], ok, &[]);
         self.b.switch_to_block(ok);
         p
+    }
+
+    /// Built-in inlined into generated code (guarded: a namespaced user
+    /// function with the same name disables it at run time).
+    fn intrinsic(&mut self, kind: Intrinsic, name: &'static str, args: &'static [ast::Arg]) -> L<Op> {
+        let t = self.alloc_temp();
+        let (fast, slow, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(slow);
+        let flag = self.iconst(&crate::value::BUILTIN_SHADOWED as *const _ as i64);
+        let shadowed = self.b.ins().load(types::I8, flags(), flag, 0);
+        self.b.ins().brif(shadowed, slow, &[], fast, &[]);
+        // Generic call: also the fallback for the cases the fast code skips.
+        let generic = |l: &mut Self| -> L<()> {
+            let site = Box::new(CallSite { name, cached: Default::default(), builtin: Default::default(), frame: Default::default() });
+            let sp = &*site as *const CallSite as i64;
+            l.sites.push(site);
+            let (aa, la, n_) = l.args(args)?;
+            let sp = l.iconst(sp);
+            let meta = l.iconst(0);
+            let ta = l.temp_addr(t);
+            l.call_checked("rt_call", &[l.cx, sp, aa, n_, la, meta, ta]);
+            l.b.ins().jump(merge, &[]);
+            Ok(())
+        };
+        self.b.switch_to_block(fast);
+        let v = self.expr(&args[0].value)?;
+        let v = self.materialize(v);
+        let va = self.addr(v).unwrap();
+        let tg = self.load_tag(va);
+        let ta = self.temp_addr(t);
+        match kind {
+            Intrinsic::IsTag(tags) => {
+                let mut hit = self.b.ins().iconst(types::I8, 0);
+                for &tg_want in tags {
+                    let e = self.b.ins().icmp_imm_s(IntCC::Equal, tg, tg_want as i64);
+                    hit = self.b.ins().bor(hit, e);
+                }
+                self.store_into(ta, Op::Bool(hit));
+                self.release(v);
+                self.b.ins().jump(merge, &[]);
+            }
+            Intrinsic::Strlen | Intrinsic::Count => {
+                // strlen: string header len (offset 8). count: array's mirrored count.
+                let (want, off) = match kind {
+                    Intrinsic::Strlen => (tag::STR, 8),
+                    _ => (tag::ARRAY, 16 + 16),
+                };
+                let ok = self.b.ins().icmp_imm_s(IntCC::Equal, tg, want as i64);
+                let (yes, no) = (self.b.create_block(), self.b.create_block());
+                self.b.ins().brif(ok, yes, &[], no, &[]);
+                self.b.switch_to_block(yes);
+                let p = self.b.ins().load(types::I64, flags(), va, tag::PAYLOAD);
+                let n = self.b.ins().load(types::I64, flags(), p, off);
+                self.store_into(ta, Op::Int(n));
+                self.release(v);
+                self.b.ins().jump(merge, &[]);
+                // Other types: the real built-in (errors, Countable, ...)
+                // with the value already evaluated.
+                self.b.switch_to_block(no);
+                let site = Box::new(CallSite { name, cached: Default::default(), builtin: Default::default(), frame: Default::default() });
+                let sp = &*site as *const CallSite as i64;
+                self.sites.push(site);
+                let (slot, ids) = self.alloc_array(1);
+                let aa = self.b.ins().stack_addr(types::I64, slot, 0);
+                self.store_into(aa, Op::Ptr(va, None));
+                self.release(v);
+                let lslot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+                let zero = self.iconst(0);
+                self.b.ins().stack_store(types::I64, zero, lslot, 0);
+                let la = self.b.ins().stack_addr(types::I64, lslot, 0);
+                let (sp, one) = (self.iconst(sp), self.iconst(1));
+                let ta = self.temp_addr(t);
+                self.call_checked("rt_call", &[self.cx, sp, aa, one, la, zero, ta]);
+                self.free.extend(ids);
+                self.b.ins().jump(merge, &[]);
+            }
+        }
+        self.b.switch_to_block(slow);
+        generic(self)?;
+        self.b.switch_to_block(merge);
+        let ta = self.temp_addr(t);
+        Ok(Op::Ptr(ta, Some(t)))
     }
 
     /// `$arr[$k]`: packed array + in-range int key read inline; everything
@@ -2229,4 +2315,38 @@ fn arrow_names(a: &'static ast::ArrowFn) -> Vec<&'static str> {
         &mut |_| {},
     );
     names
+}
+
+#[derive(Clone, Copy)]
+enum Intrinsic {
+    /// `is_*`: true when the argument's tag is one of these.
+    IsTag(&'static [u8]),
+    Strlen,
+    Count,
+}
+
+/// Built-ins compiled inline: one plain positional argument, called by a
+/// name that can only mean the built-in (or `\name`).
+fn intrinsic_kind(callee: &Expr, args: &[ast::Arg]) -> Option<Intrinsic> {
+    let ExprKind::Name(n) = &callee.kind else { return None };
+    if args.len() != 1 || args[0].spread || args[0].name.is_some() {
+        return None;
+    }
+    let name = n.strip_prefix('\\').unwrap_or(n);
+    if name.contains('\\') {
+        return None;
+    }
+    Some(match name.to_ascii_lowercase().as_str() {
+        "strlen" => Intrinsic::Strlen,
+        "count" | "sizeof" => Intrinsic::Count,
+        "is_array" => Intrinsic::IsTag(&[tag::ARRAY]),
+        "is_string" => Intrinsic::IsTag(&[tag::STR]),
+        "is_int" | "is_integer" | "is_long" => Intrinsic::IsTag(&[tag::INT]),
+        "is_float" | "is_double" => Intrinsic::IsTag(&[tag::FLOAT]),
+        "is_bool" => Intrinsic::IsTag(&[tag::BOOL]),
+        "is_null" => Intrinsic::IsTag(&[tag::NULL]),
+        "is_object" => Intrinsic::IsTag(&[tag::OBJECT]),
+        "is_scalar" => Intrinsic::IsTag(&[tag::INT, tag::FLOAT, tag::STR, tag::BOOL]),
+        _ => return None,
+    })
 }

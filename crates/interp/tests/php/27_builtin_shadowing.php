@@ -1,0 +1,1 @@
+<?php namespace X; function strlen($s) { return 42; } function t() { return strlen("abc") . \strlen("abc"); } echo t(), t(), "\n";
