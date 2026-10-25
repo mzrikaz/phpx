@@ -532,9 +532,9 @@ thread_local! {
 
 pub struct Obj {
     pub id: u32,
-    /// Slot in the cycle collector's registry (low 30 bits; all ones: not
-    /// registered), "has native state" (bit 30) and "`__destruct` already
-    /// ran (or was queued)" (bit 31).
+    /// Flags: "has native state" (bit 30), "`__destruct` already ran (or
+    /// was queued)" (bit 31), and the registration order (low 30 bits). (The handle `id` is also the object's
+    /// slot in the collector's registry.)
     gc: Cell<u32>,
     pub class: Rc<Class>,
     /// Initialized properties in declaration order. Typed properties without
@@ -542,8 +542,8 @@ pub struct Obj {
     pub props: RefCell<crate::props::Props>,
 }
 
-const GC_NONE: u32 = 0x3FFF_FFFF;
 const HAS_INTERNAL: u32 = 1 << 30;
+const SEQ_MASK: u32 = HAS_INTERNAL - 1;
 const DESTRUCTED: u32 = 1 << 31;
 
 thread_local! {
@@ -571,7 +571,7 @@ impl Obj {
                     HAS_INTERNAL
                 }
             };
-            Rc::new(Obj { id, gc: Cell::new(GC_NONE | flags), class, props: RefCell::new(props) })
+            Rc::new(Obj { id, gc: Cell::new(flags), class, props: RefCell::new(props) })
         })
     }
 
@@ -607,16 +607,13 @@ impl Obj {
         self.internal_cell().try_borrow_mut().ok()
     }
 
-    pub fn gc_index(&self) -> u32 {
-        match self.gc.get() & GC_NONE {
-            GC_NONE => u32::MAX,
-            i => i,
-        }
+    /// Registration order (low 30 bits of the flags word, wrapping).
+    pub fn seq(&self) -> u32 {
+        self.gc.get() & SEQ_MASK
     }
 
-    pub fn set_gc_index(&self, i: u32) {
-        let i = if i >= GC_NONE { GC_NONE } else { i };
-        self.gc.set((self.gc.get() & !GC_NONE) | i);
+    pub fn set_seq(&self, seq: u32) {
+        self.gc.set((self.gc.get() & !SEQ_MASK) | (seq & SEQ_MASK));
     }
 
     /// `__destruct` already ran (or was queued).
@@ -638,7 +635,7 @@ impl Obj {
             // SAFETY: every field is written before assume_init.
             unsafe {
                 std::ptr::addr_of_mut!((*p).id).write(id);
-                std::ptr::addr_of_mut!((*p).gc).write(Cell::new(GC_NONE));
+                std::ptr::addr_of_mut!((*p).gc).write(Cell::new(0));
                 std::ptr::addr_of_mut!((*p).class).write(class.clone());
                 // (Cloned here, not passed in: a Vec handed over by value
                 // is reread right after being written, which stalls.)
@@ -671,6 +668,9 @@ impl Obj {
     /// Free the handle and native state (the handle may be reused at once,
     /// so the state goes first).
     fn free(&mut self) {
+        // Like PHP: what the object holds is released before its own handle
+        // goes back to the free list (so the handle is the next one reused).
+        self.props.get_mut().drop_values();
         if self.gc.get() & HAS_INTERNAL != 0 {
             // Dropped outside the map borrow: it can free other objects.
             let st = INTERNALS.try_with(|m| m.borrow_mut().remove(&self.id)).ok().flatten();
@@ -693,7 +693,7 @@ impl Drop for Obj {
             // dies in turn.
             let o = Rc::new(Obj {
                 id: self.id,
-                gc: Cell::new(GC_NONE | DESTRUCTED | (self.gc.get() & HAS_INTERNAL)),
+                gc: Cell::new(DESTRUCTED | (self.gc.get() & (HAS_INTERNAL | SEQ_MASK))),
                 class: self.class.clone(),
                 props: RefCell::new(std::mem::take(self.props.get_mut())),
             });

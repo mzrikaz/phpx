@@ -385,6 +385,13 @@ impl Props {
         self.iter().map(|(_, v)| v)
     }
 
+    /// Drop every value now (the slots stay, empty).
+    pub fn drop_values(&mut self) {
+        for v in self.vals.iter_mut() {
+            drop(v.take());
+        }
+    }
+
     /// Every value, hidden ones included (for the cycle collector).
     pub fn all_values(&self) -> impl Iterator<Item = &Value> + '_ {
         self.vals.iter().flatten()

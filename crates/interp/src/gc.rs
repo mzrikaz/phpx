@@ -14,7 +14,7 @@
 //! keeps their targets alive. The pass may miss some garbage; it never frees
 //! a reachable object.
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, UnsafeCell};
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
 
@@ -26,8 +26,16 @@ use crate::value::{Internal, Obj, Value, DESTRUCT_PENDING, DESTRUCT_QUEUE};
 const MIN_THRESHOLD: usize = 10_000;
 
 /// All collector state in one thread-local (one lookup per object).
+///
+/// The registry is the object store, like PHP's: an object's handle
+/// (`spl_object_id`) is its index. A slot holds the object's address, 0
+/// while its object is being destroyed (handle still taken), or, when free,
+/// `next_free << 1 | 1` (a free list, most recently freed first, as PHP
+/// reuses handles).
 struct State {
-    registry: RefCell<Vec<*const Obj>>,
+    store: UnsafeCell<Vec<usize>>,
+    free_head: Cell<usize>,
+    live: Cell<usize>,
     /// Objects registered since the last collection.
     since: Cell<usize>,
     threshold: Cell<usize>,
@@ -35,104 +43,110 @@ struct State {
     enabled: Cell<bool>,
     runs: Cell<u64>,
     collected: Cell<u64>,
-    /// Object handles (spl_object_id): PHP reuses freed ones, most recently
-    /// freed first.
-    next_id: Cell<u32>,
-    free_ids: RefCell<Vec<u32>>,
+    /// Registration counter (orders destructors of collected cycles).
+    seq: Cell<u32>,
 }
 
 thread_local! {
     static ST: State = const {
         State {
-            registry: RefCell::new(Vec::new()),
+            // Handle 0 is never used.
+            store: UnsafeCell::new(Vec::new()),
+            free_head: Cell::new(0),
+            live: Cell::new(0),
             since: Cell::new(0),
             threshold: Cell::new(MIN_THRESHOLD),
             due: Cell::new(false),
             enabled: Cell::new(true),
             runs: Cell::new(0),
             collected: Cell::new(0),
-            next_id: Cell::new(1),
-            free_ids: RefCell::new(Vec::new()),
+            seq: Cell::new(0),
         }
     };
 }
 
-/// Allocate an object: its handle, then (with the handle) the object, then
-/// its registry slot, with one thread-local lookup.
-pub fn track(make: impl FnOnce(u32) -> Rc<Obj>) -> Rc<Obj> {
-    ST.with(|st| {
-        let id = st.free_ids.borrow_mut().pop().unwrap_or_else(|| {
-            let id = st.next_id.get();
-            st.next_id.set(id + 1);
-            id
-        });
-        let o = make(id);
-        register_in(st, &o);
-        o
-    })
+impl State {
+    /// SAFETY: one thread; no caller holds a reference across a call that
+    /// can re-enter the collector (these functions never run PHP code).
+    #[allow(clippy::mut_from_ref)]
+    fn store(&self) -> &mut Vec<usize> {
+        unsafe { &mut *self.store.get() }
+    }
+
+    fn note_new(&self) {
+        self.live.set(self.live.get() + 1);
+        let n = self.since.get() + 1;
+        self.since.set(n);
+        if n >= self.threshold.get() && self.enabled.get() && !self.due.get() {
+            self.due.set(true);
+            // Runs at the next statement boundary, with the destructors.
+            DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
-fn register_in(st: &State, o: &Rc<Obj>) {
-    let p = Rc::as_ptr(o);
-    let mut r = st.registry.borrow_mut();
-    o.set_gc_index(r.len() as u32);
-    r.push(p);
-    let n = st.since.get() + 1;
-    st.since.set(n);
-    if n >= st.threshold.get() && st.enabled.get() && !st.due.get() {
-        st.due.set(true);
-        DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
+/// Allocate an object: its handle, then (with the handle) the object, then
+/// its registry slot, with one thread-local lookup.
+#[inline]
+pub fn track(make: impl FnOnce(u32) -> Rc<Obj>) -> Rc<Obj> {
+    ST.with(|st| {
+        let id = match st.free_head.get() {
+            0 => {
+                let store = st.store();
+                if store.is_empty() {
+                    store.push(0);
+                }
+                store.push(0);
+                store.len() - 1
+            }
+            id => {
+                st.free_head.set(st.store()[id] >> 1);
+                id
+            }
+        };
+        assert!(id <= u32::MAX as usize, "too many objects");
+        let o = make(id as u32);
+        let seq = st.seq.get().wrapping_add(1);
+        st.seq.set(seq);
+        o.set_seq(seq);
+        st.store()[id] = Rc::as_ptr(&o) as usize;
+        st.note_new();
+        o
+    })
 }
 
 /// Object freed: give back its registry slot and (unless `keep_id`) its
 /// handle.
 pub fn release(o: &Obj, keep_id: bool) {
     let _ = ST.try_with(|st| {
-        unregister_in(st, o);
-        if !keep_id {
-            st.free_ids.borrow_mut().push(o.id);
-        }
-    });
-}
-
-pub fn register(o: &Rc<Obj>) {
-    let p = Rc::as_ptr(o);
-    let _ = ST.try_with(|st| {
-        let mut r = st.registry.borrow_mut();
-        o.set_gc_index(r.len() as u32);
-        r.push(p);
-        let n = st.since.get() + 1;
-        st.since.set(n);
-        if n >= st.threshold.get() && st.enabled.get() && !st.due.get() {
-            st.due.set(true);
-            // Runs at the next statement boundary, with the destructors.
-            DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-    });
-}
-
-pub fn unregister(o: &Obj) {
-    let _ = ST.try_with(|st| unregister_in(st, o));
-}
-
-fn unregister_in(st: &State, o: &Obj) {
-    let i = o.gc_index();
-    if i == u32::MAX {
-        return;
-    }
-    o.set_gc_index(u32::MAX);
-    {
-        let mut r = st.registry.borrow_mut();
-        let i = i as usize;
-        if i < r.len() {
-            r.swap_remove(i);
-            if i < r.len() {
-                // SAFETY: registry entries are live objects (removed on drop).
-                unsafe { (*r[i]).set_gc_index(i as u32) };
+        let id = o.id as usize;
+        let store = st.store();
+        if id < store.len() {
+            if store[id] != 0 && store[id] & 1 == 0 {
+                st.live.set(st.live.get() - 1);
+            }
+            if keep_id {
+                store[id] = 0;
+            } else {
+                store[id] = st.free_head.get() << 1 | 1;
+                st.free_head.set(id);
             }
         }
-    }
+    });
+}
+
+/// A destructed object brought back for its destructor (same handle).
+pub fn register(o: &Rc<Obj>) {
+    let _ = ST.try_with(|st| {
+        st.store()[o.id as usize] = Rc::as_ptr(o) as usize;
+        st.note_new();
+    });
+}
+
+/// Out of the registry, keeping the handle (an object about to be
+/// resurrected for its destructor).
+pub fn unregister(o: &Obj) {
+    release(o, true);
 }
 
 /// A collection is due (checked at statement boundaries).
@@ -150,7 +164,7 @@ pub fn enabled() -> bool {
 
 /// (runs, collected, threshold, roots) for gc_status().
 pub fn status() -> (u64, u64, usize, usize) {
-    ST.with(|st| (st.runs.get(), st.collected.get(), st.threshold.get(), st.registry.borrow().len()))
+    ST.with(|st| (st.runs.get(), st.collected.get(), st.threshold.get(), st.live.get()))
 }
 
 /// Visit the objects `v` holds a counted reference to.
@@ -208,7 +222,7 @@ fn visit_obj(o: &Obj, f: &mut dyn FnMut(*const Obj)) -> bool {
 /// Run a collection. Returns the number of objects freed. Must be called at
 /// a safe point (no property or array borrows held by the caller).
 pub fn collect() -> usize {
-    let ptrs: Vec<*const Obj> = ST.with(|st| st.registry.borrow().clone());
+    let ptrs: Vec<*const Obj> = ST.with(|st| st.store().iter().filter(|&&e| e != 0 && e & 1 == 0).map(|&e| e as *const Obj).collect());
     let n = ptrs.len();
     ST.with(|st| st.runs.set(st.runs.get() + 1));
     ST.with(|st| st.since.set(0));
@@ -267,7 +281,10 @@ pub fn collect() -> usize {
         return 0;
     }
     // Destructors first (PHP semantics); the cycles are broken next time.
-    let pending: Vec<&Rc<Obj>> = garbage.iter().filter(|o| o.class.has_destruct && !o.destructed()).collect();
+    let mut pending: Vec<&Rc<Obj>> = garbage.iter().filter(|o| o.class.has_destruct && !o.destructed()).collect();
+    // In the order the objects were created (PHP: the order they became
+    // possible roots), not by handle.
+    pending.sort_by_key(|o| o.seq());
     if !pending.is_empty() {
         for o in pending {
             o.set_destructed();
