@@ -41,6 +41,7 @@ mod reflect;
 mod trace;
 mod weak;
 mod sockets;
+mod stream_more;
 mod streams;
 mod strings;
 mod timeout;

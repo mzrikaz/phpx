@@ -95,7 +95,7 @@ fn path_arg(it: &Interp, a: &[Value], i: usize) -> R<String> {
 }
 
 /// Run `g` on an open stream resource; TypeError for anything else.
-fn with_stream<T>(it: &Interp, v: &Value, fname: &str, g: impl FnOnce(&mut Stream) -> T) -> R<T> {
+pub(crate) fn with_stream<T>(it: &Interp, v: &Value, fname: &str, g: impl FnOnce(&mut Stream) -> T) -> R<T> {
     if let Value::Resource(r) = v {
         let mut d = r.data.borrow_mut();
         if let Some(st) = d.as_mut().and_then(|b| b.downcast_mut::<Stream>()) {
@@ -144,7 +144,7 @@ impl Stream {
         self.rbuf.len()
     }
 
-    fn read(&mut self, n: usize, it: &Interp) -> Vec<u8> {
+    pub(crate) fn read(&mut self, n: usize, it: &Interp) -> Vec<u8> {
         let out = match &mut self.backend {
             Backend::Memory(m) => {
                 let end = (self.pos + n).min(m.len());
@@ -238,7 +238,7 @@ impl Stream {
         (!out.is_empty()).then_some(out)
     }
 
-    fn write(&mut self, data: &[u8], it: &Interp) -> usize {
+    pub(crate) fn write(&mut self, data: &[u8], it: &Interp) -> usize {
         match &mut self.backend {
             Backend::Memory(m) => {
                 if self.append {
