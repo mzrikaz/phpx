@@ -1293,8 +1293,10 @@ impl<'a> Lower<'a> {
                         let ct = self.truthy(Op::Ptr(ca, None));
                         self.b.ins().brif(ct, yes, &[], no, &[]);
                         self.b.switch_to_block(yes);
+                        // Move a's value (its temp is freed once, below).
                         let ta = self.temp_addr(t);
-                        self.store_into(ta, c);
+                        self.copy16(ta, ca);
+                        self.store_tag(ca, tag::NULL);
                         self.b.ins().jump(merge, &[]);
                         self.b.switch_to_block(no);
                         self.release(c);
