@@ -934,6 +934,7 @@ impl Interp {
             f.vars.insert(name, s);
         }
 
+        let mut last_named: Option<usize> = None;
         let required = inv.params.iter().filter(|p| p.default.is_none() && !p.variadic).count();
         let mut pos_iter = pos.iter().cloned().enumerate().peekable();
         for (i, p) in inv.params.iter().enumerate() {
@@ -966,6 +967,7 @@ impl Interp {
                 }
                 v
             } else if let Some(at) = named.iter().position(|(n, _)| &**n == pname) {
+                last_named = Some(i);
                 named.remove(at).1
             } else if let Some(d) = &p.default {
                 self.eval(&mut f, d)?
@@ -1014,6 +1016,14 @@ impl Interp {
             return Err(self.error("Error", &format!("Unknown named parameter ${n}")));
         }
         f.args = pos.into_iter().map(Value::into_deref).collect();
+        // Named arguments count up to the last one passed; parameters
+        // skipped before it count with their defaults (func_get_args()).
+        if let Some(last) = last_named.filter(|&l| l >= f.args.len()) {
+            for p in &inv.params[f.args.len()..=last] {
+                let v = f.vars.get(&p.name.name).map(|s| s.borrow().deref()).unwrap_or_default();
+                f.args.push(v);
+            }
+        }
         Ok(f)
     }
 
