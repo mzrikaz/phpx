@@ -56,6 +56,12 @@ pub struct Native {
     psites: Vec<Box<rt::PropSite>>,
     specs: Vec<Box<LocalsSpec>>,
     log: bool,
+    /// Debugging aids for bisecting miscompiles: compile at most this many
+    /// functions (PHPX_NATIVE_MAX), and never ones whose name contains any
+    /// of these (PHPX_NATIVE_SKIP, comma-separated).
+    max: Option<usize>,
+    skip: Vec<String>,
+    count: usize,
 }
 
 macro_rules! helpers {
@@ -351,6 +357,9 @@ impl Native {
             psites: vec![],
             specs: vec![],
             log: std::env::var("PHPX_NATIVE_LOG").is_ok(),
+            max: std::env::var("PHPX_NATIVE_MAX").ok().and_then(|v| v.parse().ok()),
+            skip: std::env::var("PHPX_NATIVE_SKIP").map(|v| v.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect()).unwrap_or_default(),
+            count: 0,
         })
     }
 
@@ -389,7 +398,11 @@ impl Native {
     /// `top_level`: a file segment. Returns exit with status 3 (value in
     /// out); every exit writes locals back to the frame.
     fn compile_mode(&mut self, it: &Interp, t: &Target, top_level: bool) -> Result<Entry, &'static str> {
+        if self.skip.iter().any(|s| t.display.contains(s.as_str())) || self.max.is_some_and(|m| self.count >= m) {
+            return Err("excluded (PHPX_NATIVE_MAX / PHPX_NATIVE_SKIP)");
+        }
         let mut a = analyze::analyze_mode(t.params, &t.captured, t.body, top_level)?;
+        self.count += 1;
         let this_slot = if a.uses_this { Some(a.locals.slot("this") as usize) } else { None };
         let nlocals = a.locals.names.len();
         let spec = Box::new(LocalsSpec {
