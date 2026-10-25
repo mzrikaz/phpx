@@ -86,13 +86,22 @@ See [performance.md](performance.md).
 - [x] Inline int fast paths, inline refcounting
 - [x] Inline caches for calls, methods, property reads
 - [x] Built-in calls faster than PHP
-- [ ] Direct native-to-native calls (no `rt_call` round trip)
-- [ ] Method call fast path (inline cache guard in generated code)
-- [ ] Property read/write fast path (inline `PropSite` guard)
-- [ ] Packed-array index fast path
-- [ ] Inline `foreach` over packed arrays
+- [x] Property read/write fast path (inline `PropSite` guard)
+- [x] Packed-array index fast path
+- [x] Inline `foreach` over packed arrays
+- [x] Inline `strlen`/`count`/`is_*`
+- [x] Direct native-to-native calls for functions and instance methods
+- [x] Inline caches for static calls and `new` with constructors
+- [x] Native closure calls (direct `$f()` and callbacks from built-ins)
+- [x] Compiled code checks its own return types
+- [x] Smaller objects (48-byte header, side table for native state)
+- [x] Size-class allocator for small blocks
+- [x] Benchmark scripts and runner (`tools/bench/run.sh`)
+- [ ] Direct calls for static methods, constructors and closures
+- [ ] Single allocation per object; cheaper closure creation
+- [ ] Arguments in registers for direct calls
+- [ ] Memory per object at or below PHP's (112 vs 87 bytes)
 - [ ] String interpolation specialisation
-- [ ] Check-in benchmark scripts (`tools/bench/`) with a runner
 
 ## 6. Stdlib breadth
 
@@ -107,7 +116,7 @@ See [performance.md](performance.md).
 - [ ] intl, mbstring completeness
 - [ ] zip, zlib
 - [ ] filter, fileinfo, session
-- [ ] Process functions (`exec`, `proc_open`, `shell_exec`)
+- [ ] Process functions (`exec`, `proc_open`, `shell_exec`) — `shell_exec` is missing today
 
 ## 7. Language
 

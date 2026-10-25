@@ -1,10 +1,10 @@
 # Performance
 
-Goal: faster than PHP 8.5 (with OPcache-less CLI as the baseline) on every
-workload, while staying byte-identical. Today phpx is clearly faster on
-numeric code, arithmetic, built-in calls, assignments and concatenation, and
-still slower on user-function calls, method calls, property access,
-indexing and iteration.
+Goal: faster than PHP 8.5 (OPcache-less CLI as the baseline) on every
+workload, while staying byte-identical. Today phpx is faster on numeric
+code, arithmetic, loops, indexing, iteration and string building, level on
+property access and plain function calls, and still slower on method and
+static calls, object creation and closures.
 
 ## Baseline (2026-10-25, fair comparison)
 
@@ -12,28 +12,47 @@ PHP 8.5.10 CLI run with `php -n` (no php.ini: **xdebug and pcov off**; the
 lerd default config loads xdebug, which slows PHP 3-5x and made earlier
 comparisons look better than they were). "PHP JIT" adds
 `-d opcache.enable_cli=1 -d opcache.jit=tracing -d opcache.jit_buffer_size=64M`.
+Microbenchmarks are pinned to one core (`taskset -c 5`), best of 3 runs;
+absolute numbers depend on the machine, the ratio is what matters.
 
-### Microbenchmarks (ns per operation, `microf.php`, lower is better)
+### Microbenchmarks (ns per operation, lower is better)
 
-| Operation | PHP 8.5 (`-n`) | phpx (2026-10-25 start) | phpx now | Status |
-|---|---|---|---|---|
-| empty loop | 5.5 | 3.1 | 3.2 | faster |
-| `$x = $x + 1` | 6.1 | 1.9 | 2.0 | faster |
-| `$a[] = $i` | 22.3 | 25 | 25-30 | ~par (noisy) |
-| `foreach` over array | 10.3 | 25 | 7.5 | **faster** (inline packed iteration) |
-| `abs()` (numeric JIT inline) | 20.1 | 2.2 | 2.3 | faster |
-| `strlen()` / `count()` / `is_*` | 5.1 | 70 | 4-6 | **par** (inline intrinsics) |
-| other built-in call (`chr`) | 7.2 | 75 | 30 | slower |
-| user function call | 19.1 | 31 | 26 | slower |
-| `.=` concat | 19.7 | 12.5 | 14 | faster |
-| `$a[$i]` read | 8.2 | 18 | 6.7 | **faster** (inline packed read) |
-| `$o->p` read | 6.8 | 21 | 7.1 | **par** (inline cache) |
-| method call | 19.4 | 55 | 38 | slower |
-| `"item $i"` | 60.3 | 87 | 57 | **par** (single-alloc strings) |
-| `new C` (no ctor) | 38.7 | 147 | 114 | slower |
+From `tools/bench/` (`micro.php`, `calls.php`, `objects.php`, `closures.php`; see Methodology).
 
-Remaining gaps are call overhead (frames, helper round trips, the
-per-built-in panic guard) and object allocation; see the plan below.
+| Operation | PHP 8.5 (`-n`) | phpx | Status |
+|---|---|---|---|
+| empty loop | 2.1 | 1.6 | faster |
+| `$x = $x + 1` | 2.9 | 0.9 | faster |
+| `$a[] = $i` | 12.1 | 13.8 | ~par |
+| `foreach` over array | 4.6 | 3.7 | faster |
+| `abs()` (numeric JIT inline) | 7.1 | 1.1 | faster |
+| `strlen()` / `count()` / `is_*` | ~2 | ~2 | par (inline intrinsics) |
+| `.=` concat | 9.4 | 7.1 | faster |
+| `$a[$i]` read | 3.9 | 3.1 | faster |
+| `$o->p` read | 3.5 | 3.5 | par (inline cache) |
+| `"item $i"` | 29.9 | 28.2 | par |
+| `f()` (empty user function) | 4.1 | 5.4 | slower (direct native call) |
+| `$x = one("s")` | 7.4 | 7.5 | par |
+| `$o->m()` (empty method) | 6.8 | 12.4 | slower (direct native call) |
+| `A::s()` (static method) | 5.3 | 13.2 | slower (inline cache, helper call) |
+| `new C` (no constructor) | 20.1 | 36.6 | slower |
+| `new C($i)` (constructor) | 35.0 | 61.2 | slower |
+| `new C(int $a, string $b)` promoted | 57.2 | 83.4 | slower |
+| `$f($x)` closure call | 16.4 | 30.5 | slower |
+| `array_map(fn ..., $a)` per element | 19.0 | 72.5 | slower |
+| create closure + call | 85.2 | 195.7 | slower |
+
+Progress on the slow paths this round (phpx before -> after): function
+call 31 -> 5.4 ns (calls with no or numeric arguments were 130-150 ns:
+the numeric JIT never gave up on them), method call 55 -> 12.4, static
+call 524 -> 13.2, `new` with constructor 270 -> 61, promoted typed
+constructor 420 -> 83, closure call 150 -> 30.5, `array_map` callback 190
+-> 72.
+
+Remaining gaps: static calls and constructors still go through a Rust
+helper per call (method and function calls don't); objects take two
+allocations plus cycle-collector registration; closure creation allocates
+several blocks (PHP allocates one).
 
 ### Numeric code (`num.php`, ms)
 
@@ -45,13 +64,29 @@ per-built-in panic guard) and object allocation; see the plan below.
 | collatz | 1107.3 | 382.2 | 162.0 |
 | mandelbrot | 338.9 | 30.1 | 40.6 |
 
-### Memory (bytes per item, 500k items)
+### Memory (bytes per item, 100k items, `memory_get_usage()` deltas)
+
+phpx counts the size class each block really occupies, like PHP's
+allocator does.
 
 | Item | PHP 8.5 | phpx |
 |---|---|---|
-| object with 2 props | 105 | 169 (was 333 before shapes) |
-| constant array literal `[1,2]` | 17 | 17 (was 169 before sharing) |
-| short string | 57 | 64 (was 68 before single-allocation strings) |
+| object with 1 property | 87 | 112 (was 160; 333 before shapes) |
+| object with 3 properties, set in the constructor | 205 | 245 |
+| `['id' => $i, 'name' => 'n', 'x' => 1]` | 397 | 421 |
+| `[$i, $i]` | 237 | 197 |
+| 10-byte string | 69 | 69 |
+| int in a list | 21 | 21 |
+| sparse int keys | 52 | 58 |
+| string keys | 84 | 90 |
+| constant array literal `[1,2]` | 17 | 17 |
+
+Resident memory for a mixed script (1M small objects, 300k objects with
+strings, 300k nested arrays, 500k strings): PHP 322 MB, phpx 357 MB (was
+493 MB). Objects are 48 bytes plus their property slots: properties are a
+two-word vector, the destructed flag shares the GC index word, and native
+state (closures, generators) lives in a side table; small blocks come from
+size-class free lists without per-block headers.
 
 ## Plan: beat PHP everywhere, approach Node/Go
 
@@ -63,10 +98,11 @@ call-heavy code near Node; memory per value at or below PHP's.
    index load; `foreach` over packed arrays without the iterator helper.
    Needs `#[repr(C)]` object/props layout so generated code can address
    fields directly.
-2. **Direct native-to-native calls**: compiled callers call compiled callees
-   through the entry pointer with arguments in registers, no `Frame`
-   allocation, no helper round trip; method calls via a monomorphic inline
-   cache guard in generated code.
+2. **Direct native-to-native calls** (done for functions and instance
+   methods): compiled callers call the cached entry with the site's
+   reusable frame, no helper round trip. Still to do: static calls,
+   constructors and closures through the same path; arguments in
+   registers.
 3. **Objects**: one allocation per object (values inline after the header),
    no per-object `RefCell`, cheaper registration with the cycle collector;
    `new` target ~40 ns.
@@ -95,9 +131,11 @@ call-heavy code near Node; memory per value at or below PHP's.
   compiled; compare with `PHPX_NATIVE=off` / `PHPX_NOJIT=1` to see each
   tier's contribution.
 
-The microbenchmark scripts (`bench.php`, `num.php`) are not checked into
-the repository yet — to do: add them under `tools/bench/` with a runner
-script so these numbers can be reproduced.
+The microbenchmarks live in `tools/bench/` (`micro.php`, `calls.php`,
+`objects.php`, `closures.php`, `memory.php`, `num.php`, `rss.php`).
+`tools/bench/run.sh [runs] [php]` builds nothing; it runs the release
+binary and PHP one after the other, pinned to `BENCH_CPU`, and prints the
+best of `runs` side by side.
 
 ## Profiling
 

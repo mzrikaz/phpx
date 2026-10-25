@@ -4,6 +4,29 @@ What has been built so far, grouped by milestone (most recent first).
 Entries before the first commit (2026-10-25) are reconstructed from the code
 and project notes; later entries follow the git history.
 
+## 2026-10-25 — Calls, objects and memory
+
+- **Direct calls**: compiled code calls cached compiled functions and
+  instance methods through their entry with a reusable frame (no helper
+  round trip); compiled functions check their own return types.
+- **Inline caches** for static calls (`A::m()`, `self::`, `parent::`,
+  `static::`), `new` with constructors (promoted parameters bind
+  natively), and numeric-JIT entries at call sites.
+- **Closures** run natively when called directly or from built-ins
+  (`array_map`, `usort`, ...); creating one allocates less.
+- Fixed: the numeric JIT never gave up on functions whose specialisation
+  failed, so every call to them took the slow path (~130 ns).
+- **Objects**: 48-byte header (was 96); native state in a side table;
+  written in place. **Allocator**: per-thread size classes for blocks up
+  to 256 bytes (no per-block header); `memory_get_usage()` counts real
+  block sizes. An object with one property: 160 -> 112 bytes.
+- **PHP compatibility**: closures are named `{closure:<where>:<line>}`
+  (PHP 8.4+); argument TypeErrors add ", called in <file> on line <n>"
+  and point at the parameter; return-type TypeErrors point at the
+  `return`; `$this->m()` binds a private `m()` to the calling class; a
+  temporary object (`(new C)->m()`) is destroyed right after the call.
+- Benchmark scripts and a side-by-side runner in `tools/bench/`.
+
 ## 2026-10-25 — WordPress boot work (in progress)
 
 - **Streams** (`streams.rs`, new): `fopen`/`fclose`/`fread`/`fwrite`/`fputs`/
