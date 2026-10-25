@@ -1231,6 +1231,23 @@ impl<'a> Lower<'a> {
                 let b = self.expr(right)?;
                 self.binary(*op, a, b)?
             }
+            Unary { op: UnOp::Silence, expr } => {
+                // An exception out of the operand restores the level too.
+                let old = self.call("rt_silence_begin", &[self.cx]).unwrap();
+                let (outer, restore) = (self.unwind, self.b.create_block());
+                self.unwind = restore;
+                let v = self.expr(expr);
+                self.unwind = outer;
+                let v = v?;
+                self.call("rt_silence_end", &[self.cx, old]);
+                let cont = self.b.create_block();
+                self.b.ins().jump(cont, &[]);
+                self.b.switch_to_block(restore);
+                self.call("rt_silence_end", &[self.cx, old]);
+                self.b.ins().jump(outer, &[]);
+                self.b.switch_to_block(cont);
+                v
+            }
             Unary { op, expr } => {
                 let v = self.expr(expr)?;
                 match op {

@@ -2285,6 +2285,20 @@ pub unsafe extern "C" fn rt_catch(c: *mut Cx, catch: *const ast::Catch, dst: *mu
     0
 }
 
+/// `@expr`: raise the silence level; returns the old one for
+/// rt_silence_end (on both the normal and the exception path).
+pub unsafe extern "C" fn rt_silence_begin(c: *mut Cx) -> u64 {
+    let (it, _) = cx(c);
+    let old = it.silence.get();
+    it.silence.set(old + 1);
+    old as u64
+}
+
+pub unsafe extern "C" fn rt_silence_end(c: *mut Cx, old: u64) {
+    let (it, _) = cx(c);
+    it.silence.set(old as u32);
+}
+
 /// Move the pending exception into `slot` before a finally runs. 1 = it
 /// was exit() (left pending: finally is skipped).
 pub unsafe extern "C" fn rt_pending_save(c: *mut Cx, slot: *mut *mut Ctrl) -> u64 {

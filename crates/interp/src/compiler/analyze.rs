@@ -272,7 +272,6 @@ impl Analysis {
             }
             Var(n) if n == "GLOBALS" => Err("$GLOBALS"),
             VarVar(_) | GlobalVar(_) => Err("variable variable / $GLOBALS"),
-            Unary { op: ast::UnOp::Silence, .. } => Err("@ operator"),
             Var(n) => {
                 self.locals.slot(n);
                 Ok(())
