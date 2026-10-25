@@ -282,7 +282,11 @@ impl Interp {
                 .cloned()
         };
         drop(consts);
-        found.ok_or_else(|| self.error("Error", &format!("Undefined constant \"{}\"", name.trim_start_matches('\\'))))
+        let v = found.ok_or_else(|| self.error("Error", &format!("Undefined constant \"{}\"", name.trim_start_matches('\\'))))?;
+        if let Some(msg) = crate::consts::deprecation(name.rsplit('\\').next().unwrap_or(name)) {
+            self.deprecated(msg);
+        }
+        Ok(v)
     }
 
     // ---- arguments ---------------------------------------------------------

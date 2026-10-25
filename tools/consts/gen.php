@@ -45,3 +45,23 @@ foreach ($exts as $e) {
     }
 }
 echo "];\n";
+
+// Constants marked #[\Deprecated]: the message PHP emits when one is used.
+echo "\n/// (name, message) of the deprecated ones.\n";
+echo "pub static DEPRECATED: &[(&str, &str)] = &[\n";
+foreach ($exts as $e) {
+    foreach ($all[$e] ?? [] as $k => $v) {
+        if (in_array($k, $skip, true) || !(new ReflectionConstant($k))->isDeprecated()) {
+            continue;
+        }
+        $msg = null;
+        set_error_handler(function ($no, $str) use (&$msg) {
+            $msg = $str;
+            return true;
+        });
+        constant($k);
+        restore_error_handler();
+        echo "    (", lit($k), ", ", lit($msg ?? "Constant $k is deprecated"), "),\n";
+    }
+}
+echo "];\n";

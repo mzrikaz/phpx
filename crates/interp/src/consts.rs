@@ -22,3 +22,13 @@ impl C {
         }
     }
 }
+
+/// The deprecation message for using built-in constant `name`, if any.
+pub fn deprecation(name: &str) -> Option<&'static str> {
+    static MAP: std::sync::OnceLock<rustc_hash::FxHashMap<&'static str, &'static str>> = std::sync::OnceLock::new();
+    // Deprecated constants are all upper case: skip the map for the rest.
+    if !name.bytes().next().is_some_and(|b| b.is_ascii_uppercase()) {
+        return None;
+    }
+    MAP.get_or_init(|| crate::consts_table::DEPRECATED.iter().copied().collect()).get(name).copied()
+}
