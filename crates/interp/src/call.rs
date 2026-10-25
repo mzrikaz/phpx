@@ -141,7 +141,20 @@ impl Interp {
 
     pub fn class_ref(&self, f: &mut Frame, c: &'static ast::ClassRef) -> R<Rc<Class>> {
         match c {
-            ast::ClassRef::Name(n) => self.named_class(f, n),
+            ast::ClassRef::Name(n) => {
+                // A name in the source always resolves to the same class
+                // (classes can't be redeclared): cache per AST node.
+                let key = n.as_ptr() as usize;
+                if let Some(c) = self.class_cache.borrow().get(&key) {
+                    return Ok(c.clone());
+                }
+                let c = self.named_class(f, n)?;
+                let special = ["self", "static", "parent"].iter().any(|s| n.eq_ignore_ascii_case(s));
+                if !special {
+                    self.class_cache.borrow_mut().insert(key, c.clone());
+                }
+                Ok(c)
+            }
             ast::ClassRef::Dynamic(e) => match self.eval(f, e)? {
                 Value::Object(o) => Ok(o.class.clone()),
                 Value::Str(s) => self.lookup_class(&String::from_utf8_lossy(&s)),
@@ -1156,6 +1169,12 @@ impl Interp {
     }
 
     pub fn init_props(&self, o: &Rc<Obj>, cls: &Rc<Class>) -> R<()> {
+        // Defaults are constant expressions: evaluate once per class, then
+        // copy the whole map.
+        if let Some(t) = &*cls.prop_template.borrow() {
+            *o.props.borrow_mut() = t.clone();
+            return Ok(());
+        }
         for p in &cls.props {
             let v = match &p.default {
                 PropDefault::Uninit => continue,
@@ -1170,6 +1189,7 @@ impl Interp {
             };
             o.props.borrow_mut().insert(p.name.clone(), v);
         }
+        *cls.prop_template.borrow_mut() = Some(o.props.borrow().clone());
         Ok(())
     }
 
@@ -1511,6 +1531,7 @@ impl Interp {
             props,
             has_destruct: methods.contains_key("__destruct"),
             traits: used_traits,
+            prop_template: Default::default(),
             methods,
             cases: cases.clone(),
             enum_backed: c.enum_type.is_some(),

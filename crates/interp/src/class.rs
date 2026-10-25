@@ -104,6 +104,8 @@ pub struct Class {
     pub has_destruct: bool,
     /// Traits used directly by this class.
     pub traits: Vec<Rc<str>>,
+    /// Initial property map of a new instance (built on first instantiation).
+    pub prop_template: RefCell<Option<crate::value::FxIndexMap<Rc<str>, crate::value::Value>>>,
 }
 
 impl Class {
