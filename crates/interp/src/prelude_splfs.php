@@ -105,6 +105,27 @@ class SplFileInfo implements Stringable
     public function __toString(): string { return $this->getPathname(); }
 }
 
+final class Directory
+{
+    public readonly string $path;
+    public readonly mixed $handle;
+
+    public function read(): string|false
+    {
+        return readdir($this->handle);
+    }
+
+    public function rewind(): void
+    {
+        rewinddir($this->handle);
+    }
+
+    public function close(): void
+    {
+        closedir($this->handle);
+    }
+}
+
 class DirectoryIterator extends SplFileInfo implements SeekableIterator
 {
     /** @internal */

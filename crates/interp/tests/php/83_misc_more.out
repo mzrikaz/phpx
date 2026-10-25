@@ -1,0 +1,179 @@
+array(3) {
+  [0]=>
+  string(2) "2y"
+  [1]=>
+  string(7) "argon2i"
+  [2]=>
+  string(8) "argon2id"
+}
+"1K" => int(1024)
+"2m" => int(2097152)
+"1G" => int(1073741824)
+"0x10" => int(16)
+"010" => int(8)
+"0o10" => int(8)
+"0b11" => int(3)
+" 5k " => int(5120)
+"1.5M" => int(1048576)
+"-1" => int(-1)
+"abc" => int(0)
+"5x" => int(5)
+"" => int(0)
+"1KB" => int(1)
+string(9) "image/png"
+string(10) "image/jpeg"
+string(9) "image/gif"
+string(10) "image/webp"
+string(24) "image/vnd.microsoft.icon"
+string(24) "application/octet-stream"
+string(4) ".png"
+string(4) "jpeg"
+string(5) ".tiff"
+bool(false)
+array(8) {
+  [0]=>
+  int(3)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+  [3]=>
+  string(20) "width="3" height="2""
+  ["bits"]=>
+  int(8)
+  ["mime"]=>
+  string(9) "image/png"
+  ["width_unit"]=>
+  string(2) "px"
+  ["height_unit"]=>
+  string(2) "px"
+}
+array(9) {
+  [0]=>
+  int(5)
+  [1]=>
+  int(7)
+  [2]=>
+  int(1)
+  [3]=>
+  string(20) "width="5" height="7""
+  ["bits"]=>
+  int(1)
+  ["channels"]=>
+  int(3)
+  ["mime"]=>
+  string(9) "image/gif"
+  ["width_unit"]=>
+  string(2) "px"
+  ["height_unit"]=>
+  string(2) "px"
+}
+array(9) {
+  [0]=>
+  int(64)
+  [1]=>
+  int(32)
+  [2]=>
+  int(2)
+  [3]=>
+  string(22) "width="64" height="32""
+  ["bits"]=>
+  int(8)
+  ["channels"]=>
+  int(3)
+  ["mime"]=>
+  string(10) "image/jpeg"
+  ["width_unit"]=>
+  string(2) "px"
+  ["height_unit"]=>
+  string(2) "px"
+}
+array(8) {
+  [0]=>
+  int(9)
+  [1]=>
+  int(4)
+  [2]=>
+  int(6)
+  [3]=>
+  string(20) "width="9" height="4""
+  ["bits"]=>
+  int(24)
+  ["mime"]=>
+  string(9) "image/bmp"
+  ["width_unit"]=>
+  string(2) "px"
+  ["height_unit"]=>
+  string(2) "px"
+}
+bool(false)
+<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php
+</span><span style="color: #FF8000">// comment
+</span><span style="color: #0000BB">$a </span><span style="color: #007700">= </span><span style="color: #DD0000">"str" </span><span style="color: #007700">. </span><span style="color: #0000BB">42 </span><span style="color: #007700">. </span><span style="color: #0000BB">FOO</span><span style="color: #007700">; </span><span style="color: #FF8000">/* block */
+</span><span style="color: #007700">echo </span><span style="color: #0000BB">strlen</span><span style="color: #007700">(</span><span style="color: #0000BB">$a</span><span style="color: #007700">) . </span><span style="color: #0000BB">__LINE__</span><span style="color: #007700">; </span><span style="color: #0000BB">?&gt;
+</span>&lt;b&gt;html &amp; stuff&lt;/b&gt;
+<span style="color: #0000BB">&lt;?php </span><span style="color: #007700">if (</span><span style="color: #0000BB">$x </span><span style="color: #007700">&gt; </span><span style="color: #0000BB">1</span><span style="color: #007700">) { return &lt;&lt;&lt;EOT
+</span><span style="color: #DD0000">  heredoc </span><span style="color: #0000BB">$a</span><span style="color: #DD0000">
+</span><span style="color: #007700">  EOT; }
+</span></code></pre>
+string(174) "<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?= </span><span style="color: #DD0000">"x\ty" </span><span style="color: #0000BB">?&gt;</span></code></pre>"
+string(87) "<?php
+ function f( $a , $b ) { return $a+$b; } $x = <<<EOT
+  text
+  EOT;
+echo f(1, 2); "
+array(4) {
+  ["author"]=>
+  string(8) "Jane Doe"
+  ["keywords"]=>
+  string(17) "php documentation"
+  ["geo_position"]=>
+  string(12) "49.33;-86.59"
+  ["description"]=>
+  string(16) "a "quoted" thing"
+}
+array(2) {
+  [0]=>
+  int(12)
+  [1]=>
+  string(6) "apples"
+}
+int(2)
+string(6) "second"
+string(4) "line"
+bool(true)
+bool(true)
+string(9) "Directory"
+bool(true)
+bool(true)
+array(3) {
+  [0]=>
+  string(1) "."
+  [1]=>
+  string(2) ".."
+  [2]=>
+  string(3) "one"
+}
+bool(true)
+array(2) {
+  ["2#005"]=>
+  array(1) {
+    [0]=>
+    string(5) "Title"
+  }
+  ["2#025"]=>
+  array(2) {
+    [0]=>
+    string(3) "one"
+    [1]=>
+    string(3) "two"
+  }
+}
+bool(false)
+array(0) {
+}
+bool(true)
+array(0) {
+}
+bool(true)
+bool(false)

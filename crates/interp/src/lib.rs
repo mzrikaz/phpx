@@ -13,6 +13,7 @@ mod core_more;
 mod ob;
 mod math_more;
 mod strings_more;
+mod misc_more;
 mod builtins;
 mod callback;
 mod call;
