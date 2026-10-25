@@ -129,6 +129,16 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             return Err(it.error("ValueError", "file_get_contents(): Argument #5 ($length) must be greater than or equal to 0"));
         }
         if p.starts_with("php://") || p.starts_with("data:") || (p.contains("://") && !p.starts_with("file://")) || crate::wrappers::class_for(&p).is_some() || crate::wrappers::disabled(&p) {
+            // An offset needs seeking, which a user wrapper may not offer.
+            if offset > 0 {
+                if let Some(cls) = crate::wrappers::class_for(&p) {
+                    if !it.lookup_class(&cls).ok().is_some_and(|c| c.find_method("stream_seek").is_some()) {
+                        it.warn("file_get_contents(): Stream does not support seeking");
+                        it.warn(&format!("file_get_contents(): Failed to seek to position {offset} in the stream"));
+                        return Ok(Value::Bool(false));
+                    }
+                }
+            }
             let res = match crate::streams::open(it, &p, "rb") {
                 Ok(r) => r,
                 Err(msg) => {
