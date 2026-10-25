@@ -34,6 +34,7 @@ mod date;
 mod fiber;
 mod glob;
 mod mbext;
+mod tokenizer;
 mod db;
 mod pdo;
 mod process;
