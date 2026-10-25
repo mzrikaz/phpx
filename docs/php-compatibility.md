@@ -9,7 +9,6 @@ for tests is recorded in `crates/interp/tests/php/PHP_VERSION`; currently
 
 | Difference | Why |
 |---|---|
-| Backtick shell execution is rejected (E1006) | Hidden process spawning; use an explicit function call instead |
 | `create_function()` is rejected (E1007) | Removed in PHP 8; the diagnostic suggests a closure |
 | `async()`, `defer()`, `Promise`, `Concurrency`, `TimeoutException`, `CancelledException`, `AggregateException` exist as built-ins | phpx concurrency API ([async.md](async.md)). Code that defines its own `async()`/`defer()` functions or `Promise` class will collide — to verify how common this is in the target CMSs |
 | `sleep()` / `usleep()` park the green thread instead of blocking the process | Same observable behaviour for a single request; other tasks keep running |
@@ -26,7 +25,6 @@ that phpx does not support (counted as "use unsupported features" by
 |---|---|---|---|
 | E0001 | syntax | Lexer error: unterminated comment / string / backtick string / heredoc, unexpected character | Fix the source |
 | E0002 | syntax | `expected X, found Y`; `cannot assign to this expression`; `key element cannot be a reference`; `the (unset) cast was removed in PHP 8`; `call-time pass-by-reference was removed in PHP 5.4`; `` `&` is only valid in parameters, foreach, `=&` assignments and array items``; unclosed `{` / `${` in string | Fix the source |
-| E1006 | unsupported | backtick shell execution is not supported | Call a process function explicitly (note: `shell_exec()` itself is not implemented yet) |
 | E1007 | unsupported | `create_function()` was removed in PHP 8 | Use a closure |
 | E1008 | unsupported | property hooks are not supported yet | Use getter/setter methods until hooks land |
 
@@ -34,8 +32,8 @@ Earlier versions of phpx also rejected `eval`, `$$var` / `${expr}`,
 `extract()`, `global` and `$GLOBALS` (on the theory that a compiler cannot
 resolve variables by runtime name). All of these are now supported — the
 native compiler simply leaves such functions to the interpreter — and no
-codes are emitted for them any more. Codes below E1006 in the `E1xxx`
-range are therefore unused.
+codes are emitted for them any more; backticks (formerly E1006) run as
+`shell_exec()`. Codes below E1007 in the `E1xxx` range are therefore unused.
 
 ### `phpx check`
 
@@ -49,7 +47,7 @@ read lossily, spans stay correct) and prints rendered diagnostics (unless
 
 ```
 1512 files (… MB) in 0.xx s: 1512 ok, 0 use unsupported features, 0 with syntax errors
-diagnostics: E1006×n …
+diagnostics: E1007×n …
 ```
 
 The exit status is non-zero if any file has an error.
@@ -67,9 +65,9 @@ Known places where phpx output can differ from PHP 8.5 today.
 | Pipe operator `\|>` | PHP 8.5 syntax not parsed yet | Implement in parser + interpreter |
 | Resource IDs | `var_dump($fp)` shows `resource(4)` where PHP shows `resource(5)` in the same script (PHP allocates STDIN/STDOUT/STDERR and other resources first) | Align the initial resource counter |
 | Non-UTF-8 source files | Source is decoded with `from_utf8_lossy`, so Latin-1 bytes inside string literals become U+FFFD | Keep sources as bytes |
-| Stack traces | `getTrace()` returns `[]` and `getTraceAsString()` returns `#0 {main}` | Real backtraces (`debug_backtrace` is also missing) |
+| Stack traces | Frames of built-in functions that call back into PHP (`[internal function]`, e.g. `array_map`) are not listed | Record built-in frames too |
 | Missing built-ins | Calling an unimplemented function throws `Error: Call to undefined function` | [stdlib.md](stdlib.md) lists what is missing |
-| Missing classes | No `Reflection*`, `DateTime*`, `WeakMap`, SPL file/directory iterators, DOM/XML classes, `PDO`, `mysqli` | Roadmap items 2 and 6 |
+| Missing classes | DOM/XML classes, `mysqli`, `SQLite3`, `PhpToken`, intl classes | Roadmap items 2 and 6 |
 | `serialize()` of references | A structure that contains itself through a reference raises the call-stack Error instead of producing `R:`/`r:` back-references | Implement reference tracking in `serialize` |
 | Compile-depth limit | PHP refuses source nested beyond ~10,000 levels (or 3,000 `if`s) at compile time; phpx accepts deeper nesting while the stack allows, then reports the same "Maximum call stack size ... reached during compilation" error | Acceptable (more lenient) |
 | Superglobals in CLI | `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST` are empty arrays; `$_SESSION` is not set (like PHP CLI without a session) | HTTP server mode |

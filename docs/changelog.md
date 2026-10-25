@@ -4,6 +4,31 @@ What has been built so far, grouped by milestone (most recent first).
 Entries before the first commit (2026-10-25) are reconstructed from the code
 and project notes; later entries follow the git history.
 
+## 2026-10-26 — Laravel boots
+
+A real Laravel 12 + Filament application boots and runs `artisan
+route:list` with output identical to PHP.
+
+- **Reflection** (all classes, attributes) and the built-in attribute
+  classes; **DateTime** family with a timelib-compatible parser and the tz
+  database; **PDO** with a native MySQL client; **Fiber**; **WeakMap** /
+  **WeakReference**; SPL file and directory classes; `proc_open` and the
+  exec family; PCRE2 for `preg_*`; the rest of mbstring; every constant of
+  the implemented extensions; backtick operator.
+- **Real call stack**: `debug_backtrace()`, exception traces and PHP's
+  "Stack trace:" output, tracked per green thread at no allocation cost.
+- **Fixes found running Laravel**: callable strings resolved against the
+  namespace, `func_num_args()` with named arguments, `defined()` of class
+  constants, `$this[...]` writes, `list()` of non-arrays, `glob()` with
+  wildcards in directories, by-reference built-ins on typed properties,
+  live `array_walk()`, promoted private properties shadowed by a subclass,
+  `feof()` timing, PHP 8.5 null-offset deprecations.
+- **Native compiler fixes**: `a ?: b` freed a temporary twice, a call
+  site's reused frame went stale during recursion, `new` with a native
+  constructor, by-reference arguments in calls with named arguments,
+  reference-keeping binders (`bindParam`). New `PHPX_NATIVE_MAX` /
+  `PHPX_NATIVE_SKIP` knobs bisect miscompiles.
+
 ## 2026-10-25 — I/O and network
 
 - **Socket streams**: `fsockopen`, `stream_socket_client/server/accept`,

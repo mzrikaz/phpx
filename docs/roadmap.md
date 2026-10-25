@@ -36,8 +36,8 @@ Target: `wp-admin/setup-config.php` output identical to PHP.
 - [x] `filter_var`, bcrypt `password_*`, `gz*`, CSV, `next`/`prev` array pointer, class introspection
 - [x] `extension_loaded` reports implemented extensions; `PHP_VERSION` = 8.5.10
 - [x] Secure `random_bytes` (OS CSPRNG)
-- [ ] Reflection API (`ReflectionClass`, `ReflectionMethod`, ...)
-- [ ] DateTime family (`DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`, `DatePeriod`) and `strtotime`/`gmdate`
+- [x] Reflection API (`ReflectionClass`, `ReflectionMethod`, ...)
+- [x] DateTime family (`DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`, `DatePeriod`) and `strtotime`/`gmdate`
 - [x] SPL data structures and iterators (`ArrayObject`, `SplObjectStorage`, `SplStack`, heaps, iterators); file/directory iterators still missing
 - [ ] `set_error_handler` invoking user handlers (Laravel converts warnings to exceptions)
 - [ ] WordPress setup page byte-identical to PHP (currently blocked on mysqli check)
@@ -50,7 +50,7 @@ or request parks the green thread instead of blocking the process.
 - [x] Socket streams: `fsockopen`, `stream_socket_client/server/accept`, `stream_select`, timeouts, `tcp://`, `unix://`
 - [x] TLS client (rustls, system roots, PHP `ssl` context options), `tls://`/`ssl://`, `stream_socket_enable_crypto`
 - [ ] mysqli (procedural + OO) on a native MySQL protocol client
-- [ ] PDO core + MySQL driver
+- [x] PDO core + MySQL driver (native protocol: mysql_native_password, caching_sha2_password, TLS, server-side prepares)
 - [ ] PDO SQLite (bundled libsqlite3) and `SQLite3`
 - [ ] PDO Postgres and `pg_*` on a native protocol client
 - [ ] `http://` / `https://` stream wrapper (`file_get_contents($url)`)
@@ -60,6 +60,18 @@ or request parks the green thread instead of blocking the process.
 - [ ] ext-sockets (`socket_*`)
 - [ ] Non-blocking DNS (resolution currently blocks the thread)
 - [ ] WordPress install + front page against MySQL
+
+## 2b. Running Laravel apps unchanged *(in progress)*
+
+Tested against a real Laravel 12 + Filament app (Wit-ERP, MySQL):
+
+- [x] Full bootstrap (env, config, providers, facades, boot)
+- [x] `artisan --version`, `artisan route:list` (output identical to PHP, 205 routes)
+- [x] PCRE2 regular expressions, Fiber, WeakMap/WeakReference, SPL file iterators, real stack traces
+- [ ] DOM (`DOMDocument`; Termwind renders console output through it)
+- [ ] Tokenizer (`token_get_all`, `PhpToken`; Collision's error highlighter)
+- [ ] The remaining functions of implemented extensions (about 200: output buffering details, zlib streams, iconv, session, hash_pbkdf2, ...)
+- [ ] Serving requests (`phpx serve`)
 
 ## 3. HTTP server mode (`phpx serve`)
 
@@ -116,7 +128,7 @@ See [performance.md](performance.md).
 
 ## 6. Stdlib breadth
 
-- [ ] DateTime family (`DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`, `DatePeriod`)
+- [x] DateTime family (`DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`, `DatePeriod`)
 - [ ] Reflection (classes, methods, properties, parameters, attributes)
 - [x] SPL data structures and iterators (`ArrayObject`, `SplObjectStorage`, `SplStack`, …) — file/directory iterators (`SplFileInfo`, `RecursiveDirectoryIterator`) still missing
 - [ ] gd / imagick, exif, `getimagesize`
@@ -130,7 +142,7 @@ See [performance.md](performance.md).
 - [ ] tokenizer (`token_get_all`, `PhpToken`)
 - [ ] posix, pcntl
 - [ ] `get_defined_constants`, `preg_replace_callback_array`
-- [ ] Process functions (`exec`, `proc_open`, `shell_exec`) — `shell_exec` is missing today
+- [x] Process functions (`exec`, `proc_open`, `shell_exec`, `system`, `passthru`, `popen`), non-blocking pipes
 
 ## 7. Language
 

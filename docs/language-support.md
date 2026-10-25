@@ -27,14 +27,14 @@ Sources: `crates/syntax/src/parser.rs`, `crates/syntax/src/checks.rs`,
 | Feature | Status | Notes |
 |---|---|---|
 | All PHP 8.x syntax used by WordPress and Drupal core | yes | 100% of 1,512 WordPress files and 10,656 Drupal 11.2.5 core files parse |
-| Backtick shell execution `` `cmd` `` | **rejected** (E1006) | Deliberate. The help text suggests `shell_exec()`, which is not implemented yet |
+| Backtick shell execution `` `cmd` `` | yes | Runs `shell_exec()`, with PHP 8.5's deprecation |
 | `create_function()` | **rejected** (E1007) | Removed in PHP 8 anyway |
 | Property hooks (PHP 8.4) | **rejected** (E1008) | Planned (roadmap item 7) |
 | Pipe operator `\|>` (PHP 8.5) | **no** | Parse error E0002 today; needs implementing for full 8.5 parity |
 | `(unset)` cast, call-time `&$x` | rejected (E0002) | Removed from PHP itself (PHP 8 / PHP 5.4) |
 | Inline HTML, `<?=`, `?>` | yes | |
 | Heredoc / nowdoc (incl. flexible closing marker) | yes | |
-| Attributes `#[...]` | parsed | Arguments are walked; attributes have no runtime effect (no Reflection yet) |
+| Attributes `#[...]` | yes | Read through Reflection (`getAttributes()`, `newInstance()`) |
 | `declare(strict_types=1)` | yes | Per-file strict mode for scalar parameter/return types |
 
 ## Control flow
@@ -103,7 +103,7 @@ Sources: `crates/syntax/src/parser.rs`, `crates/syntax/src/checks.rs`,
 | `instanceof` | yes | yes | |
 | Property hooks (8.4) | rejected | — | E1008 |
 | `__serialize`/`__unserialize`, `__sleep`/`__wakeup`, `__set_state` | no | — | Need `serialize`/`unserialize`/`var_export` object support (in progress) |
-| Reflection API | no | — | No `Reflection*` classes yet |
+| Reflection API | yes | yes | Classes, methods, functions, closures, parameters, properties, constants, enums, types, attributes |
 
 ## Variables and scope
 
