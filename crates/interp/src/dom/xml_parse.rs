@@ -1,6 +1,8 @@
-//! XML parsing for DOMDocument::loadXML(): well-formedness checks with
-//! libxml2's messages, namespaces, internal DTD entities, CDATA, and
-//! libxml2's ignorable-whitespace rule for LIBXML_NOBLANKS.
+//! XML parsing: an event parser with libxml2's well-formedness checks and
+//! messages, feeding a `Sink`: the DOM tree builder (DOMDocument::
+//! loadXML(), with namespaces, internal DTD entities, CDATA and libxml2's
+//! ignorable-whitespace rule for LIBXML_NOBLANKS) or ext/xml's SAX events
+//! (character data chunked where libxml2 chunks it).
 
 use std::collections::HashMap;
 
@@ -26,12 +28,38 @@ fn is_char(c: u32) -> bool {
 
 struct Fatal;
 
-struct P<'a> {
+#[derive(Clone, Copy, PartialEq)]
+pub enum TextKind {
+    /// Character data as written.
+    Plain,
+    /// The expansion of a character or predefined entity reference.
+    Ref,
+    /// A CDATA section.
+    Cdata,
+}
+
+/// Receives parse events.
+pub trait Sink {
+    fn xml_decl(&mut self, _version: Option<String>, _encoding: Option<String>, _standalone: i8) {}
+    fn doctype(&mut self, _name: &str, _public: &str, _system: &str, _subset: &str) {}
+    /// A start tag; returns namespace errors (not fatal).
+    fn start(&mut self, name: &str, attrs: Vec<(String, String)>, line: u32) -> Vec<(i64, String)>;
+    fn end(&mut self, name: &str);
+    /// Character data; `next` is the input after it (for NOBLANKS).
+    fn text(&mut self, s: &str, kind: TextKind, next: (u8, u8));
+    /// A reference to an entity declared in the DTD.
+    fn entity(&mut self, name: &str, value: &str);
+    fn comment(&mut self, s: &str);
+    fn pi(&mut self, target: &str, data: &str);
+    fn line(&mut self, _line: u32) {}
+}
+
+struct P<'a, S: Sink> {
     s: &'a str,
     i: usize,
-    doc: Doc,
-    stack: Vec<Id>,
-    opts: i64,
+    sink: &'a mut S,
+    /// Open elements: (name, line).
+    open: Vec<(String, u32)>,
     errors: Vec<ParseError>,
     entities: HashMap<String, String>,
     line_starts: Vec<usize>,
@@ -39,7 +67,7 @@ struct P<'a> {
 
 type Res<T> = Result<T, Fatal>;
 
-impl P<'_> {
+impl<S: Sink> P<'_, S> {
     fn cur(&self) -> u8 {
         self.s.as_bytes().get(self.i).copied().unwrap_or(0)
     }
@@ -63,12 +91,14 @@ impl P<'_> {
 
     fn error(&mut self, code: i64, msg: String) {
         let line = self.line();
-        self.errors.push(ParseError { level: 3, code, message: msg, line });
+        let offset = self.i;
+        self.errors.push(ParseError { level: 3, code, message: msg, line, offset });
     }
 
     fn ns_error(&mut self, code: i64, msg: String) {
         let line = self.line();
-        self.errors.push(ParseError { level: 2, code, message: msg, line });
+        let offset = self.i;
+        self.errors.push(ParseError { level: 2, code, message: msg, line, offset });
     }
 
     fn skip_ws(&mut self) -> bool {
@@ -91,15 +121,9 @@ impl P<'_> {
         Some(rest[..end].to_string())
     }
 
-    fn node(&self) -> Id {
-        self.stack.last().copied().unwrap_or(0)
-    }
-
-    fn add(&mut self, n: Node) -> Id {
-        let id = self.doc.add(n);
-        let parent = self.node();
-        self.doc.append(parent, id);
-        id
+    fn sync_line(&mut self) {
+        let l = self.line();
+        self.sink.line(l);
     }
 
     fn char_ref(&mut self) -> Res<char> {
@@ -189,7 +213,8 @@ impl P<'_> {
             Some(p) if self.s[self.i + p..].starts_with("-->") => {
                 let text = self.s[self.i..self.i + p].to_string();
                 self.i += p + 3;
-                self.add(Node::new(COMMENT, "#comment", &text));
+                self.sync_line();
+                self.sink.comment(&text);
                 Ok(())
             }
             Some(_) => self.fatal(80, "Double hyphen within comment".into()),
@@ -213,7 +238,8 @@ impl P<'_> {
                 }
                 let data = self.s[self.i..self.i + p].to_string();
                 self.i += p + 2;
-                self.add(Node::new(PI, &target, &data));
+                self.sync_line();
+                self.sink.pi(&target, &data);
                 Ok(())
             }
             None => self.fatal(47, format!("ParsePI: PI {target} never end ...")),
@@ -226,97 +252,79 @@ impl P<'_> {
             Some(p) => {
                 let text = self.s[self.i..self.i + p].to_string();
                 self.i += p + 3;
-                let parent = self.node();
-                if self.opts & XML_PARSE_NOCDATA != 0 {
-                    self.doc.append_text(parent, TEXT, &text);
-                } else {
-                    self.add(Node::new(CDATA, "#cdata-section", &text));
-                }
+                self.sync_line();
+                let next = (self.cur(), self.at(1));
+                self.sink.text(&text, TextKind::Cdata, next);
                 Ok(())
             }
             None => self.fatal(63, "CData section not finished".into()),
         }
     }
 
-    /// libxml2's areBlanks() heuristic for NOBLANKS.
-    fn are_blanks(&self, text: &str) -> bool {
-        if self.opts & XML_PARSE_NOBLANKS == 0 || !text.bytes().all(|c| matches!(c, b' ' | b'\t' | b'\n' | b'\r')) {
-            return false;
+    fn emit(&mut self, buf: &mut String, kind: TextKind) {
+        if !buf.is_empty() {
+            self.sync_line();
+            let next = (self.cur(), self.at(1));
+            self.sink.text(buf, kind, next);
+            buf.clear();
         }
-        let Some(&node) = self.stack.last() else { return false };
-        if self.cur() != b'<' && self.cur() != b'\r' {
-            return false;
-        }
-        let n = self.doc.n(node);
-        if n.first.is_none() && self.cur() == b'<' && self.at(1) == b'/' {
-            return false;
-        }
-        if let Some(l) = n.last {
-            if self.doc.n(l).is_text() {
-                return false;
-            }
-        }
-        if let Some(f) = n.first {
-            if self.doc.n(f).is_text() {
-                return false;
-            }
-        }
-        // xml:space="preserve" in scope keeps it.
-        for &e in self.stack.iter().rev() {
-            if let Some(v) = self.doc.get_attr(e, "xml:space") {
-                return v != "preserve";
-            }
-        }
-        true
     }
 
+    /// Character data up to the next markup. Chunks follow libxml2: an
+    /// ASCII run is one chunk; from the first non-ASCII character on,
+    /// chunks of at least 300 bytes; references are their own chunks.
     fn text(&mut self) -> Res<()> {
-        let st = self.i;
         let mut buf = String::new();
+        let mut complex = false;
         loop {
             match self.cur() {
                 0 | b'<' => break,
                 b'&' => {
-                    if !buf.is_empty() || self.i > st {
-                        let parent = self.node();
-                        self.doc.append_text(parent, TEXT, &buf);
-                        buf.clear();
+                    if self.open.is_empty() {
+                        return self.fatal(5, "Extra content at the end of the document".into());
                     }
+                    self.emit(&mut buf, TextKind::Plain);
                     if self.at(1) == b'#' {
                         let c = self.char_ref()?;
-                        let parent = self.node();
-                        self.doc.append_text(parent, TEXT, c.encode_utf8(&mut [0; 4]));
+                        let mut s = c.to_string();
+                        self.emit(&mut s, TextKind::Ref);
                     } else {
                         let (v, ent) = self.entity_ref()?;
-                        let parent = self.node();
                         match ent {
-                            None => self.doc.append_text(parent, TEXT, &v),
-                            Some(text) if self.opts & XML_PARSE_NOENT != 0 => self.doc.append_text(parent, TEXT, &text),
-                            Some(_) => {
-                                self.add(Node::new(ENTITY_REF, &v, ""));
+                            None => {
+                                let mut s = v;
+                                self.emit(&mut s, TextKind::Ref);
+                            }
+                            Some(text) => {
+                                self.sync_line();
+                                self.sink.entity(&v, &text);
                             }
                         }
                     }
                     return Ok(());
                 }
                 b']' if self.starts("]]>") => return self.fatal(62, "Sequence ']]>' not allowed in content".into()),
-                _ => {
+                c => {
+                    if c >= 0x80 && !complex {
+                        self.emit(&mut buf, TextKind::Plain);
+                        complex = true;
+                    }
                     let ch = self.s[self.i..].chars().next().unwrap();
                     buf.push(ch);
                     self.i += ch.len_utf8();
+                    if complex && buf.len() >= 300 {
+                        self.emit(&mut buf, TextKind::Plain);
+                    }
                 }
             }
         }
-        if self.stack.is_empty() {
+        if self.open.is_empty() {
             if buf.trim_matches([' ', '\t', '\n', '\r']).is_empty() {
                 return Ok(());
             }
             return self.fatal(5, "Extra content at the end of the document".into());
         }
-        if !self.are_blanks(&buf) {
-            let parent = self.node();
-            self.doc.append_text(parent, TEXT, &buf);
-        }
+        self.emit(&mut buf, TextKind::Plain);
         Ok(())
     }
 
@@ -352,48 +360,20 @@ impl P<'_> {
             }
             attrs.push((an, v));
         }
-        let mut n = Node::new(ELEMENT, &name, "");
-        n.line = line;
-        let el = self.doc.add(n);
-        let parent = self.node();
-        self.doc.append(parent, el);
-        // Namespace declarations first, then names resolve against them.
-        for (k, v) in &attrs {
-            if k == "xmlns" {
-                self.doc.m(el).ns_defs.push((None, v.clone()));
-            } else if let Some(p) = k.strip_prefix("xmlns:") {
-                self.doc.m(el).ns_defs.push((Some(p.to_string()), v.clone()));
-            }
-        }
-        let prefix = name.split_once(':').map(|(p, _)| p.to_string());
-        let ns = self.doc.lookup_ns(el, prefix.as_deref());
-        if ns.is_none() {
-            if let Some(p) = &prefix {
-                self.ns_error(201, format!("Namespace prefix {p} on {} is not defined", &name[p.len() + 1..]));
-            }
-        }
-        self.doc.m(el).ns = ns;
-        for (k, v) in attrs {
-            if k == "xmlns" || k.starts_with("xmlns:") {
-                continue;
-            }
-            let a = self.doc.set_attr(el, &k, &v);
-            if let Some((p, l)) = k.split_once(':') {
-                match self.doc.lookup_ns(el, Some(p)) {
-                    Some(uri) => self.doc.m(a).ns = Some(uri),
-                    None => self.ns_error(201, format!("Namespace prefix {p} for {l} on {name} is not defined")),
-                }
-            }
+        self.sync_line();
+        for (code, msg) in self.sink.start(&name, attrs, line) {
+            self.ns_error(code, msg);
         }
         if self.cur() == b'/' {
             if self.at(1) != b'>' {
                 return self.fatal(73, format!("Couldn't find end of Start Tag {name} line {line}"));
             }
             self.i += 2;
+            self.sink.end(&name);
             return Ok(());
         }
         self.i += 1;
-        self.stack.push(el);
+        self.open.push((name, line));
         Ok(())
     }
 
@@ -405,14 +385,15 @@ impl P<'_> {
             return self.fatal(73, "expected '>'".into());
         }
         self.i += 1;
-        let Some(&open) = self.stack.last() else {
+        let Some((on, ol)) = self.open.last().cloned() else {
             return self.fatal(5, "Extra content at the end of the document".into());
         };
-        if self.doc.n(open).name != name {
-            let (on, ol) = (self.doc.n(open).name.clone(), self.doc.n(open).line);
+        if on != name {
             return self.fatal(76, format!("Opening and ending tag mismatch: {on} line {ol} and {name}"));
         }
-        self.stack.pop();
+        self.open.pop();
+        self.sync_line();
+        self.sink.end(&name);
         Ok(())
     }
 
@@ -450,13 +431,12 @@ impl P<'_> {
             return self.fatal(57, "parsing XML declaration: '?>' expected".into());
         }
         self.i += 2;
-        self.doc.version = version;
-        self.doc.encoding = encoding;
-        self.doc.standalone = match standalone.as_deref() {
+        let standalone = match standalone.as_deref() {
             Some("yes") => 1,
             Some("no") => 0,
             _ => -1,
         };
+        self.sink.xml_decl(version, encoding, standalone);
         Ok(())
     }
 
@@ -523,9 +503,7 @@ impl P<'_> {
             return self.fatal(61, "DOCTYPE improperly terminated".into());
         }
         self.i += 1;
-        let mut n = Node::new(DOCTYPE, &name, "");
-        n.ids = Some(Box::new((public, system, subset.trim_start_matches(['\n', '\r']).to_string())));
-        self.add(n);
+        self.sink.doctype(&name, &public, &system, subset.trim_start_matches(['\n', '\r']));
         Ok(())
     }
 
@@ -555,7 +533,7 @@ impl P<'_> {
         }
         let mut seen_root = false;
         loop {
-            if self.stack.is_empty() {
+            if self.open.is_empty() {
                 self.skip_ws();
             }
             let c = self.cur();
@@ -568,32 +546,31 @@ impl P<'_> {
                 } else if self.starts("<?") {
                     self.pi()?;
                 } else if self.starts("<![CDATA[") {
-                    if self.stack.is_empty() {
+                    if self.open.is_empty() {
                         return self.fatal(5, "Extra content at the end of the document".into());
                     }
                     self.cdata()?;
                 } else if self.starts("<!DOCTYPE") {
-                    if seen_root || !self.stack.is_empty() {
+                    if seen_root || !self.open.is_empty() {
                         return self.fatal(5, "Extra content at the end of the document".into());
                     }
                     self.doctype()?;
                 } else if self.at(1) == b'/' {
                     self.end_tag()?;
                 } else {
-                    if self.stack.is_empty() && seen_root {
+                    if self.open.is_empty() && seen_root {
                         return self.fatal(5, "Extra content at the end of the document".into());
                     }
                     seen_root = true;
                     self.start_tag()?;
                 }
-            } else if self.stack.is_empty() {
+            } else if self.open.is_empty() {
                 return self.fatal(if seen_root { 5 } else { 4 }, if seen_root { "Extra content at the end of the document".into() } else { "Start tag expected, '<' not found".into() });
             } else {
                 self.text()?;
             }
         }
-        if let Some(&open) = self.stack.last() {
-            let (n, l) = (self.doc.n(open).name.clone(), self.doc.n(open).line);
+        if let Some((n, l)) = self.open.last().cloned() {
             return self.fatal(77, format!("Premature end of data in tag {n} line {l}"));
         }
         if !seen_root {
@@ -628,17 +605,165 @@ fn decode(input: &[u8]) -> String {
     String::from_utf8_lossy(input).into_owned()
 }
 
-pub fn parse(input: &[u8], opts: i64) -> (Option<Doc>, Vec<ParseError>) {
+/// Parse `input` into `sink`. Returns whether the document was
+/// well-formed (parsing stops at the first fatal error), the errors, and
+/// the length of the decoded input (error offsets index into it).
+pub fn run<S: Sink>(input: &[u8], sink: &mut S) -> (bool, Vec<ParseError>, usize) {
     let text = decode(input);
     // Line ends normalize to \n.
     let text = if text.contains('\r') { text.replace("\r\n", "\n").replace('\r', "\n") } else { text };
     let mut line_starts = vec![0];
     line_starts.extend(memchr::memchr_iter(b'\n', text.as_bytes()).map(|i| i + 1));
-    let mut p = P { s: &text, i: 0, doc: Doc::new(false), stack: vec![], opts, errors: vec![], entities: HashMap::new(), line_starts };
+    let mut p = P { s: &text, i: 0, sink, open: vec![], errors: vec![], entities: HashMap::new(), line_starts };
     let ok = p.document().is_ok();
+    (ok, p.errors, text.len())
+}
+
+/// Builds the DOM tree.
+pub struct TreeSink {
+    pub doc: Doc,
+    stack: Vec<Id>,
+    opts: i64,
+}
+
+impl TreeSink {
+    pub fn new(opts: i64) -> TreeSink {
+        TreeSink { doc: Doc::new(false), stack: vec![], opts }
+    }
+
+    fn node(&self) -> Id {
+        self.stack.last().copied().unwrap_or(0)
+    }
+
+    fn add(&mut self, n: Node) -> Id {
+        let id = self.doc.add(n);
+        let parent = self.node();
+        self.doc.append(parent, id);
+        id
+    }
+
+    /// libxml2's areBlanks() heuristic for NOBLANKS.
+    fn are_blanks(&self, text: &str, next: (u8, u8)) -> bool {
+        if self.opts & XML_PARSE_NOBLANKS == 0 || !text.bytes().all(|c| matches!(c, b' ' | b'\t' | b'\n' | b'\r')) {
+            return false;
+        }
+        let Some(&node) = self.stack.last() else { return false };
+        if next.0 != b'<' && next.0 != b'\r' {
+            return false;
+        }
+        let n = self.doc.n(node);
+        if n.first.is_none() && next.0 == b'<' && next.1 == b'/' {
+            return false;
+        }
+        if let Some(l) = n.last {
+            if self.doc.n(l).is_text() {
+                return false;
+            }
+        }
+        if let Some(f) = n.first {
+            if self.doc.n(f).is_text() {
+                return false;
+            }
+        }
+        // xml:space="preserve" in scope keeps it.
+        for &e in self.stack.iter().rev() {
+            if let Some(v) = self.doc.get_attr(e, "xml:space") {
+                return v != "preserve";
+            }
+        }
+        true
+    }
+}
+
+impl Sink for TreeSink {
+    fn xml_decl(&mut self, version: Option<String>, encoding: Option<String>, standalone: i8) {
+        self.doc.version = version;
+        self.doc.encoding = encoding;
+        self.doc.standalone = standalone;
+    }
+
+    fn doctype(&mut self, name: &str, public: &str, system: &str, subset: &str) {
+        let mut n = Node::new(DOCTYPE, name, "");
+        n.ids = Some(Box::new((public.to_string(), system.to_string(), subset.to_string())));
+        self.add(n);
+    }
+
+    fn start(&mut self, name: &str, attrs: Vec<(String, String)>, line: u32) -> Vec<(i64, String)> {
+        let mut errors = vec![];
+        let mut n = Node::new(ELEMENT, name, "");
+        n.line = line;
+        let el = self.add(n);
+        // Namespace declarations first, then names resolve against them.
+        for (k, v) in &attrs {
+            if k == "xmlns" {
+                self.doc.m(el).ns_defs.push((None, v.clone()));
+            } else if let Some(p) = k.strip_prefix("xmlns:") {
+                self.doc.m(el).ns_defs.push((Some(p.to_string()), v.clone()));
+            }
+        }
+        let prefix = name.split_once(':').map(|(p, _)| p.to_string());
+        let ns = self.doc.lookup_ns(el, prefix.as_deref());
+        if ns.is_none() {
+            if let Some(p) = &prefix {
+                errors.push((201, format!("Namespace prefix {p} on {} is not defined", &name[p.len() + 1..])));
+            }
+        }
+        self.doc.m(el).ns = ns;
+        for (k, v) in attrs {
+            if k == "xmlns" || k.starts_with("xmlns:") {
+                continue;
+            }
+            let a = self.doc.set_attr(el, &k, &v);
+            if let Some((p, l)) = k.split_once(':') {
+                match self.doc.lookup_ns(el, Some(p)) {
+                    Some(uri) => self.doc.m(a).ns = Some(uri),
+                    None => errors.push((201, format!("Namespace prefix {p} for {l} on {name} is not defined"))),
+                }
+            }
+        }
+        self.stack.push(el);
+        errors
+    }
+
+    fn end(&mut self, _name: &str) {
+        self.stack.pop();
+    }
+
+    fn text(&mut self, s: &str, kind: TextKind, next: (u8, u8)) {
+        let parent = self.node();
+        match kind {
+            TextKind::Cdata if self.opts & XML_PARSE_NOCDATA == 0 => {
+                self.add(Node::new(CDATA, "#cdata-section", s));
+            }
+            TextKind::Plain if self.are_blanks(s, next) => {}
+            _ => self.doc.append_text(parent, TEXT, s),
+        }
+    }
+
+    fn entity(&mut self, name: &str, value: &str) {
+        if self.opts & XML_PARSE_NOENT != 0 {
+            let parent = self.node();
+            self.doc.append_text(parent, TEXT, value);
+        } else {
+            self.add(Node::new(ENTITY_REF, name, ""));
+        }
+    }
+
+    fn comment(&mut self, s: &str) {
+        self.add(Node::new(COMMENT, "#comment", s));
+    }
+
+    fn pi(&mut self, target: &str, data: &str) {
+        self.add(Node::new(PI, target, data));
+    }
+}
+
+pub fn parse(input: &[u8], opts: i64) -> (Option<Doc>, Vec<ParseError>) {
+    let mut sink = TreeSink::new(opts);
+    let (ok, errors, _) = run(input, &mut sink);
     if ok || opts & XML_PARSE_RECOVER != 0 {
-        (Some(p.doc), p.errors)
+        (Some(sink.doc), errors)
     } else {
-        (None, p.errors)
+        (None, errors)
     }
 }

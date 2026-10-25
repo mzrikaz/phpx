@@ -16,6 +16,8 @@ pub struct ParseError {
     pub code: i64,
     pub message: String,
     pub line: u32,
+    /// Where in the input (byte offset).
+    pub offset: usize,
 }
 
 pub fn entity_value(name: &str) -> Option<u32> {
@@ -143,7 +145,8 @@ impl P<'_> {
 
     fn err(&mut self, code: i64, msg: String) {
         let line = self.line();
-        self.errors.push(ParseError { level: 2, code, message: msg, line });
+        let offset = self.i;
+        self.errors.push(ParseError { level: 2, code, message: msg, line, offset });
     }
 
     fn name(&self) -> Option<&str> {

@@ -4,13 +4,13 @@
 //! (document, node id); the same node always maps to the same object.
 
 mod document;
-mod html_parse;
+pub(crate) mod html_parse;
 mod node;
 mod props;
 mod save;
 mod tables;
 mod tree;
-mod xml_parse;
+pub(crate) mod xml_parse;
 mod xpath;
 
 use std::cell::{Cell, RefCell};
