@@ -102,6 +102,33 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
         Ok(Value::array(PhpArray::from_list(names.into_iter().map(Value::str).collect::<Vec<_>>())))
     });
+    // PHP 8.4+ exposes exit/die and (8.5) clone as functions too.
+    t.insert("clone", |it, _, a| {
+        let Value::Object(o) = arg(a, 0) else {
+            return Err(it.error("TypeError", &format!("clone(): Argument #1 ($object) must be of type object, {} given", arg(a, 0).debug_type())));
+        };
+        let c = it.clone_object(&o)?;
+        if let Value::Array(with) = arg(a, 1) {
+            for (k, v) in with.iter() {
+                let name = String::from_utf8_lossy(&k.to_value().scalar_bytes().unwrap_or_default()).into_owned();
+                c.set_prop(&name, v);
+            }
+        }
+        Ok(Value::Object(c))
+    });
+    let exit: BuiltinFn = |it, _, a| {
+        match a.first() {
+            Some(Value::Int(n)) => Err(crate::interp::Ctrl::Exit(*n as i32)),
+            Some(v) if !v.is_null() => {
+                let msg = it.to_str(v)?;
+                it.echo(&msg);
+                Err(crate::interp::Ctrl::Exit(0))
+            }
+            _ => Err(crate::interp::Ctrl::Exit(0)),
+        }
+    };
+    t.insert("exit", exit);
+    t.insert("die", exit);
     t.insert("forward_static_call", |it, f, a| {
         let c = callable(it, f, a, 0)?;
         it.call_callable(&c, a[1..].to_vec(), vec![])
