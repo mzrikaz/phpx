@@ -106,6 +106,10 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
 
 pub fn constants() -> HashMap<String, Value> {
     let mut c = HashMap::new();
+    // PHP's values first; what phpx defines below wins.
+    for (k, v) in crate::consts_table::CONSTS {
+        c.insert(k.to_string(), v.value());
+    }
     let mut add = |k: &str, v: Value| {
         c.insert(k.to_string(), v);
     };
@@ -615,6 +619,34 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
         it.constants.borrow_mut().insert(n, arg(a, 1));
         Ok(Value::Bool(true))
+    });
+    t.insert("get_defined_constants", |it, _, a| {
+        thread_local! {
+            static BUILTIN: std::collections::HashSet<String> = constants().into_keys().collect();
+        }
+        let categorize = has(a, 0) && arg(a, 0).truthy();
+        let consts = it.constants.borrow();
+        let mut names: Vec<&String> = consts.keys().collect();
+        names.sort();
+        let (mut core, mut user) = (PhpArray::new(), PhpArray::new());
+        BUILTIN.with(|b| {
+            for n in names {
+                let target = if b.contains(n) { &mut core } else { &mut user };
+                target.insert(Key::Str(crate::value::pstr(n)), consts[n].clone());
+            }
+        });
+        if !categorize {
+            for (k, v) in user.iter() {
+                core.insert(k.clone(), v.clone());
+            }
+            return Ok(Value::array(core));
+        }
+        let mut out = PhpArray::new();
+        out.insert(Key::Str(crate::value::pstr("Core")), Value::array(core));
+        if user.len() > 0 {
+            out.insert(Key::Str(crate::value::pstr("user")), Value::array(user));
+        }
+        Ok(Value::array(out))
     });
     t.insert("defined", |it, _, a| {
         let n = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();

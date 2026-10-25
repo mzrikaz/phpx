@@ -28,6 +28,8 @@ mod ops;
 mod preg;
 mod props;
 mod pstr;
+mod consts;
+mod consts_table;
 mod date;
 mod reflect;
 mod trace;
