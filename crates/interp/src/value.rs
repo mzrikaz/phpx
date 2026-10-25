@@ -514,11 +514,6 @@ impl PhpArray {
 
 // ---- objects ---------------------------------------------------------------
 
-thread_local! {
-    static NEXT_OBJ_ID: Cell<u32> = const { Cell::new(1) };
-    /// PHP reuses freed object handles, most recently freed first.
-    static FREE_IDS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
-}
 
 /// Objects whose last reference died and that have a `__destruct`: the
 /// interpreter runs them at the next statement boundary (where an
@@ -534,13 +529,6 @@ thread_local! {
     pub static DESTRUCT_QUEUE: RefCell<Vec<Rc<Obj>>> = const { RefCell::new(Vec::new()) };
 }
 
-fn alloc_id() -> u32 {
-    FREE_IDS.with(|f| f.borrow_mut().pop()).unwrap_or_else(|| {
-        let id = NEXT_OBJ_ID.get();
-        NEXT_OBJ_ID.set(id + 1);
-        id
-    })
-}
 
 pub struct Obj {
     pub id: u32,
@@ -557,16 +545,22 @@ pub struct Obj {
 
 impl Obj {
     pub fn new(class: Rc<Class>, internal: Internal) -> Rc<Obj> {
-        let o = Rc::new(Obj {
-            id: alloc_id(),
-            class,
-            props: RefCell::new(Default::default()),
-            internal: RefCell::new(internal),
-            destructed: Cell::new(false),
-            gc_index: Cell::new(u32::MAX),
-        });
-        crate::gc::register(&o);
-        o
+        Obj::with_props(class, internal, Default::default())
+    }
+
+    /// New object with its initial property storage (avoids building an
+    /// empty one first).
+    pub fn with_props(class: Rc<Class>, internal: Internal, props: crate::props::Props) -> Rc<Obj> {
+        crate::gc::track(|id| {
+            Rc::new(Obj {
+                id,
+                class,
+                props: RefCell::new(props),
+                internal: RefCell::new(internal),
+                destructed: Cell::new(false),
+                gc_index: Cell::new(u32::MAX),
+            })
+        })
     }
 
     pub fn get_prop(&self, name: &str) -> Option<Value> {
@@ -595,8 +589,12 @@ impl Obj {
 
 impl Drop for Obj {
     fn drop(&mut self) {
+        if !self.class.has_destruct || self.destructed.get() {
+            crate::gc::release(self, false);
+            return;
+        }
         crate::gc::unregister(self);
-        if self.class.has_destruct && !self.destructed.get() {
+        {
             // Resurrect the state into a fresh Rc (same handle) for the
             // destructor; it frees the handle when it dies in turn.
             let o = Rc::new(Obj {
@@ -613,8 +611,7 @@ impl Drop for Obj {
                 return;
             }
         }
-        let id = self.id;
-        let _ = FREE_IDS.try_with(|f| f.borrow_mut().push(id));
+        crate::gc::release(self, false);
     }
 }
 

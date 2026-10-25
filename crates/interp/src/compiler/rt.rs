@@ -1410,9 +1410,7 @@ pub unsafe extern "C" fn rt_new(
     let r = it.class_ref(f, &*cref).and_then(|cls| {
         // `new C` of a plain class without a constructor: no call machinery.
         if cls.plain_new && cls.ctor.is_none() && pos.is_empty() {
-            let o = crate::value::Obj::new(cls.clone(), crate::value::Internal::None);
-            it.init_props(&o, &cls)?;
-            return Ok(Value::Object(o));
+            return Ok(Value::Object(it.new_instance(&cls)?));
         }
         if !meta.is_null() {
             let (pos, named) = expand_args(it, pos, meta)?;

@@ -1158,8 +1158,7 @@ impl Interp {
         if let Some(w) = what {
             return Err(self.error("Error", &format!("Cannot instantiate {w} {}", cls.name)));
         }
-        let o = Obj::new(cls.clone(), Internal::None);
-        self.init_props(&o, cls)?;
+        let o = self.new_instance(cls)?;
         if !cls.plain_new && cls.is_a("throwable") {
             self.set_throw_site(&o);
         }
@@ -1195,12 +1194,26 @@ impl Interp {
     }
 
     pub fn init_props(&self, o: &Rc<Obj>, cls: &Rc<Class>) -> R<()> {
-        // Defaults are constant expressions: evaluate once per class, then
-        // copy the whole map.
         if let Some(t) = &*cls.prop_template.borrow() {
             *o.props.borrow_mut() = crate::props::Props::with_shape(cls.shape.clone(), t.clone());
             return Ok(());
         }
+        self.init_props_slow(o, cls)
+    }
+
+    /// A new instance of `cls` with default properties (no constructor).
+    pub fn new_instance(&self, cls: &Rc<Class>) -> R<Rc<Obj>> {
+        if let Some(t) = &*cls.prop_template.borrow() {
+            return Ok(Obj::with_props(cls.clone(), Internal::None, crate::props::Props::with_shape(cls.shape.clone(), t.clone())));
+        }
+        let o = Obj::new(cls.clone(), Internal::None);
+        self.init_props_slow(&o, cls)?;
+        Ok(o)
+    }
+
+    fn init_props_slow(&self, o: &Rc<Obj>, cls: &Rc<Class>) -> R<()> {
+        // Defaults are constant expressions: evaluate once per class, then
+        // copy the whole map.
         let mut vals = Vec::with_capacity(cls.props.len());
         for p in &cls.props {
             let v = match &p.default {

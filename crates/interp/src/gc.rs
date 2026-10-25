@@ -25,43 +25,105 @@ use crate::value::{Internal, Obj, Value, DESTRUCT_PENDING, DESTRUCT_QUEUE};
 
 const MIN_THRESHOLD: usize = 10_000;
 
-thread_local! {
-    static REGISTRY: RefCell<Vec<*const Obj>> = const { RefCell::new(Vec::new()) };
+/// All collector state in one thread-local (one lookup per object).
+struct State {
+    registry: RefCell<Vec<*const Obj>>,
     /// Objects registered since the last collection.
-    static SINCE: Cell<usize> = const { Cell::new(0) };
-    static THRESHOLD: Cell<usize> = const { Cell::new(MIN_THRESHOLD) };
-    static DUE: Cell<bool> = const { Cell::new(false) };
-    static ENABLED: Cell<bool> = const { Cell::new(true) };
-    static RUNS: Cell<u64> = const { Cell::new(0) };
-    static COLLECTED: Cell<u64> = const { Cell::new(0) };
+    since: Cell<usize>,
+    threshold: Cell<usize>,
+    due: Cell<bool>,
+    enabled: Cell<bool>,
+    runs: Cell<u64>,
+    collected: Cell<u64>,
+    /// Object handles (spl_object_id): PHP reuses freed ones, most recently
+    /// freed first.
+    next_id: Cell<u32>,
+    free_ids: RefCell<Vec<u32>>,
 }
 
-pub fn register(o: &Rc<Obj>) {
+thread_local! {
+    static ST: State = const {
+        State {
+            registry: RefCell::new(Vec::new()),
+            since: Cell::new(0),
+            threshold: Cell::new(MIN_THRESHOLD),
+            due: Cell::new(false),
+            enabled: Cell::new(true),
+            runs: Cell::new(0),
+            collected: Cell::new(0),
+            next_id: Cell::new(1),
+            free_ids: RefCell::new(Vec::new()),
+        }
+    };
+}
+
+/// Allocate an object: its handle, then (with the handle) the object, then
+/// its registry slot, with one thread-local lookup.
+pub fn track(make: impl FnOnce(u32) -> Rc<Obj>) -> Rc<Obj> {
+    ST.with(|st| {
+        let id = st.free_ids.borrow_mut().pop().unwrap_or_else(|| {
+            let id = st.next_id.get();
+            st.next_id.set(id + 1);
+            id
+        });
+        let o = make(id);
+        register_in(st, &o);
+        o
+    })
+}
+
+fn register_in(st: &State, o: &Rc<Obj>) {
     let p = Rc::as_ptr(o);
-    let _ = REGISTRY.try_with(|r| {
-        let mut r = r.borrow_mut();
-        o.gc_index.set(r.len() as u32);
-        r.push(p);
-    });
-    let n = SINCE.with(|s| {
-        s.set(s.get() + 1);
-        s.get()
-    });
-    if n >= THRESHOLD.with(Cell::get) && ENABLED.with(Cell::get) && !DUE.with(Cell::get) {
-        DUE.with(|d| d.set(true));
-        // Runs at the next statement boundary, with the destructors.
+    let mut r = st.registry.borrow_mut();
+    o.gc_index.set(r.len() as u32);
+    r.push(p);
+    let n = st.since.get() + 1;
+    st.since.set(n);
+    if n >= st.threshold.get() && st.enabled.get() && !st.due.get() {
+        st.due.set(true);
         DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
+/// Object freed: give back its registry slot and (unless `keep_id`) its
+/// handle.
+pub fn release(o: &Obj, keep_id: bool) {
+    let _ = ST.try_with(|st| {
+        unregister_in(st, o);
+        if !keep_id {
+            st.free_ids.borrow_mut().push(o.id);
+        }
+    });
+}
+
+pub fn register(o: &Rc<Obj>) {
+    let p = Rc::as_ptr(o);
+    let _ = ST.try_with(|st| {
+        let mut r = st.registry.borrow_mut();
+        o.gc_index.set(r.len() as u32);
+        r.push(p);
+        let n = st.since.get() + 1;
+        st.since.set(n);
+        if n >= st.threshold.get() && st.enabled.get() && !st.due.get() {
+            st.due.set(true);
+            // Runs at the next statement boundary, with the destructors.
+            DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
+}
+
 pub fn unregister(o: &Obj) {
+    let _ = ST.try_with(|st| unregister_in(st, o));
+}
+
+fn unregister_in(st: &State, o: &Obj) {
     let i = o.gc_index.get();
     if i == u32::MAX {
         return;
     }
     o.gc_index.set(u32::MAX);
-    let _ = REGISTRY.try_with(|r| {
-        let mut r = r.borrow_mut();
+    {
+        let mut r = st.registry.borrow_mut();
         let i = i as usize;
         if i < r.len() {
             r.swap_remove(i);
@@ -70,25 +132,25 @@ pub fn unregister(o: &Obj) {
                 unsafe { (*r[i]).gc_index.set(i as u32) };
             }
         }
-    });
+    }
 }
 
 /// A collection is due (checked at statement boundaries).
 pub fn take_due() -> bool {
-    DUE.with(|d| d.replace(false))
+    ST.with(|st| st.due.replace(false))
 }
 
 pub fn set_enabled(on: bool) {
-    ENABLED.with(|e| e.set(on));
+    ST.with(|st| st.enabled.set(on));
 }
 
 pub fn enabled() -> bool {
-    ENABLED.with(Cell::get)
+    ST.with(|st| st.enabled.get())
 }
 
 /// (runs, collected, threshold, roots) for gc_status().
 pub fn status() -> (u64, u64, usize, usize) {
-    (RUNS.with(Cell::get), COLLECTED.with(Cell::get), THRESHOLD.with(Cell::get), REGISTRY.with(|r| r.borrow().len()))
+    ST.with(|st| (st.runs.get(), st.collected.get(), st.threshold.get(), st.registry.borrow().len()))
 }
 
 /// Visit the objects `v` holds a counted reference to.
@@ -153,10 +215,10 @@ fn visit_obj(o: &Obj, f: &mut dyn FnMut(*const Obj)) -> bool {
 /// Run a collection. Returns the number of objects freed. Must be called at
 /// a safe point (no property or array borrows held by the caller).
 pub fn collect() -> usize {
-    let ptrs: Vec<*const Obj> = REGISTRY.with(|r| r.borrow().clone());
+    let ptrs: Vec<*const Obj> = ST.with(|st| st.registry.borrow().clone());
     let n = ptrs.len();
-    RUNS.with(|r| r.set(r.get() + 1));
-    SINCE.with(|s| s.set(0));
+    ST.with(|st| st.runs.set(st.runs.get() + 1));
+    ST.with(|st| st.since.set(0));
     if n == 0 {
         return 0;
     }
@@ -220,7 +282,7 @@ pub fn collect() -> usize {
             let _ = DESTRUCT_QUEUE.try_with(|q| q.borrow_mut().push(o));
         }
         DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
-        DUE.with(|d| d.set(true));
+        ST.with(|st| st.due.set(true));
         return 0;
     }
     let count = garbage.len();
@@ -233,7 +295,7 @@ pub fn collect() -> usize {
     }
     drop(doomed);
     drop(garbage);
-    COLLECTED.with(|c| c.set(c.get() + count as u64));
+    ST.with(|st| st.collected.set(st.collected.get() + count as u64));
     adapt(n, count);
     count
 }
@@ -242,5 +304,5 @@ pub fn collect() -> usize {
 /// allocation, like PHP's growing root buffer.
 fn adapt(scanned: usize, freed: usize) {
     let live = scanned - freed;
-    THRESHOLD.with(|t| t.set(live.max(MIN_THRESHOLD)));
+    ST.with(|st| st.threshold.set(live.max(MIN_THRESHOLD)));
 }
