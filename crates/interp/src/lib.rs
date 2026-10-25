@@ -9,6 +9,8 @@ mod arginfo;
 mod arginfo_table;
 mod arrays;
 mod arrays_more;
+mod core_more;
+mod ob;
 mod builtins;
 mod callback;
 mod call;
@@ -208,6 +210,11 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
                 eprintln!("{}", main_it.uncaught_message(&e));
                 255
             }
+            _ => code,
+        };
+        // Then open output buffers flush through their handlers.
+        let code = match crate::ob::end_all(&main_it) {
+            Err(Ctrl::Throw(e)) if code == 0 => crate::errors::uncaught(&main_it, e),
             _ => code,
         };
         Ok((code, returned_false))

@@ -1,0 +1,36 @@
+string(26) "helloint(5)
+[ABC:5][GHI:8]"
+array(2) {
+  [0]=>
+  string(22) "default output handler"
+  [1]=>
+  string(4) "wrap"
+}
+default output handler 0 0 0 19
+wrap 1 1 0 3
+passthrough
+string(12) "passthrough
+"
+int(0)
+array(0) {
+}
+bool(false)
+bool(false)
+VIA NAMED FUNCTION
+unflushed at exit through handler
+"\u0000P\u0000a"=1
+"\u0000*\u0000b"=2
+"c"=3
+array(2) {
+  [0]=>
+  string(1) "A"
+  [1]=>
+  string(1) "B"
+}
+string(3) "MyI"
+string(3) "MyT"
+bool(true)
+bool(true)
+int(1)
+string(6) "4.5.10"
+string(4) "abab"

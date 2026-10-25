@@ -114,6 +114,8 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::xml_ext::register(&mut t);
     crate::process::register(&mut t);
     crate::arrays_more::register(&mut t);
+    crate::core_more::register(&mut t);
+    crate::ob::register(&mut t);
     crate::errors::register(&mut t);
     t
 }
