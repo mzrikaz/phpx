@@ -95,6 +95,9 @@ pub struct Jit {
     rejected: std::collections::HashSet<usize>,
     /// Why functions were rejected (for `PHPX_JIT_LOG`).
     log: bool,
+    /// Address of a byte flag the host sets to interrupt running code
+    /// (time limits, pending work); 0 = none. Loops check it each iteration.
+    interrupt_flag: usize,
 }
 
 /// Cache key: function address + argument types packed into a u64 (no
@@ -135,7 +138,15 @@ impl Jit {
             rejected: Default::default(),
             next_sym: 0,
             log: std::env::var("PHPX_JIT_LOG").is_ok(),
+            interrupt_flag: 0,
         })
+    }
+
+    /// Loops in compiled code exit (status 2, "interrupted") when the byte
+    /// at `addr` is nonzero; the host reruns the call in the interpreter,
+    /// which handles whatever is pending.
+    pub fn set_interrupt_flag(&mut self, addr: usize) {
+        self.interrupt_flag = addr;
     }
 
     /// Known not to compile: callers can skip preparing arguments.
@@ -206,6 +217,10 @@ impl Jit {
         // SAFETY: `entry` was generated for exactly these argument types; it
         // reads `args.len()` slots and writes one result slot.
         let status = unsafe { entry(bits.as_ptr(), &mut out) };
+        if status == 2 {
+            // Interrupted, not a type failure: don't count against the spec.
+            return Outcome::Deopt;
+        }
         if status != 0 {
             let d = self.deopts.entry(k.clone()).or_default();
             *d += 1;
@@ -320,6 +335,7 @@ impl Jit {
                 vars: HashMap::new(),
                 ret,
                 deopt: None,
+                interrupt: None,
                 loops: vec![],
                 depth: None,
                 jit: self,
@@ -443,6 +459,7 @@ struct Gen<'a> {
     vars: HashMap<&'static str, (Variable, Ty)>,
     ret: Ty,
     deopt: Option<Block>,
+    interrupt: Option<Block>,
     /// (continue target, break target) per enclosing loop.
     loops: Vec<(Block, Block)>,
     depth: Option<CValue>,
@@ -489,12 +506,27 @@ impl Gen<'_> {
         let zero = self.b.ins().iconst(types::I64, 0);
         let one = self.b.ins().iconst(types::I64, 1);
         self.b.ins().return_(&[zero, one]);
+        if let Some(intr) = self.interrupt {
+            self.b.switch_to_block(intr);
+            let zero = self.b.ins().iconst(types::I64, 0);
+            let two = self.b.ins().iconst(types::I64, 2);
+            self.b.ins().return_(&[zero, two]);
+        }
         self.b.seal_all_blocks();
         Ok(())
     }
 
     fn plain(&mut self) -> MemFlagsData {
         MemFlagsData::new()
+    }
+
+    fn interrupt_block(&mut self) -> Block {
+        if let Some(d) = self.interrupt {
+            return d;
+        }
+        let d = self.b.create_block();
+        self.interrupt = Some(d);
+        d
     }
 
     fn deopt_block(&mut self) -> Block {
@@ -646,6 +678,14 @@ impl Gen<'_> {
     fn loop_body(&mut self, body: &'static [Stmt], cont: Block, exit: Block) -> G<()> {
         self.loops.push((cont, exit));
         self.terminated = false;
+        if self.jit.interrupt_flag != 0 {
+            let addr = self.b.ins().iconst(types::I64, self.jit.interrupt_flag as i64);
+            let flag = self.b.ins().load(types::I8, MemFlagsData::new(), addr, 0);
+            let d = self.interrupt_block();
+            let cont_b = self.b.create_block();
+            self.b.ins().brif(flag, d, &[], cont_b, &[]);
+            self.b.switch_to_block(cont_b);
+        }
         self.stmts(body)?;
         if !self.terminated {
             self.b.ins().jump(cont, &[]);
