@@ -1530,7 +1530,6 @@ impl Interp {
         if anon_name.is_none() && self.classes.borrow().contains_key(&*lname) {
             return Err(self.error("Error", &format!("Cannot declare class {name}, because the name is already in use")));
         }
-        let display: Rc<str> = Rc::from(if anon_name.is_some() { "class@anonymous" } else { name.as_str() });
 
         let (parent, ifaces): (Option<Rc<Class>>, Vec<&String>) = match c.kind {
             ClassKind::Interface => (None, c.extends.iter().collect()),
@@ -1547,6 +1546,19 @@ impl Interp {
                 return Err(self.error("Error", &format!("Class {name} cannot extend {} {}", kind_word(p.kind), p.name)));
             }
         }
+        // An anonymous class is named after its parent or first interface
+        // ("Base@anonymous"), like PHP's.
+        let display: Rc<str> = match &anon_name {
+            Some(_) => {
+                let base = match (&parent, ifaces.first()) {
+                    (Some(p), _) => p.name.to_string(),
+                    (None, Some(i)) => self.resolve_class_name(ctx, i),
+                    (None, None) => "class".to_string(),
+                };
+                Rc::from(format!("{base}@anonymous"))
+            }
+            None => Rc::from(name.as_str()),
+        };
         let mut ancestors: Vec<Rc<str>> = vec![lname.clone()];
         let mut consts: IndexMap<Rc<str>, ConstSlot> = IndexMap::new();
         let mut methods: crate::value::FxIndexMap<Rc<str>, Rc<Method>> = Default::default();
@@ -1835,9 +1847,9 @@ impl Interp {
             decl: c,
             decl_ctx: ctx.clone(),
         });
-        if anon_name.is_none() {
-            self.classes.borrow_mut().insert(lname.clone(), cls.clone());
-        }
+        // Anonymous classes too, under their unique internal name: methods
+        // find their scope through it.
+        self.classes.borrow_mut().insert(lname.clone(), cls.clone());
         for (cn, ve) in case_values {
             cls.consts.borrow_mut().insert(cn.clone(), ConstSlot::EnumCase { name: cn, value: ve, ctx: ctx.clone() });
         }
