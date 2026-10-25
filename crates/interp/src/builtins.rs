@@ -252,6 +252,15 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         it.echo(&o.0);
         Ok(Value::Bool(true))
     });
+    t.insert("get_defined_functions", |it, _, _| {
+        let mut internal: Vec<&str> = it.builtins.keys().copied().filter(|n| !n.starts_with("__phpx")).collect();
+        internal.sort_unstable();
+        let user: Vec<Value> = it.functions.borrow().keys().map(|k| Value::str(k)).collect();
+        let mut out = PhpArray::new();
+        out.insert(Key::Str(crate::value::pstr("internal")), Value::array(PhpArray::from_list(internal.into_iter().map(Value::str).collect::<Vec<_>>())));
+        out.insert(Key::Str(crate::value::pstr("user")), Value::array(PhpArray::from_list(user)));
+        Ok(Value::array(out))
+    });
     // Built-in classes written in PHP: E_DEPRECATED for their deprecated
     // methods (PHP's own message).
     t.insert("__phpx_deprecated", |it, _, a| {
