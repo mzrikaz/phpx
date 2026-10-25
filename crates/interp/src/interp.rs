@@ -800,6 +800,8 @@ impl Interp {
             self.pos.set(Pos { file: f.ctx.file as u32, off: s.span.start });
         }
         match &s.kind {
+            // A bare `$var;` is a no-op in PHP: no undefined-variable warning.
+            StmtKind::Expr(e) if matches!(e.kind, ast::ExprKind::Var(_)) => Ok(Flow::Normal),
             StmtKind::Expr(e) => {
                 self.eval(f, e)?;
                 Ok(Flow::Normal)
