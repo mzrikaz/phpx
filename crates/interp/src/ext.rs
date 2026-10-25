@@ -1253,7 +1253,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             "<=" | "le" => c <= 0,
             ">" | "gt" => c > 0,
             ">=" | "ge" => c >= 0,
-            "==" | "eq" => c == 0,
+            "==" | "=" | "eq" => c == 0,
             "!=" | "<>" | "ne" => c != 0,
             _ => return Err(it.error("ValueError", "version_compare(): Argument #3 ($operator) must be a valid comparison operator")),
         }))
