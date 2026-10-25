@@ -1,0 +1,36 @@
+A B C
+A B C C
+A C
+B+A::hello(0) on B | B+A::hello(0) on C
+secret prot B prot C
+A/B,A/B A/C,A/C
+A B C
+A B C C
+A C
+B+A::hello(1) on B | B+A::hello(1) on C
+secret prot B prot C
+A/B,A/B A/C,A/C
+A B C
+A B C C
+A C
+B+A::hello(2) on B | B+A::hello(2) on C
+secret prot B prot C
+A/B,A/B A/C,A/C
+Error: Call to private method A::secret() from global scope
+Error: Call to protected method A::prot() from global scope
+Error: Non-static method A::hello() cannot be called statically
+Error: Call to undefined method A::nope()
+Error: Class "Nope" not found
+12
+Error: Call to private method A::secret() from global scope
+Error: Call to protected method A::prot() from global scope
+Error: Non-static method A::hello() cannot be called statically
+Error: Call to undefined method A::nope()
+Error: Class "Nope" not found
+12
+Error: Call to private method A::secret() from global scope
+Error: Call to protected method A::prot() from global scope
+Error: Non-static method A::hello() cannot be called statically
+Error: Call to undefined method A::nope()
+Error: Class "Nope" not found
+12

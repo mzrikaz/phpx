@@ -940,9 +940,56 @@ pub struct CallSite {
     pub cached: std::cell::Cell<Option<(crate::compiler::Entry, *const crate::interp::UserFn)>>,
     /// Resolved plain built-in (no by-ref params, no caller-scope access).
     pub builtin: std::cell::Cell<Option<crate::interp::BuiltinFn>>,
+    /// The numeric JIT's entry for the argument types last seen here.
+    pub jit: std::cell::Cell<Option<JitSite>>,
     /// A frame reused by calls from this site (rebuilding one per call is
     /// a large part of call overhead); recursion falls back to a fresh one.
     pub frame: SiteFrame,
+}
+
+#[derive(Clone, Copy)]
+pub struct JitSite {
+    /// Argument types (`phpx_jit::Ty`), one per argument.
+    tys: [phpx_jit::Ty; 4],
+    n: u8,
+    entry: phpx_jit::Entry,
+    ret: phpx_jit::Ty,
+}
+
+/// Call the cached numeric-JIT entry if the arguments have the cached
+/// types. None = not taken (arguments untouched).
+unsafe fn jit_site_call(site: &CallSite, args: *mut Value, n: u64, dst: *mut Value) -> Option<u64> {
+    use phpx_jit::Ty;
+    let js = site.jit.get()?;
+    if n != js.n as u64 {
+        return None;
+    }
+    let mut bits = [0i64; 4];
+    for i in 0..n as usize {
+        bits[i] = match (&*args.add(i), js.tys[i]) {
+            (Value::Int(v), Ty::Int) => *v,
+            (Value::Float(v), Ty::Float) => v.to_bits() as i64,
+            (Value::Bool(v), Ty::Bool) => *v as i64,
+            _ => return None,
+        };
+    }
+    let mut out = 0i64;
+    if (js.entry)(bits.as_ptr(), &mut out) != 0 {
+        // Deoptimized or interrupted: the general path reruns it (the
+        // code is side-effect free) and keeps the JIT's statistics.
+        site.jit.set(None);
+        return None;
+    }
+    // Numeric arguments: nothing to drop.
+    put(
+        dst,
+        match js.ret {
+            Ty::Int => Value::Int(out),
+            Ty::Float => Value::Float(f64::from_bits(out as u64)),
+            Ty::Bool => Value::Bool(out != 0),
+        },
+    );
+    Some(0)
 }
 
 /// A reusable callee frame, lent out while not busy.
@@ -996,6 +1043,39 @@ pub struct MethodCache {
     decl_class: *const crate::class::Class,
     /// Leaked once per site: only used in error messages.
     display: *const str,
+    /// Static call sites (`A::m()`): the frame's `static` class, and the
+    /// caller's `static` and `$this` classes the entry is valid for.
+    sc: *const crate::class::Class,
+    static_cls: *const crate::class::Class,
+    this_cls: *const crate::class::Class,
+}
+
+/// Re-materialize an Rc from a cached pointer (taking a new reference).
+unsafe fn rc_from(p: *const crate::class::Class) -> Option<Rc<crate::class::Class>> {
+    if p.is_null() {
+        return None;
+    }
+    Rc::increment_strong_count(p);
+    Some(Rc::from_raw(p))
+}
+
+/// Native entry for a user method (None: abstract, native, or doesn't compile).
+unsafe fn method_entry(it: &Interp, m: &Rc<crate::class::Method>) -> Option<(crate::compiler::Entry, Option<Rc<crate::class::Class>>, Rc<str>)> {
+    let crate::class::MethodBody::User(func) = &m.body else { return None };
+    let body = func.body.as_deref()?;
+    let fn_id = *func as *const ast::Function as usize;
+    let decl_class = it.classes.borrow().get(&*m.declaring).cloned();
+    let display: Rc<str> = Rc::from(format!("{}::{}", decl_class.as_ref().map(|c| &*c.name).unwrap_or(""), m.name));
+    let entry = it.native_entry(fn_id, || crate::compiler::Target {
+        fn_id,
+        display: display.clone(),
+        params: &func.params,
+        captured: vec![],
+        body: crate::compiler::Body::Block(body),
+        ctx: m.ctx.clone(),
+        class: decl_class.clone(),
+    })?;
+    Some((entry, decl_class, display))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1033,6 +1113,9 @@ pub unsafe extern "C" fn rt_call(
             }
         }
         return status(it, r, |v| put(dst, v));
+    }
+    if let Some(st) = jit_site_call(&*site, args, n, dst) {
+        return st;
     }
     if let Some((entry, u)) = (*site).cached.get() {
         let u = &*u;
@@ -1097,6 +1180,7 @@ pub unsafe extern "C" fn rt_call(
 /// (numeric JIT first). None = take the general path (args untouched).
 unsafe fn fast_user_call(it: &Interp, u: &Rc<crate::interp::UserFn>, args: *mut Value, n: u64, dst: *mut Value, site: &CallSite) -> Option<u64> {
     if let Some(v) = it.try_jit(u, std::slice::from_raw_parts(args, n as usize)) {
+        remember_jit(it, u, args, n, site);
         for i in 0..n as usize {
             drop(take(args.add(i)));
         }
@@ -1126,6 +1210,28 @@ unsafe fn fast_user_call(it: &Interp, u: &Rc<crate::interp::UserFn>, args: *mut 
     }
     let mut frame = Frame::for_call(u.ctx.clone(), u.name.clone(), fn_id);
     enter(it, entry, &mut frame, args, n, dst, u.decl.ret.as_ref(), None, &u.name)
+}
+
+/// The JIT ran this call: cache its entry at the site for these argument
+/// types (not for `float` parameters, where ints are widened first).
+unsafe fn remember_jit(it: &Interp, u: &crate::interp::UserFn, args: *mut Value, n: u64, site: &CallSite) {
+    use phpx_jit::Ty;
+    if n > 4 || u.decl.params.iter().any(|p| p.ty.is_some()) {
+        return;
+    }
+    let mut tys = [Ty::Int; 4];
+    for i in 0..n as usize {
+        tys[i] = match &*args.add(i) {
+            Value::Int(_) => Ty::Int,
+            Value::Float(_) => Ty::Float,
+            Value::Bool(_) => Ty::Bool,
+            _ => return,
+        };
+    }
+    let Ok(jit) = it.jit.try_borrow() else { return };
+    if let Some((entry, ret)) = jit.as_ref().and_then(|j| j.ready_entry(u.decl, &tys[..n as usize])) {
+        site.jit.set(Some(JitSite { tys, n: n as u8, entry, ret }));
+    }
 }
 
 /// Run a native entry with a fresh frame; applies the declared return type.
@@ -1192,22 +1298,10 @@ pub unsafe extern "C" fn rt_method_call(
         let hit = hit.or_else(|| {
             // Miss: look the method up and (if it compiles) cache it.
             let m = o.class.find_method(site.lname)?.clone();
-            let crate::class::MethodBody::User(func) = &m.body else { return None };
-            if func.body.is_none() || !it.member_visible(f.class.as_deref(), m.vis, &m.declaring) {
+            if !it.member_visible(f.class.as_deref(), m.vis, &m.declaring) {
                 return None;
             }
-            let fn_id = *func as *const ast::Function as usize;
-            let decl_class = it.classes.borrow().get(&*m.declaring).cloned();
-            let display: Rc<str> = Rc::from(format!("{}::{}", decl_class.as_ref().map(|c| &*c.name).unwrap_or(""), m.name));
-            let entry = it.native_entry(fn_id, || crate::compiler::Target {
-                fn_id,
-                display: display.clone(),
-                params: &func.params,
-                captured: vec![],
-                body: crate::compiler::Body::Block(func.body.as_deref().unwrap()),
-                ctx: m.ctx.clone(),
-                class: decl_class.clone(),
-            })?;
+            let (entry, decl_class, display) = method_entry(it, &m)?;
             let mc = MethodCache {
                 class: Rc::as_ptr(&o.class),
                 scope,
@@ -1215,6 +1309,9 @@ pub unsafe extern "C" fn rt_method_call(
                 method: Rc::as_ptr(&m),
                 decl_class: decl_class.as_ref().map_or(ptr::null(), Rc::as_ptr),
                 display: Box::leak(display.to_string().into_boxed_str()),
+                sc: ptr::null(),
+                static_cls: ptr::null(),
+                this_cls: ptr::null(),
             };
             site.cached.set(Some(mc));
             site.frame.invalidate();
@@ -1224,13 +1321,7 @@ pub unsafe extern "C" fn rt_method_call(
             let m = &*mc.method;
             let crate::class::MethodBody::User(func) = &m.body else { unreachable!() };
             let make = || {
-                let decl_class = if mc.decl_class.is_null() {
-                    None
-                } else {
-                    // Re-materialize the Rc without changing the count net.
-                    Rc::increment_strong_count(mc.decl_class);
-                    Some(Rc::from_raw(mc.decl_class))
-                };
+                let decl_class = rc_from(mc.decl_class);
                 let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
                 frame.static_class = Some(o.class.clone());
                 frame.class = decl_class;
@@ -1374,8 +1465,7 @@ pub unsafe extern "C" fn rt_prop_get_dyn(c: *mut Cx, obj: *const Value, name: *c
 pub unsafe extern "C" fn rt_static_call(
     c: *mut Cx,
     cref: *const ast::ClassRef,
-    name: *const u8,
-    len: u64,
+    site: *const MethodSite,
     args: *mut Value,
     n: u64,
     locals: *const *mut Value,
@@ -1383,16 +1473,128 @@ pub unsafe extern "C" fn rt_static_call(
     dst: *mut Value,
 ) -> u64 {
     let (it, f) = cx(c);
-    let name = name_of(name, len);
+    let site = &*site;
+    let cref = &*cref;
+    if !meta.is_null() || !matches!(cref, ast::ClassRef::Name(_)) {
+        let cls = match it.class_ref(f, cref) {
+            Ok(c) => c,
+            Err(e) => return status(it, Err::<(), _>(e), |_| ()),
+        };
+        return static_call_general(it, f, cref, cls, site.name, args, n, locals, meta, dst);
+    }
+    // A named class (or self/parent/static) resolves the same way for the
+    // same calling scope, `static` and `$this` class: cache per those.
+    let ptr_of = |c: Option<&Rc<crate::class::Class>>| c.map_or(ptr::null(), Rc::as_ptr);
+    let scope = ptr_of(f.class.as_ref());
+    let stc = ptr_of(f.static_class.as_ref());
+    let thc = ptr_of(f.this.as_ref().map(|o| &o.class));
+    let mut hit = match site.cached.get() {
+        Some(mc) if mc.scope == scope && mc.static_cls == stc && mc.this_cls == thc => Some(mc),
+        _ => None,
+    };
+    let mut resolved = None;
+    if hit.is_none() {
+        let cls = match it.class_ref(f, cref) {
+            Ok(c) => c,
+            Err(e) => return status(it, Err::<(), _>(e), |_| ()),
+        };
+        hit = static_lookup(it, f, cref, &cls, site, scope, stc, thc);
+        resolved = Some(cls);
+    }
+    if let Some(mc) = hit {
+        let m = &*mc.method;
+        let crate::class::MethodBody::User(func) = &m.body else { unreachable!() };
+        let make = || {
+            let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
+            frame.static_class = rc_from(mc.sc);
+            frame.class = rc_from(mc.decl_class);
+            frame
+        };
+        let this = if m.is_static { None } else { f.this.clone() };
+        let r = site.frame.with(make, |frame| {
+            frame.this = this;
+            let ret_class = if func.ret.is_some() { frame.class.clone() } else { None };
+            enter(it, mc.entry, frame, args, n, dst, func.ret.as_ref(), ret_class.as_ref(), &*mc.display)
+        });
+        if let Some(st) = r {
+            return st;
+        }
+    }
+    let cls = match resolved {
+        Some(c) => c,
+        None => match it.class_ref(f, cref) {
+            Ok(c) => c,
+            Err(e) => return status(it, Err::<(), _>(e), |_| ()),
+        },
+    };
+    static_call_general(it, f, cref, cls, site.name, args, n, locals, ptr::null(), dst)
+}
+
+/// Resolve `A::m()` for the inline cache: a visible, compiled user method,
+/// static or (with a fitting `$this`) an instance method.
+#[allow(clippy::too_many_arguments)]
+unsafe fn static_lookup(
+    it: &Interp,
+    f: &Frame,
+    cref: &ast::ClassRef,
+    cls: &Rc<crate::class::Class>,
+    site: &MethodSite,
+    scope: *const crate::class::Class,
+    stc: *const crate::class::Class,
+    thc: *const crate::class::Class,
+) -> Option<MethodCache> {
+    let m = cls.find_method(site.lname)?.clone();
+    if !it.member_visible(f.class.as_deref(), m.vis, &m.declaring) {
+        return None;
+    }
+    let sc = if m.is_static {
+        let forwarding = matches!(cref, ast::ClassRef::Name(n) if matches!(&*n.to_ascii_lowercase(), "self" | "parent" | "static"));
+        if forwarding { f.static_class.clone().unwrap_or_else(|| cls.clone()) } else { cls.clone() }
+    } else {
+        // `parent::m()` / `A::m()` from an instance of A: keeps `$this`.
+        let this = f.this.as_ref().filter(|o| o.class.is_subclass_of(cls))?;
+        this.class.clone()
+    };
+    let (entry, decl_class, display) = method_entry(it, &m)?;
+    // Classes live for the whole run: the cache holds plain pointers.
+    let mc = MethodCache {
+        class: Rc::as_ptr(cls),
+        scope,
+        entry,
+        method: Rc::as_ptr(&m),
+        decl_class: decl_class.as_ref().map_or(ptr::null(), Rc::as_ptr),
+        display: Box::leak(display.to_string().into_boxed_str()),
+        sc: Rc::as_ptr(&sc),
+        static_cls: stc,
+        this_cls: thc,
+    };
+    site.cached.set(Some(mc));
+    site.frame.invalidate();
+    Some(mc)
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn static_call_general(
+    it: &Interp,
+    f: &mut Frame,
+    cref: &'static ast::ClassRef,
+    cls: Rc<crate::class::Class>,
+    name: &str,
+    args: *mut Value,
+    n: u64,
+    locals: *const *mut Value,
+    meta: *const ast::Arg,
+    dst: *mut Value,
+) -> u64 {
     let pos = take_args(args, n);
-    let r = it.class_ref(f, &*cref).and_then(|cls| {
+    let r = (|| {
         if !meta.is_null() {
             let (pos, named) = expand_args(it, pos, meta)?;
-            return it.static_call(f, &*cref, cls.clone(), name, pos, named);
+            return it.static_call(f, cref, cls.clone(), name, pos, named);
         }
         let params = cls.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m));
-        with_refs(params, pos, locals, |pos| it.static_call(f, &*cref, cls.clone(), name, pos, vec![]))
-    });
+        with_refs(params, pos, locals, |pos| it.static_call(f, cref, cls.clone(), name, pos, vec![]))
+    })();
     status(it, r, |v| put(dst, v))
 }
 

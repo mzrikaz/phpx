@@ -1386,7 +1386,7 @@ impl<'a> Lower<'a> {
             }
             Call { callee, args } => {
                 let ExprKind::Name(n) = &callee.kind else { unreachable!() };
-                let site = Box::new(CallSite { name: n, cached: Default::default(), builtin: Default::default(), frame: Default::default() });
+                let site = Box::new(CallSite { name: n, cached: Default::default(), builtin: Default::default(), jit: Default::default(), frame: Default::default() });
                 let sp = &*site as *const CallSite as i64;
                 self.sites.push(site);
                 let (aa, la, n_) = self.args(args)?;
@@ -1439,10 +1439,13 @@ impl<'a> Lower<'a> {
             StaticCall { class, name, args } => {
                 let name = self.member(name)?;
                 let cr = self.iconst(class as *const ClassRef as i64);
-                let (np, nl) = self.name_parts(name);
+                let lname: &'static str = Box::leak(name.to_ascii_lowercase().into_boxed_str());
+                let site = Box::new(super::rt::MethodSite { name, lname, cached: Default::default(), frame: Default::default() });
+                let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
+                self.msites.push(site);
                 let (aa, la, n_) = self.args(args)?;
                 let meta = self.arg_meta(args);
-                self.helper_value("rt_static_call", |l| vec![l.cx, cr, np, nl, aa, n_, la, meta])?
+                self.helper_value("rt_static_call", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?
             }
             New { class, args } => {
                 let cr = self.iconst(class as *const ClassRef as i64);
@@ -1529,7 +1532,7 @@ impl<'a> Lower<'a> {
         self.b.ins().brif(shadowed, slow, &[], fast, &[]);
         // Generic call: also the fallback for the cases the fast code skips.
         let generic = |l: &mut Self| -> L<()> {
-            let site = Box::new(CallSite { name, cached: Default::default(), builtin: Default::default(), frame: Default::default() });
+            let site = Box::new(CallSite { name, cached: Default::default(), builtin: Default::default(), jit: Default::default(), frame: Default::default() });
             let sp = &*site as *const CallSite as i64;
             l.sites.push(site);
             let (aa, la, n_) = l.args(args)?;
@@ -1575,7 +1578,7 @@ impl<'a> Lower<'a> {
                 // Other types: the real built-in (errors, Countable, ...)
                 // with the value already evaluated.
                 self.b.switch_to_block(no);
-                let site = Box::new(CallSite { name, cached: Default::default(), builtin: Default::default(), frame: Default::default() });
+                let site = Box::new(CallSite { name, cached: Default::default(), builtin: Default::default(), jit: Default::default(), frame: Default::default() });
                 let sp = &*site as *const CallSite as i64;
                 self.sites.push(site);
                 let (slot, ids) = self.alloc_array(1);
