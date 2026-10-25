@@ -313,6 +313,9 @@ impl Interp {
                     for (k, val) in o.props.borrow().iter() {
                         a.insert(Key::from_bytes(&crate::ext::mangled(&o, k)), val.clone());
                     }
+                    for (k, val) in o.view_props() {
+                        a.insert(Key::Str(crate::value::pstr(&k)), val);
+                    }
                     Value::array(a)
                 }
                 scalar => Value::array(PhpArray::from_list([scalar])),

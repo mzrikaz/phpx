@@ -1488,7 +1488,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
 fn with_hash<T>(it: &Interp, v: &Value, g: impl FnOnce(&mut HashState) -> T) -> R<T> {
     if let Value::Object(o) = v {
         if let Some(Internal::Data(d)) = o.internal_mut().as_deref_mut() {
-            if let Some(st) = d.downcast_mut::<HashState>() {
+            if let Some(st) = d.as_any_mut().downcast_mut::<HashState>() {
                 return Ok(g(st));
             }
         }
@@ -1496,7 +1496,14 @@ fn with_hash<T>(it: &Interp, v: &Value, g: impl FnOnce(&mut HashState) -> T) -> 
     Err(it.error("TypeError", "hash_update(): Argument #1 ($context) must be of type HashContext"))
 }
 
-/// clone of a built-in object's native state.
-pub fn clone_data(d: &dyn std::any::Any) -> Option<Box<dyn std::any::Any>> {
-    d.downcast_ref::<HashState>().map(|h| Box::new(h.clone()) as Box<dyn std::any::Any>)
+impl crate::value::NativeData for HashState {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    fn clone_data(&self) -> Option<Box<dyn crate::value::NativeData>> {
+        Some(Box::new(self.clone()))
+    }
 }

@@ -1381,7 +1381,7 @@ impl Interp {
             Internal::Generator(_) => {
                 return Err(self.error("Error", "Trying to clone an uncloneable object of class Generator"));
             }
-            Internal::Data(d) => match crate::ext::clone_data(&**d) {
+            Internal::Data(d) => match d.clone_data() {
                 Some(d) => Internal::Data(d),
                 None => return Err(self.error("Error", &format!("Trying to clone an uncloneable object of class {}", o.class.name))),
             },

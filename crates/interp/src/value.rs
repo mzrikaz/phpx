@@ -671,6 +671,40 @@ impl Obj {
         self.props.borrow().get(name).map(Value::deref)
     }
 
+    /// Virtual properties of native state (see `NativeData::view_props`).
+    pub fn view_props(&self) -> Vec<(Rc<str>, Value)> {
+        if self.gc.get() & HAS_INTERNAL == 0 {
+            return vec![];
+        }
+        match self.try_internal().as_deref() {
+            Some(Internal::Data(d)) => d.view_props(),
+            _ => vec![],
+        }
+    }
+
+    /// Native comparison of two objects' states, if their class has one.
+    pub fn native_compare(&self, other: &Obj) -> Option<Ordering> {
+        if self.gc.get() & other.gc.get() & HAS_INTERNAL == 0 {
+            return None;
+        }
+        let (a, b) = (self.try_internal()?, other.try_internal()?);
+        match (&*a, &*b) {
+            (Internal::Data(x), Internal::Data(y)) => x.compare(&**y),
+            _ => None,
+        }
+    }
+
+    /// Give an existing object native state (a constructor of a built-in
+    /// class running for a user subclass).
+    pub fn set_internal(&self, i: Internal) {
+        if self.gc.get() & HAS_INTERNAL != 0 {
+            *self.internal_cell().borrow_mut() = i;
+            return;
+        }
+        INTERNALS.with(|m| m.borrow_mut().insert(self.id, Box::new(RefCell::new(i))));
+        self.gc.set(self.gc.get() | HAS_INTERNAL);
+    }
+
     /// Properties in order, references dereferenced.
     pub fn prop_list(&self) -> Vec<(Rc<str>, Value)> {
         self.props.borrow().iter().map(|(k, v)| (k.clone(), v.deref())).collect()
@@ -739,8 +773,25 @@ pub enum Internal {
     Closure(crate::interp::Callable),
     Promise(phpx_runtime::Promise<crate::interp::Outcome>),
     Generator(Rc<crate::generator::GenHandle>),
-    /// Native state of built-in classes (HashContext, ...).
-    Data(Box<dyn std::any::Any>),
+    /// Native state of built-in classes (HashContext, DateTime, ...).
+    Data(Box<dyn NativeData>),
+}
+
+/// Native state of a built-in class's object.
+pub trait NativeData: std::any::Any {
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    /// State for `clone` (None: the class is uncloneable).
+    fn clone_data(&self) -> Option<Box<dyn NativeData>>;
+    /// Properties shown by var_dump, print_r, var_export, json_encode and
+    /// array casts but not real (DateTime's `date`, `timezone`, ...).
+    fn view_props(&self) -> Vec<(Rc<str>, Value)> {
+        vec![]
+    }
+    /// Comparison with another object's state (DateTime compares instants).
+    fn compare(&self, _other: &dyn NativeData) -> Option<Ordering> {
+        None
+    }
 }
 
 // ---- conversions -------------------------------------------------------------
@@ -1035,6 +1086,9 @@ pub fn loose_eq(a: &Value, b: &Value) -> bool {
         (Value::Ref(x), _) => loose_eq(&x.borrow(), b),
         (_, Value::Ref(y)) => loose_eq(a, &y.borrow()),
         (Value::Object(x), Value::Object(y)) => {
+            if let Some(o) = x.native_compare(y) {
+                return o == Ordering::Equal;
+            }
             Rc::ptr_eq(x, y)
                 || (Rc::ptr_eq(&x.class, &y.class) && {
                     let (px, py) = (x.prop_list(), y.prop_list());
@@ -1103,7 +1157,10 @@ pub fn compare(a: &Value, b: &Value) -> Option<Ordering> {
         }
         (Array(_), _) => Some(Ordering::Greater),
         (_, Array(_)) => Some(Ordering::Less),
-        (Object(_), Object(_)) => if loose_eq(a, b) { Some(Ordering::Equal) } else { None },
+        (Object(x), Object(y)) => match x.native_compare(y) {
+            Some(o) => Some(o),
+            None => if loose_eq(a, b) { Some(Ordering::Equal) } else { None },
+        },
         (Object(_), _) => Some(Ordering::Greater),
         (_, Object(_)) => Some(Ordering::Less),
     }
@@ -1273,8 +1330,9 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
                 out.s("}\n");
                 return;
             }
-            let props: Vec<(Rc<str>, bool, Value)> =
+            let mut props: Vec<(Rc<str>, bool, Value)> =
                 o.props.borrow().iter().map(|(k, v)| (k.clone(), is_shared_ref(v), v.deref())).collect();
+            props.extend(o.view_props().into_iter().map(|(k, v)| (k, false, v)));
             out.s(&format!("object({})#{} ({}) {{\n", o.class.name, o.id, props.len()));
             seen.push(ptr);
             for (name, amp, v) in props.iter() {
@@ -1333,7 +1391,8 @@ pub fn print_r(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<usize>, d
                 seen.pop();
                 return;
             }
-            let props = o.prop_list();
+            let mut props = o.prop_list();
+            props.extend(o.view_props());
             let items = props
                 .iter()
                 .map(|(n, v)| {
@@ -1471,7 +1530,7 @@ fn export(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<usize>, circul
             } else {
                 out.s(&format!("\\{}::__set_state(array(\n", o.class.name));
             }
-            for (k, v) in o.prop_list() {
+            for (k, v) in o.prop_list().into_iter().chain(o.view_props()) {
                 out.pad(indent + 3);
                 out.s(&format!("'{k}' => "));
                 var_export(&v, indent + 2, out, seen, circular);

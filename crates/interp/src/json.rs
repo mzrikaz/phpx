@@ -215,13 +215,14 @@ fn encode(it: &Interp, v: &Value, flags: i64, depth: usize, out: &mut String) ->
                     None => Err(EncErr::Json(11, "Non-backed enums have no default serialization")),
                 };
             }
-            let pairs: Vec<(Vec<u8>, Value)> = o
+            let mut pairs: Vec<(Vec<u8>, Value)> = o
                 .props
                 .borrow()
                 .iter()
                 .filter(|(n, _)| o.class.find_prop(n).is_none_or(|d| d.vis == crate::class::Vis::Public))
                 .map(|(n, v)| (n.as_bytes().to_vec(), v.clone()))
                 .collect();
+            pairs.extend(o.view_props().into_iter().map(|(n, v)| (n.as_bytes().to_vec(), v)));
             encode_object(it, &pairs, flags, depth, out)?;
         }
     }
