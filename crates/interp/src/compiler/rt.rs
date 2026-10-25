@@ -144,7 +144,7 @@ unsafe fn take(p: *mut Value) -> Value {
 }
 
 fn status<T>(it: &Interp, r: R<T>, ok: impl FnOnce(T)) -> u64 {
-    match r {
+    match crate::errors::check(r) {
         Ok(v) => {
             ok(v);
             0

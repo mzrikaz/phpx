@@ -512,11 +512,7 @@ impl Interp {
     }
 
     pub fn warn(&self, msg: &str) {
-        if self.silence.get() > 0 {
-            return;
-        }
-        let (file, line) = self.here();
-        eprintln!("PHP Warning:  {msg} in {file} on line {line}");
+        crate::errors::raise(self, crate::errors::E_WARNING, msg);
     }
 
     /// PHP's fatal "Allowed memory size ... exhausted" (not catchable).
@@ -529,19 +525,11 @@ impl Interp {
     }
 
     pub fn notice(&self, msg: &str) {
-        if self.silence.get() > 0 {
-            return;
-        }
-        let (file, line) = self.here();
-        eprintln!("PHP Notice:  {msg} in {file} on line {line}");
+        crate::errors::raise(self, crate::errors::E_NOTICE, msg);
     }
 
     pub fn deprecated(&self, msg: &str) {
-        if self.silence.get() > 0 {
-            return;
-        }
-        let (file, line) = self.here();
-        eprintln!("PHP Deprecated:  {msg} in {file} on line {line}");
+        crate::errors::raise(self, crate::errors::E_DEPRECATED, msg);
     }
 
     // ---- running files -----------------------------------------------
@@ -707,7 +695,9 @@ impl Interp {
         }
         let mut i = 0;
         while i < stmts.len() {
-            match self.exec(f, &stmts[i])? {
+            let flow = self.exec(f, &stmts[i]);
+            // An error handler that threw surfaces after the statement.
+            match crate::errors::check(flow)? {
                 Flow::Normal => i += 1,
                 Flow::Goto(label) => match label_index(stmts, label) {
                     // Jump within this list (backward or forward).

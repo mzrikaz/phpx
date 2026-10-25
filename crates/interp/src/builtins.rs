@@ -61,7 +61,7 @@ pub fn invoke(it: &Interp, name: &str, spec: Option<&crate::arginfo::Spec>, fun:
     if let Some(s) = spec {
         s.check(it, args)?;
     }
-    guarded(it, name, || fun(it, f, args))
+    crate::errors::check(guarded(it, name, || fun(it, f, args)))
 }
 
 pub fn guarded(it: &Interp, name: &str, f: impl FnOnce() -> R<Value>) -> R<Value> {
@@ -107,6 +107,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::tokenizer::register(&mut t);
     crate::dom::register(&mut t);
     crate::process::register(&mut t);
+    crate::errors::register(&mut t);
     t
 }
 
@@ -317,15 +318,6 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("error_log", |it, _, a| {
         eprintln!("{}", String::from_utf8_lossy(&s(it, a, 0)?));
-        Ok(Value::Bool(true))
-    });
-    t.insert("trigger_error", |it, _, a| {
-        let level = if has(a, 1) { int(it, a, 1)? } else { 1024 };
-        let msg = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
-        if level == 256 {
-            return Err(it.error("Error", &msg));
-        }
-        it.warn(&msg);
         Ok(Value::Bool(true))
     });
 
@@ -748,8 +740,6 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     // Diagnostic: native stack bytes left in this green thread.
     t.insert("php_sapi_name", |_, _, _| Ok(Value::str("cli")));
     t.insert("phpversion", |_, _, _| Ok(Value::str("8.5.10")));
-    t.insert("set_error_handler", |_, _, _| Ok(Value::Null));
-    t.insert("set_exception_handler", |_, _, _| Ok(Value::Null));
     t.insert("gc_collect_cycles", |it, _, _| {
         // Destructors of cyclic garbage run, then the cycles are freed.
         let mut n = crate::gc::collect();

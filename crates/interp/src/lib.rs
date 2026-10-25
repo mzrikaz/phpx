@@ -34,6 +34,7 @@ mod date;
 mod fiber;
 mod glob;
 mod mbext;
+mod errors;
 mod tokenizer;
 mod zsort;
 mod dom;
@@ -155,11 +156,7 @@ pub fn run_source_args(path: &Path, src: String, argv: Vec<String>, out: Box<dyn
         let code = match main_it.run_file_in(&mut frame, file, id) {
             Ok(_) | Err(Ctrl::GenClose) => 0,
             Err(Ctrl::Exit(c)) => c,
-            Err(Ctrl::Throw(e)) => {
-                main_it.flush();
-                eprintln!("{}", main_it.uncaught_message(&e));
-                255
-            }
+            Err(Ctrl::Throw(e)) => crate::errors::uncaught(&main_it, e),
         };
         main_it.globals.set(std::ptr::null_mut());
         drop(frame);

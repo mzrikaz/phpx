@@ -844,7 +844,7 @@ impl Interp {
                 if !named.is_empty() {
                     return Err(self.error("Error", &format!("phpx: named arguments to {}() are not supported yet", m.name)));
                 }
-                fun(self, this.as_ref(), &static_class, pos.into_iter().map(Value::into_deref).collect())
+                crate::errors::check(fun(self, this.as_ref(), &static_class, pos.into_iter().map(Value::into_deref).collect()))
             }
             MethodBody::User(func) => {
                 let class = self.classes.borrow().get(&*m.declaring).cloned();

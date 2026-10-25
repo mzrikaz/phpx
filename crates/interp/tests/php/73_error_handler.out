@@ -1,0 +1,29 @@
+NULL
+dflt
+H: 2 Undefined array key "y" 73_error_handler.php:5 er=30719
+|
+H: 2 Undefined array key "z" 73_error_handler.php:6 er=4437
+|
+H: 2 Undefined variable $undefined 73_error_handler.php:7 er=30719
+|
+H: 512 custom 73_error_handler.php:8 er=30719
+string(1) "h"
+caught: Undefined array key "nope"
+ace
+caught2: file_get_contents(/nonexistent/file): Failed to open stream: No such file or directory
+caught3
+|
+array(4) {
+  ["type"]=>
+  int(8192)
+  ["message"]=>
+  string(77) "strlen(): Passing null to parameter #1 ($string) of type string is deprecated"
+  ["file"]=>
+  string(69) "/home/rikaz/Projects/php/crates/interp/tests/php/73_error_handler.php"
+  ["line"]=>
+  int(18)
+}
+NULL
+int(30719)
+|
+EH: boom

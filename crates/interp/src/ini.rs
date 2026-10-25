@@ -355,14 +355,6 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         crate::timeout::set(v);
         Ok(Value::Bool(true))
     });
-    t.insert("error_reporting", |it, _, a| {
-        let old = it.ini_get("error_reporting").and_then(|v| v.parse::<i64>().ok()).unwrap_or(30719);
-        if has(a, 0) && !arg(a, 0).is_null() {
-            let v = it.to_int(&arg(a, 0))?;
-            it.ini.borrow_mut().set("error_reporting", &v.to_string());
-        }
-        Ok(Value::Int(old))
-    });
     t.insert("memory_get_usage", |_, _, _| Ok(Value::Int(crate::alloc::used() as i64)));
     t.insert("memory_get_peak_usage", |_, _, _| Ok(Value::Int(crate::alloc::peak() as i64)));
     t.insert("memory_reset_peak_usage", |_, _, _| Ok(Value::Null));

@@ -883,10 +883,6 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("ignore_user_abort", |_, _, _| Ok(Value::Int(0)));
     t.insert("connection_status", |_, _, _| Ok(Value::Int(0)));
     t.insert("connection_aborted", |_, _, _| Ok(Value::Int(0)));
-    t.insert("error_get_last", |_, _, _| Ok(Value::Null));
-    t.insert("error_clear_last", |_, _, _| Ok(Value::Null));
-    t.insert("restore_error_handler", |_, _, _| Ok(Value::Bool(true)));
-    t.insert("restore_exception_handler", |_, _, _| Ok(Value::Bool(true)));
     t.insert("class_alias", |it, _, a| {
         let orig = bstr(it, a, 0)?;
         let alias = bstr(it, a, 1)?;
