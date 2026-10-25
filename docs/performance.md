@@ -6,65 +6,72 @@ numeric code, arithmetic, built-in calls, assignments and concatenation, and
 still slower on user-function calls, method calls, property access,
 indexing and iteration.
 
-## Microbenchmarks
+## Baseline (2026-10-25, fair comparison)
 
-Nanoseconds per operation, lower is better. "phpx" is the default tiering
-(native compiler + numeric JIT). The machine is noisy, so phpx figures are
-given as observed ranges; differences under ~20% should not be read as
-meaningful.
+PHP 8.5.10 CLI run with `php -n` (no php.ini: **xdebug and pcov off**; the
+lerd default config loads xdebug, which slows PHP 3-5x and made earlier
+comparisons look better than they were). "PHP JIT" adds
+`-d opcache.enable_cli=1 -d opcache.jit=tracing -d opcache.jit_buffer_size=64M`.
 
-| Operation | PHP 8.5 (ns/op) | phpx (ns/op) | Verdict |
-|---|---:|---:|---|
-| Empty loop iteration | 3.7 | 3.2 – 3.8 | parity |
-| Local assignment | 5.0 | ~2 | **phpx faster** |
-| `$a[] = $x` (push) | 19 | 20 – 30 | slightly slower |
-| `foreach` iteration | 8 | 18 – 24 | **slower** (~2.5x) |
-| Built-in function call | 13 | ~2 | **phpx faster** |
-| User function call | 13 | ~30 | **slower** (~2.3x) |
-| String concatenation | 17 | ~12 | **phpx faster** |
-| Array index read | 7 | ~17 | **slower** (~2.4x) |
-| Property read | 6 | ~19 | **slower** (~3x) |
-| Method call | 17 | ~55 | **slower** (~3x) |
-| String interpolation | 52 | ~85 | **slower** (~1.6x) |
+### Microbenchmarks (ns per operation, `microf.php`, lower is better)
 
-Note: the "user fn call" row is the general (non-numeric) case. Calls to
-functions taken by the numeric JIT are much faster than PHP (see `fib`
-below).
+| Operation | PHP 8.5 (`-n`) | phpx | Status |
+|---|---|---|---|
+| empty loop | 5.5 | 3.1 | faster |
+| `$x = $x + 1` | 6.1 | 1.9 | faster |
+| `$a[] = $i` | 22.3 | 25 | ~par |
+| `foreach` over array | 10.3 | 25 | **slower** |
+| built-in call (`abs`) | 20.1 | 2.2 | faster |
+| user function call | 19.1 | 31 | **slower** |
+| `.=` concat | 19.7 | 12.5 | faster |
+| `$a[$i]` read | 8.2 | 18 | **slower** |
+| `$o->p` read | 6.8 | 21 | **slower** |
+| method call | 19.4 | 55 | **slower** |
+| `"item $i"` | 60.3 | 87 | **slower** |
+| `new C` (no ctor) | 38.7 | 122 | **slower** |
 
-## Program benchmarks (`bench.php`)
+### Numeric code (`num.php`, ms)
 
-| Section | PHP 8.5 | phpx |
-|---|---:|---:|
-| `fib` (recursive calls, numeric) | 10 ms | ~5 ms |
-| array work | 8 ms | ~17 ms |
-| string work | 5 ms | ~12 ms |
+| Benchmark | PHP `-n` | PHP JIT | phpx |
+|---|---|---|---|
+| fib(30) | 54.6 | 19.2 | 17.6 |
+| loop_sum | 59.2 | 31.5 | 17.3 |
+| count_primes | 141.4 | 67.7 | 73.3 |
+| collatz | 1107.3 | 382.2 | 162.0 |
+| mandelbrot | 338.9 | 30.1 | 40.6 |
 
-## Numeric code (`num.php` and earlier JIT benchmarks)
+### Memory (bytes per item, 500k items)
 
-Numeric code that the JIT takes is 2–8x faster than PHP. Earlier
-measurements of individual numeric functions:
-
-| Benchmark | PHP 8.5 | phpx (JIT) |
-|---|---:|---:|
-| `fib(30)` | 28 ms | 8 ms |
-| `loop_sum` 5M | 30 ms | 6 ms |
-| `count_primes` 300k | 71 ms | 33 ms |
-| `collatz` 300k | 550 ms | 82 ms |
-| `mandelbrot` 400×400 | 169 ms | 19 ms |
-
-## Where the time goes, and what's next
-
-| Slow path | Cause | Planned fix |
+| Item | PHP 8.5 | phpx |
 |---|---|---|
-| User function calls | Each call goes through `rt_call`: argument array, fresh `Frame`, return-type check, status handling | Direct native-to-native calls with a register-based fast ABI when caller and callee are both compiled |
-| Method calls | `rt_method_call` + monomorphic cache check + frame setup | Same as above, plus inlined cache guard in generated code |
-| Property reads | Helper call per read even on cache hit (`rt_prop_read`) | Inline the `PropSite` guard and load the slot directly |
-| Array index | Helper call per read (`rt_index_get`) | Inline packed-array fast path (int key, in bounds) |
-| `foreach` | Boxed iterator, helper call per element (`rt_iter_next`) | Inline packed-array iteration |
-| String interpolation | Generic stringification of parts | Specialise per part type |
-| Code that falls back to the interpreter | References, static vars, globals, `@`, generators (see [native-compiler.md](native-compiler.md#what-compiles)) | Extend compiler coverage (roadmap item 4) |
+| object with 2 props | 105 | 169 (was 333 before shapes) |
+| constant array literal `[1,2]` | 17 | 17 (was 169 before sharing) |
+| short string | 57 | 68 |
 
-Target: beat PHP on every row of the microbenchmark table (roadmap item 5).
+## Plan: beat PHP everywhere, approach Node/Go
+
+Targets: every microbenchmark at or below PHP 8.5 with JIT; numeric and
+call-heavy code near Node; memory per value at or below PHP's.
+
+1. **Inline fast paths in generated code** (biggest gap):
+   property read/write by (shape, slot) with an inline guard; packed-array
+   index load; `foreach` over packed arrays without the iterator helper.
+   Needs `#[repr(C)]` object/props layout so generated code can address
+   fields directly.
+2. **Direct native-to-native calls**: compiled callers call compiled callees
+   through the entry pointer with arguments in registers, no `Frame`
+   allocation, no helper round trip; method calls via a monomorphic inline
+   cache guard in generated code.
+3. **Objects**: one allocation per object (values inline after the header),
+   no per-object `RefCell`, cheaper registration with the cycle collector;
+   `new` target ~40 ns.
+4. **Strings**: interpolation builds the result in one buffer of the right
+   size; small-string optimisation.
+5. **Type feedback**: specialise native code on observed int/float/string
+   types (the numeric JIT already does this for pure-number functions).
+6. **Throughput beyond single-thread speed**: `phpx serve` runs requests on
+   green threads (no FPM process per request), and later an M:N scheduler
+   across cores. This is where Node/Go-style throughput comes from.
 
 ## Methodology
 
