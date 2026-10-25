@@ -48,6 +48,8 @@ struct Task {
     notified: bool,
     /// Lowest usable address of the task's stack.
     stack_limit: usize,
+    /// The task's `task_word` while it isn't running.
+    word: usize,
 }
 
 #[derive(Default)]
@@ -75,6 +77,20 @@ thread_local! {
     static STACK_SIZE: Cell<usize> = const { Cell::new(DEFAULT_STACK_SIZE) };
     /// Stack limit of the running task, 0 outside tasks.
     static STACK_LIMIT: Cell<usize> = const { Cell::new(0) };
+    /// The running task's word (see `task_word`).
+    static TASK_WORD: Cell<usize> = const { Cell::new(0) };
+}
+
+/// One machine word of task-local state, saved and restored on every
+/// switch (the interpreter keeps its call-stack head here).
+#[inline(always)]
+pub fn task_word() -> usize {
+    TASK_WORD.get()
+}
+
+#[inline(always)]
+pub fn set_task_word(w: usize) {
+    TASK_WORD.set(w)
 }
 
 /// Bytes of stack left in the running task (None outside a task). Lets
@@ -123,7 +139,7 @@ pub fn spawn_task(f: impl FnOnce() + 'static) -> TaskId {
         s.next_task += 1;
         s.tasks.insert(
             id,
-            Task { co: Some(co), state: State::Ready, cancelled: false, notified: false, stack_limit },
+            Task { co: Some(co), state: State::Ready, cancelled: false, notified: false, stack_limit, word: 0 },
         );
         s.ready.push_back(id);
         id
@@ -407,12 +423,14 @@ fn run_task(id: TaskId) {
         let t = s.tasks.get_mut(&id)?;
         t.state = State::Running;
         s.current = Some(id);
-        Some((t.co.take()?, t.stack_limit))
+        Some((t.co.take()?, t.stack_limit, t.word))
     });
-    let Some((mut co, limit)) = co else { return };
+    let Some((mut co, limit, word)) = co else { return };
 
     STACK_LIMIT.set(limit);
+    let outer = TASK_WORD.replace(word);
     let res = co.resume(());
+    let word = TASK_WORD.replace(outer);
     STACK_LIMIT.set(0);
     YIELDER.set(ptr::null());
 
@@ -422,6 +440,7 @@ fn run_task(id: TaskId) {
             CoroutineResult::Yield(()) => {
                 let t = s.tasks.get_mut(&id).unwrap();
                 t.co = Some(co);
+                t.word = word;
                 if t.state == State::Running {
                     t.state = State::Ready;
                     s.ready.push_back(id);
