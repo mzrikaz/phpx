@@ -230,6 +230,19 @@ impl Frame {
         }
     }
 
+    /// Make a site-cached frame ready for the next call: drop what this
+    /// call left behind (variables, `$this`, arguments).
+    pub fn reset_after_call(&mut self) {
+        if !self.vars.items.is_empty() {
+            self.vars = Vars::default();
+        }
+        self.this = None;
+        if !self.args.is_empty() {
+            self.args.clear();
+        }
+        self.gen = None;
+    }
+
     pub fn var_slot(&mut self, name: &'static str) -> Slot {
         if let Some(s) = self.vars.get(name) {
             return s.clone();

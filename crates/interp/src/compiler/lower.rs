@@ -1382,7 +1382,7 @@ impl<'a> Lower<'a> {
             }
             Call { callee, args } => {
                 let ExprKind::Name(n) = &callee.kind else { unreachable!() };
-                let site = Box::new(CallSite { name: n, cached: Default::default(), builtin: Default::default() });
+                let site = Box::new(CallSite { name: n, cached: Default::default(), builtin: Default::default(), frame: Default::default() });
                 let sp = &*site as *const CallSite as i64;
                 self.sites.push(site);
                 let (aa, la, n_) = self.args(args)?;
@@ -1413,7 +1413,7 @@ impl<'a> Lower<'a> {
                 let oa = self.addr(o).unwrap();
                 // Method lookup is by lowercase name: precompute it.
                 let lname: &'static str = Box::leak(name.to_ascii_lowercase().into_boxed_str());
-                let site = Box::new(super::rt::MethodSite { name, lname, cached: Default::default() });
+                let site = Box::new(super::rt::MethodSite { name, lname, cached: Default::default(), frame: Default::default() });
                 let sp = &*site as *const super::rt::MethodSite as i64;
                 self.msites.push(site);
                 let r = if *nullsafe {

@@ -944,6 +944,41 @@ pub struct CallSite {
     pub cached: std::cell::Cell<Option<(crate::compiler::Entry, *const crate::interp::UserFn)>>,
     /// Resolved plain built-in (no by-ref params, no caller-scope access).
     pub builtin: std::cell::Cell<Option<crate::interp::BuiltinFn>>,
+    /// A frame reused by calls from this site (rebuilding one per call is
+    /// a large part of call overhead); recursion falls back to a fresh one.
+    pub frame: SiteFrame,
+}
+
+/// A reusable callee frame, lent out while not busy.
+#[derive(Default)]
+pub struct SiteFrame {
+    frame: std::cell::UnsafeCell<Option<Box<Frame>>>,
+    busy: std::cell::Cell<bool>,
+}
+
+impl SiteFrame {
+    /// Run `g` with this site's frame (built by `make` on first use) or,
+    /// when it's in use (recursion), with a fresh one.
+    unsafe fn with<T>(&self, make: impl FnOnce() -> Frame, g: impl FnOnce(&mut Frame) -> T) -> T {
+        if self.busy.get() {
+            let mut f = make();
+            return g(&mut f);
+        }
+        self.busy.set(true);
+        let slot = &mut *self.frame.get();
+        let f = slot.get_or_insert_with(|| Box::new(make()));
+        let r = g(f);
+        f.reset_after_call();
+        self.busy.set(false);
+        r
+    }
+
+    /// Forget the frame (the cached callee changed).
+    fn invalidate(&self) {
+        if !self.busy.get() {
+            unsafe { *self.frame.get() = None };
+        }
+    }
 }
 
 /// A `$obj->m(...)` call site with a monomorphic inline cache.
@@ -951,6 +986,7 @@ pub struct MethodSite {
     pub name: &'static str,
     pub lname: &'static str,
     pub cached: std::cell::Cell<Option<MethodCache>>,
+    pub frame: SiteFrame,
 }
 
 /// Plain pointers: classes and methods are never freed while running.
@@ -991,8 +1027,8 @@ pub unsafe extern "C" fn rt_call(
     }
     if let Some((entry, u)) = (*site).cached.get() {
         let u = &*u;
-        let mut frame = Frame::for_call(u.ctx.clone(), u.name.clone(), u.decl as *const ast::Function as usize);
-        if let Some(st) = enter(it, entry, &mut frame, args, n, dst, u.decl.ret.as_ref(), None, &u.name) {
+        let make = || Frame::for_call(u.ctx.clone(), u.name.clone(), u.decl as *const ast::Function as usize);
+        if let Some(st) = (*site).frame.with(make, |frame| enter(it, entry, frame, args, n, dst, u.decl.ret.as_ref(), None, &u.name)) {
             return st;
         }
     }
@@ -1077,6 +1113,7 @@ unsafe fn fast_user_call(it: &Interp, u: &Rc<crate::interp::UserFn>, args: *mut 
     let jit_may_take = args_numeric && it.jit.borrow().as_ref().is_some_and(|j| !j.rejected(u.decl));
     if !jit_may_take {
         site.cached.set(Some((entry, Rc::as_ptr(u))));
+        site.frame.invalidate();
     }
     let mut frame = Frame::for_call(u.ctx.clone(), u.name.clone(), fn_id);
     enter(it, entry, &mut frame, args, n, dst, u.decl.ret.as_ref(), None, &u.name)
@@ -1171,25 +1208,34 @@ pub unsafe extern "C" fn rt_method_call(
                 display: Box::leak(display.to_string().into_boxed_str()),
             };
             site.cached.set(Some(mc));
+            site.frame.invalidate();
             Some(mc)
         });
         if let Some(mc) = hit {
             let m = &*mc.method;
             let crate::class::MethodBody::User(func) = &m.body else { unreachable!() };
-            let decl_class = if mc.decl_class.is_null() {
-                None
-            } else {
-                // Re-materialize the Rc without changing the count net.
-                Rc::increment_strong_count(mc.decl_class);
-                Some(Rc::from_raw(mc.decl_class))
+            let make = || {
+                let decl_class = if mc.decl_class.is_null() {
+                    None
+                } else {
+                    // Re-materialize the Rc without changing the count net.
+                    Rc::increment_strong_count(mc.decl_class);
+                    Some(Rc::from_raw(mc.decl_class))
+                };
+                let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
+                frame.static_class = Some(o.class.clone());
+                frame.class = decl_class;
+                frame
             };
-            let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
-            frame.this = if m.is_static { None } else { Some(o.clone()) };
-            frame.static_class = Some(o.class.clone());
-            frame.class = decl_class;
-            // Only needed to check a declared return type.
-            let ret_class = if func.ret.is_some() { frame.class.clone() } else { None };
-            if let Some(st) = enter(it, mc.entry, &mut frame, args, n, dst, func.ret.as_ref(), ret_class.as_ref(), &*mc.display) {
+            let r = site.frame.with(make, |frame| {
+                if !m.is_static {
+                    frame.this = Some(o.clone());
+                }
+                // Only needed to check a declared return type.
+                let ret_class = if func.ret.is_some() { frame.class.clone() } else { None };
+                enter(it, mc.entry, frame, args, n, dst, func.ret.as_ref(), ret_class.as_ref(), &*mc.display)
+            });
+            if let Some(st) = r {
                 return st;
             }
         }
