@@ -60,7 +60,9 @@ const MAX_SMALL: usize = CLASSES * 16;
 const CHUNK: usize = 32 * 1024;
 
 thread_local! {
-    static FREE: std::cell::Cell<[*mut u8; CLASSES]> = const { std::cell::Cell::new([std::ptr::null_mut(); CLASSES]) };
+    /// Free-list heads, one per size class (one cell each: an alloc or free
+    /// touches only its own).
+    static FREE: [std::cell::Cell<*mut u8>; CLASSES] = const { [const { std::cell::Cell::new(std::ptr::null_mut()) }; CLASSES] };
 }
 
 #[inline]
@@ -70,17 +72,18 @@ fn class_of(l: &Layout) -> Option<usize> {
 
 #[inline]
 unsafe fn small_alloc(c: usize) -> *mut u8 {
-    let mut heads = FREE.with(|f| f.get());
-    let mut p = heads[c];
-    if p.is_null() {
-        p = refill(c);
+    FREE.with(|f| {
+        let head = &f[c];
+        let mut p = head.get();
         if p.is_null() {
-            return p;
+            p = refill(c);
+            if p.is_null() {
+                return p;
+            }
         }
-    }
-    heads[c] = *(p as *mut *mut u8);
-    FREE.with(|f| f.set(heads));
-    p
+        head.set(*(p as *mut *mut u8));
+        p
+    })
 }
 
 /// Carve a new chunk into blocks of class `c`; returns the list head.
@@ -102,10 +105,11 @@ unsafe fn refill(c: usize) -> *mut u8 {
 
 #[inline]
 unsafe fn small_free(p: *mut u8, c: usize) {
-    let mut heads = FREE.with(|f| f.get());
-    *(p as *mut *mut u8) = heads[c];
-    heads[c] = p;
-    FREE.with(|f| f.set(heads));
+    FREE.with(|f| {
+        let head = &f[c];
+        *(p as *mut *mut u8) = head.get();
+        head.set(p);
+    })
 }
 
 /// Bytes a block really takes (small blocks: their size class).
