@@ -84,12 +84,15 @@ pub enum ClosureKind {
 
 pub struct ClosureData {
     pub kind: ClosureKind,
-    /// By-value captures get a fresh slot; `use (&$x)` shares the caller's.
-    pub captured: Vec<(&'static str, Slot, bool)>,
+    /// By-value captures hold the value; `use (&$x)` holds `Value::Ref` of
+    /// the caller's slot (and the flag is set).
+    pub captured: Vec<(&'static str, Value, bool)>,
     pub this: Option<Rc<Obj>>,
     pub scope: Option<Rc<Class>>,
     pub static_class: Option<Rc<Class>>,
     pub ctx: Rc<NsCtx>,
+    /// `{closure:<where>:<line>}` (PHP 8.4+ naming).
+    pub name: Rc<str>,
 }
 
 pub type BuiltinFn = fn(&Interp, &mut Frame, &mut [Value]) -> R<Value>;
@@ -196,6 +199,9 @@ pub struct Frame {
     pub fn_id: usize,
     /// Set while running a generator body (where `yield` is valid).
     pub gen: Option<Rc<crate::generator::GenShared>>,
+    /// The running closure, when called through a native call site (its
+    /// captured values are bound straight into native locals).
+    pub closure: Option<Rc<ClosureData>>,
 }
 
 impl Frame {
@@ -212,6 +218,7 @@ impl Frame {
             depth: 0,
             fn_id,
             gen: None,
+            closure: None,
         }
     }
 
@@ -227,6 +234,7 @@ impl Frame {
             depth,
             fn_id: 0,
             gen: None,
+            closure: None,
         }
     }
 
@@ -241,6 +249,7 @@ impl Frame {
             self.args.clear();
         }
         self.gen = None;
+        self.closure = None;
     }
 
     pub fn var_slot(&mut self, name: &'static str) -> Slot {
@@ -289,6 +298,16 @@ pub struct Interp {
     output_start: RefCell<Option<(String, usize)>>,
     /// Classes resolved from source names, keyed by the AST name's address.
     pub class_cache: RefCell<FxHashMap<usize, Rc<Class>>>,
+    /// Class names in type declarations, resolved and lowercased, keyed by
+    /// the AST name's address (a name always resolves the same way).
+    pub type_names: RefCell<FxHashMap<usize, Rc<str>>>,
+    /// Closure names by AST node, with the enclosing (function, class)
+    /// they were computed for.
+    pub closure_names: RefCell<FxHashMap<usize, ((usize, usize), Rc<str>)>>,
+    /// Position of the innermost running built-in's call: a user function
+    /// bound while `pos` still equals it was called by the built-in (a
+    /// callback), not from user code.
+    pub builtin_pos: Cell<Pos>,
     pub ini: RefCell<crate::ini::Ini>,
     /// Constant array literals, built once (None: not constant).
     pub const_arrays: RefCell<FxHashMap<usize, Option<Value>>>,
@@ -343,6 +362,9 @@ impl Interp {
             ini: RefCell::new(crate::ini::Ini::new()),
             const_arrays: RefCell::new(FxHashMap::default()),
             class_cache: RefCell::new(FxHashMap::default()),
+            type_names: RefCell::new(FxHashMap::default()),
+            closure_names: RefCell::new(FxHashMap::default()),
+            builtin_pos: Cell::new(Pos { file: u32::MAX, off: 0 }),
             response: RefCell::new(Default::default()),
             include_path: RefCell::new(".:/usr/share/php".into()),
             output_start: RefCell::new(None),

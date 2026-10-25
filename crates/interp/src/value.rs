@@ -532,15 +532,27 @@ thread_local! {
 
 pub struct Obj {
     pub id: u32,
+    /// Slot in the cycle collector's registry (low 30 bits; all ones: not
+    /// registered), "has native state" (bit 30) and "`__destruct` already
+    /// ran (or was queued)" (bit 31).
+    gc: Cell<u32>,
     pub class: Rc<Class>,
     /// Initialized properties in declaration order. Typed properties without
     /// a default are absent until assigned.
     pub props: RefCell<crate::props::Props>,
-    pub internal: RefCell<Internal>,
-    /// `__destruct` already ran (or was queued).
-    pub destructed: Cell<bool>,
-    /// Slot in the cycle collector's registry (u32::MAX: not registered).
-    pub gc_index: Cell<u32>,
+}
+
+const GC_NONE: u32 = 0x3FFF_FFFF;
+const HAS_INTERNAL: u32 = 1 << 30;
+const DESTRUCTED: u32 = 1 << 31;
+
+thread_local! {
+    /// What objects without native state read (never borrowed mutably).
+    static NO_INTERNAL: &'static RefCell<Internal> = Box::leak(Box::new(RefCell::new(Internal::None)));
+    /// Native state (closures, generators, ...) by object handle: few
+    /// objects have any, so it lives here rather than in every object.
+    /// Boxed: entries keep their address while the map changes.
+    static INTERNALS: RefCell<rustc_hash::FxHashMap<u32, Box<RefCell<Internal>>>> = RefCell::new(Default::default());
 }
 
 impl Obj {
@@ -552,14 +564,87 @@ impl Obj {
     /// empty one first).
     pub fn with_props(class: Rc<Class>, internal: Internal, props: crate::props::Props) -> Rc<Obj> {
         crate::gc::track(|id| {
-            Rc::new(Obj {
-                id,
-                class,
-                props: RefCell::new(props),
-                internal: RefCell::new(internal),
-                destructed: Cell::new(false),
-                gc_index: Cell::new(u32::MAX),
-            })
+            let flags = match internal {
+                Internal::None => 0,
+                i => {
+                    INTERNALS.with(|m| m.borrow_mut().insert(id, Box::new(RefCell::new(i))));
+                    HAS_INTERNAL
+                }
+            };
+            Rc::new(Obj { id, gc: Cell::new(GC_NONE | flags), class, props: RefCell::new(props) })
+        })
+    }
+
+    fn internal_cell(&self) -> &RefCell<Internal> {
+        if self.gc.get() & HAS_INTERNAL != 0 {
+            let p = INTERNALS.with(|m| m.borrow().get(&self.id).map(|b| &**b as *const RefCell<Internal>));
+            if let Some(p) = p {
+                // SAFETY: the entry is boxed and only removed when this
+                // object is dropped, so it outlives `&self`.
+                return unsafe { &*p };
+            }
+        }
+        NO_INTERNAL.with(|n| *n)
+    }
+
+    /// The object's native state (`Internal::None` for plain objects).
+    pub fn internal(&self) -> std::cell::Ref<'_, Internal> {
+        self.internal_cell().borrow()
+    }
+
+    /// The native state unless it's being changed right now (for the
+    /// cycle collector, which can run at any statement boundary).
+    pub fn try_internal(&self) -> Option<std::cell::Ref<'_, Internal>> {
+        self.internal_cell().try_borrow().ok()
+    }
+
+    /// Mutable native state; None for objects without any (or while it's
+    /// borrowed).
+    pub fn internal_mut(&self) -> Option<std::cell::RefMut<'_, Internal>> {
+        if self.gc.get() & HAS_INTERNAL == 0 {
+            return None;
+        }
+        self.internal_cell().try_borrow_mut().ok()
+    }
+
+    pub fn gc_index(&self) -> u32 {
+        match self.gc.get() & GC_NONE {
+            GC_NONE => u32::MAX,
+            i => i,
+        }
+    }
+
+    pub fn set_gc_index(&self, i: u32) {
+        let i = if i >= GC_NONE { GC_NONE } else { i };
+        self.gc.set((self.gc.get() & !GC_NONE) | i);
+    }
+
+    /// `__destruct` already ran (or was queued).
+    pub fn destructed(&self) -> bool {
+        self.gc.get() & DESTRUCTED != 0
+    }
+
+    pub fn set_destructed(&self) {
+        self.gc.set(self.gc.get() | DESTRUCTED);
+    }
+
+    /// A plain object of `class` with these property values in the class
+    /// shape, written straight into its allocation (building it on the
+    /// stack and copying it in costs more than the allocation itself).
+    pub fn from_template(class: &Rc<Class>, template: &[Option<Value>]) -> Rc<Obj> {
+        crate::gc::track(|id| {
+            let mut rc = Rc::<Obj>::new_uninit();
+            let p = Rc::get_mut(&mut rc).unwrap().as_mut_ptr();
+            // SAFETY: every field is written before assume_init.
+            unsafe {
+                std::ptr::addr_of_mut!((*p).id).write(id);
+                std::ptr::addr_of_mut!((*p).gc).write(Cell::new(GC_NONE));
+                std::ptr::addr_of_mut!((*p).class).write(class.clone());
+                // (Cloned here, not passed in: a Vec handed over by value
+                // is reread right after being written, which stalls.)
+                std::ptr::addr_of_mut!((*p).props).write(RefCell::new(crate::props::Props::from_template(class.shape.clone(), template)));
+                rc.assume_init()
+            }
         })
     }
 
@@ -574,44 +659,53 @@ impl Obj {
 
     pub fn set_prop(&self, name: &str, v: Value) {
         let mut p = self.props.borrow_mut();
-        if let Some(slot) = p.get_mut(name) {
-            match slot {
-                Value::Ref(r) => *r.borrow_mut() = v,
-                _ => *slot = v,
-            }
-            return;
-        }
         // Declared properties already have their slot (declaration order,
         // from the class shape); new ones are appended.
-        p.insert(Rc::from(name), v);
+        if let Err(v) = p.set_existing(name, v) {
+            p.insert(Rc::from(name), v);
+        }
+    }
+}
+
+impl Obj {
+    /// Free the handle and native state (the handle may be reused at once,
+    /// so the state goes first).
+    fn free(&mut self) {
+        if self.gc.get() & HAS_INTERNAL != 0 {
+            // Dropped outside the map borrow: it can free other objects.
+            let st = INTERNALS.try_with(|m| m.borrow_mut().remove(&self.id)).ok().flatten();
+            drop(st);
+        }
+        crate::gc::release(self, false);
     }
 }
 
 impl Drop for Obj {
     fn drop(&mut self) {
-        if !self.class.has_destruct || self.destructed.get() {
-            crate::gc::release(self, false);
+        if !self.class.has_destruct || self.destructed() {
+            self.free();
             return;
         }
         crate::gc::unregister(self);
         {
-            // Resurrect the state into a fresh Rc (same handle) for the
-            // destructor; it frees the handle when it dies in turn.
+            // Resurrect the state into a fresh Rc (same handle, so the same
+            // native state) for the destructor; it frees the handle when it
+            // dies in turn.
             let o = Rc::new(Obj {
                 id: self.id,
+                gc: Cell::new(GC_NONE | DESTRUCTED | (self.gc.get() & HAS_INTERNAL)),
                 class: self.class.clone(),
                 props: RefCell::new(std::mem::take(self.props.get_mut())),
-                internal: RefCell::new(std::mem::take(self.internal.get_mut())),
-                destructed: Cell::new(true),
-                gc_index: Cell::new(u32::MAX),
             });
             crate::gc::register(&o);
             if DESTRUCT_QUEUE.try_with(|q| q.borrow_mut().push(o)).is_ok() {
                 DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
                 return;
             }
+            // Couldn't queue (thread ending): `o` drops as destructed and
+            // frees the handle and state itself.
+            return;
         }
-        crate::gc::release(self, false);
     }
 }
 
@@ -620,12 +714,11 @@ impl Drop for Obj {
 pub enum Internal {
     #[default]
     None,
-    Closure(Rc<crate::interp::Callable>),
+    Closure(crate::interp::Callable),
     Promise(phpx_runtime::Promise<crate::interp::Outcome>),
     Generator(Rc<crate::generator::GenHandle>),
     /// Native state of built-in classes (HashContext, ...).
-    /// Double-boxed so `Internal` stays two words.
-    Data(Box<Box<dyn std::any::Any>>),
+    Data(Box<dyn std::any::Any>),
 }
 
 // ---- conversions -------------------------------------------------------------

@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use phpx_syntax::ast::{self, ClassKind, Member, Stmt, Type};
 
 use crate::class::{Class, ConstSlot, Method, MethodBody, PropDecl, PropDefault, StaticProp, Vis};
-use crate::interp::{qualify, slot, Callable, ClosureKind, Ctrl, Flow, Frame, Interp, NsCtx, Slot, UserFn, R};
+use crate::interp::{qualify, slot, Callable, ClosureKind, Ctrl, Flow, Frame, Interp, NsCtx, UserFn, R};
 use crate::value::{Internal, Key, Obj, PhpArray, Value};
 
 /// Built-ins that take an argument by reference, and which one.
@@ -40,7 +40,7 @@ struct Invoke<'a> {
     static_class: Option<Rc<Class>>,
     ctx: Rc<NsCtx>,
     fn_id: usize,
-    captured: &'a [(&'static str, Slot, bool)],
+    captured: &'a [(&'static str, Value, bool)],
     is_generator: bool,
 }
 
@@ -515,8 +515,8 @@ impl Interp {
     pub fn to_callable(&self, f: &Frame, v: &Value) -> R<Callable> {
         match v {
             Value::Object(o) => {
-                if let Internal::Closure(c) = &*o.internal.borrow() {
-                    return Ok((**c).clone());
+                if let Internal::Closure(c) = &*o.internal() {
+                    return Ok(c.clone());
                 }
                 match o.class.find_method("__invoke") {
                     Some(m) => Ok(Callable::Method { this: Some(o.clone()), class: o.class.clone(), method: m.clone(), static_class: o.class.clone() }),
@@ -642,19 +642,46 @@ impl Interp {
     }
 
     #[inline(never)]
-    fn call_closure(&self, cd: &crate::interp::ClosureData, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
+    fn call_closure(&self, cd: &Rc<crate::interp::ClosureData>, mut pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
         let (params, body, ret, fn_id, is_generator): (&'static [ast::Param], Body, _, usize, bool) = match &cd.kind {
             ClosureKind::Closure(c) => (&c.params, Body::Block(&c.body), c.ret.as_ref(), *c as *const _ as usize, c.is_generator),
             ClosureKind::Arrow(a) => (&a.params, Body::Expr(&a.body), a.ret.as_ref(), *a as *const _ as usize, a.is_generator),
             ClosureKind::Wrap(inner) => return self.call_callable(inner, pos, named),
         };
+        // Compiled closure (callbacks from built-ins, ...): enter it with
+        // the arguments directly, as native call sites do.
+        if named.is_empty() && !is_generator {
+            let entry = self.native_entry(fn_id, || crate::compiler::Target {
+                fn_id,
+                display: cd.name.clone(),
+                params,
+                captured: cd.captured.iter().map(|(n, _, _)| *n).collect(),
+                body: match body {
+                    Body::Block(s) => crate::compiler::Body::Block(s),
+                    Body::Expr(e) => crate::compiler::Body::Expr(e),
+                },
+                ctx: cd.ctx.clone(),
+                class: cd.scope.clone(),
+            });
+            if let Some(entry) = entry {
+                let mut frame = Frame::for_call(cd.ctx.clone(), cd.name.clone(), fn_id);
+                let mut out = Value::Null;
+                // SAFETY: `pos` outlives the call; consumed slots are left null.
+                let st = unsafe { crate::compiler::rt::enter_closure(self, cd, entry, ret, &mut frame, pos.as_mut_ptr(), pos.len() as u64, &mut out) };
+                match st {
+                    Some(0) => return Ok(out),
+                    Some(_) => return Err(self.pending.borrow_mut().take().expect("native error without pending exception")),
+                    None => {}
+                }
+            }
+        }
         self.invoke(
             Invoke {
                 params,
                 body,
                 ret,
-                display: Rc::from("{closure}"),
-                func: Rc::from("{closure}"),
+                display: cd.name.clone(),
+                func: cd.name.clone(),
                 this: cd.this.clone(),
                 class: cd.scope.clone(),
                 static_class: cd.static_class.clone(),
@@ -830,8 +857,11 @@ impl Interp {
         f.static_class = inv.static_class.clone();
         f.func = inv.func.clone();
         f.fn_id = inv.fn_id;
-        for (name, s, by_ref) in inv.captured {
-            let s = if *by_ref { s.clone() } else { slot(s.borrow().clone()) };
+        for (name, v, by_ref) in inv.captured {
+            let s = match v {
+                Value::Ref(s) if *by_ref => s.clone(),
+                v => slot(v.clone()),
+            };
             f.vars.insert(name, s);
         }
 
@@ -973,18 +1003,25 @@ impl Interp {
     fn check_param(&self, inv: &Invoke, i: usize, p: &ast::Param, ty: &Type, v: Value, strict: bool) -> R<Value> {
         match self.coerce(v.clone(), ty, &inv.ctx, inv.class.as_ref(), inv.static_class.as_ref(), strict)? {
             Some(v) => Ok(v),
-            None => Err(self.error(
-                "TypeError",
-                &format!(
-                    "{}(): Argument #{} (${}) must be of type {}, {} given",
-                    inv.display,
-                    i + 1,
-                    p.name.name,
-                    type_str(ty),
-                    v.debug_type()
-                ),
-            )),
+            None => Err(self.param_type_error(&inv.display, i, p, ty, &v, inv.ctx.file)),
         }
+    }
+
+    /// TypeError for a user function's argument, like PHP: thrown at the
+    /// parameter's declaration, naming the call site when user code made
+    /// the call (not a built-in calling back). `pos` must still be the
+    /// call site.
+    pub fn param_type_error(&self, display: &str, i: usize, p: &ast::Param, ty: &Type, v: &Value, file: usize) -> Ctrl {
+        let mut msg = format!("{display}(): Argument #{} (${}) must be of type {}, {} given", i + 1, p.name.name, type_str(ty), v.debug_type());
+        let here = self.pos.get();
+        if here != self.builtin_pos.get() {
+            let (path, line) = self.here();
+            msg.push_str(&format!(", called in {path} on line {line}"));
+        }
+        self.pos.set(crate::interp::Pos { file: file as u32, off: p.name.span.start as u32 });
+        let e = self.error("TypeError", &msg);
+        self.pos.set(here);
+        e
     }
 
     pub fn file_strict(&self, file: usize) -> bool {
@@ -1207,7 +1244,7 @@ impl Interp {
     /// A new instance of `cls` with default properties (no constructor).
     pub fn new_instance(&self, cls: &Rc<Class>) -> R<Rc<Obj>> {
         if let Some(t) = &*cls.prop_template.borrow() {
-            return Ok(Obj::with_props(cls.clone(), Internal::None, crate::props::Props::with_shape(cls.shape.clone(), t.clone())));
+            return Ok(Obj::from_template(cls, t));
         }
         let o = Obj::new(cls.clone(), Internal::None);
         self.init_props_slow(&o, cls)?;
@@ -1249,15 +1286,15 @@ impl Interp {
         if o.class.is_enum() {
             return Err(self.error("Error", &format!("Trying to clone an uncloneable object of class {}", o.class.name)));
         }
-        let internal = match &*o.internal.borrow() {
+        let internal = match &*o.internal() {
             Internal::None => Internal::None,
             Internal::Closure(c) => Internal::Closure(c.clone()),
             Internal::Promise(p) => Internal::Promise(p.clone()),
             Internal::Generator(_) => {
                 return Err(self.error("Error", "Trying to clone an uncloneable object of class Generator"));
             }
-            Internal::Data(d) => match crate::ext::clone_data(&***d) {
-                Some(d) => Internal::Data(Box::new(d)),
+            Internal::Data(d) => match crate::ext::clone_data(&**d) {
+                Some(d) => Internal::Data(d),
                 None => return Err(self.error("Error", &format!("Trying to clone an uncloneable object of class {}", o.class.name))),
             },
         };
@@ -1682,8 +1719,18 @@ impl Interp {
         let Type::Named(n) = t else {
             return Ok(self.coerce(v.clone(), t, ctx, self_class, static_class, true)?.is_some());
         };
-        let l = n.trim_start_matches('\\').to_ascii_lowercase();
-        Ok(match l.as_str() {
+        // Lowercase into a stack buffer: type names are checked on every
+        // call, and the built-in ones are short.
+        let mut buf = [0u8; 16];
+        let l: &str = if n.len() <= buf.len() {
+            for (d, c) in buf.iter_mut().zip(n.bytes()) {
+                *d = c.to_ascii_lowercase();
+            }
+            std::str::from_utf8(&buf[..n.len()]).unwrap_or("")
+        } else {
+            ""
+        };
+        Ok(match l {
             "mixed" => true,
             "int" => matches!(v, Value::Int(_)),
             "float" => matches!(v, Value::Float(_)),
@@ -1712,8 +1759,18 @@ impl Interp {
             "never" => false,
             _ => match v {
                 Value::Object(o) => {
-                    let full = self.resolve_class_name(ctx, n);
-                    o.class.is_a(&self.lower.get(&full))
+                    let key = n.as_ptr() as usize;
+                    let cached = self.type_names.borrow().get(&key).cloned();
+                    let lname = match cached {
+                        Some(l) => l,
+                        None => {
+                            let full = self.resolve_class_name(ctx, n);
+                            let l = self.lower.get(&full);
+                            self.type_names.borrow_mut().insert(key, l.clone());
+                            l
+                        }
+                    };
+                    o.class.is_a(&lname)
                 }
                 _ => false,
             },

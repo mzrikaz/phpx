@@ -1,0 +1,47 @@
+int(0)
+int(5)
+NULL
+0
+n0
+Error: Cannot modify readonly property Ro::$name
+set by ctor
+made
+base child child made Grand
+odd 1
+ok
+Pt::__construct(): Argument #1 ($x) must be of type int, string given, called in FILE on line 24 @3
+Call to private Single::__construct() from global scope
+ArgumentCountError
+bye 0
+base
+int(1)
+int(5)
+string(2) "t1"
+0
+n1
+Error: Cannot modify readonly property Ro::$name
+set by ctor
+base child child made Grand
+ok
+odd 3
+Pt::__construct(): Argument #1 ($x) must be of type int, string given, called in FILE on line 24 @3
+Call to private Single::__construct() from global scope
+ArgumentCountError
+bye 1
+child
+int(2)
+int(5)
+string(2) "t2"
+0
+n2
+Error: Cannot modify readonly property Ro::$name
+set by ctor
+base child child made Grand
+odd 3
+ok
+Pt::__construct(): Argument #1 ($x) must be of type int, string given, called in FILE on line 24 @3
+Call to private Single::__construct() from global scope
+ArgumentCountError
+bye 2
+base
+end

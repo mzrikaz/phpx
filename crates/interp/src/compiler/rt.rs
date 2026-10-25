@@ -38,6 +38,62 @@ pub struct LocalsSpec {
     /// All params untyped, by value, no defaults needed beyond the args:
     /// binding is a plain move.
     pub simple: bool,
+    /// Per parameter: a check that accepts the common case of its declared
+    /// type without the general coercion (which runs when it fails).
+    pub quick: Vec<(Quick, bool)>,
+    /// Closures: the local slot of each captured variable (in `use` order).
+    pub captured_slots: Vec<usize>,
+}
+
+/// A declared parameter type, reduced for a fast acceptance test.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Quick {
+    Untyped,
+    Int,
+    Float,
+    Str,
+    Bool,
+    Array,
+    Mixed,
+    /// Anything else (classes, unions, ...): always the general path.
+    Other,
+}
+
+impl Quick {
+    /// (kind, nullable)
+    pub fn of(ty: Option<&ast::Type>) -> (Quick, bool) {
+        let Some(ty) = ty else { return (Quick::Untyped, false) };
+        match ty {
+            ast::Type::Nullable(t) => (Quick::of(Some(t)).0, true),
+            ast::Type::Named(n) => (
+                match n.to_ascii_lowercase().as_str() {
+                    "int" => Quick::Int,
+                    "float" => Quick::Float,
+                    "string" => Quick::Str,
+                    "bool" => Quick::Bool,
+                    "array" => Quick::Array,
+                    "mixed" => Quick::Mixed,
+                    _ => Quick::Other,
+                },
+                false,
+            ),
+            _ => (Quick::Other, false),
+        }
+    }
+
+    #[inline]
+    fn accepts(q: (Quick, bool), v: &Value) -> bool {
+        match (q.0, v) {
+            (Quick::Untyped | Quick::Mixed, _)
+            | (Quick::Int, Value::Int(_))
+            | (Quick::Float, Value::Float(_))
+            | (Quick::Str, Value::Str(_))
+            | (Quick::Bool, Value::Bool(_))
+            | (Quick::Array, Value::Array(_)) => true,
+            (_, Value::Null) => q.1,
+            _ => false,
+        }
+    }
 }
 
 unsafe fn cx<'a>(c: *mut Cx) -> (&'a Interp, &'a mut Frame) {
@@ -134,11 +190,18 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
         return 0;
     }
     for (i, p) in spec.params.iter().enumerate() {
-        if p.by_ref || p.variadic || p.promote.is_some() || (i >= n && p.default.is_none()) {
+        if p.by_ref || p.variadic || (p.promote.is_some() && f.this.is_none()) || (i >= n && p.default.is_none()) {
             return 2;
         }
     }
-    let strict = it.file_strict(it.pos.get().file as usize);
+    // Captured values come from the closure the call site put in the frame
+    // (by value only: native locals can't share a by-reference capture).
+    let closure = match &f.closure {
+        _ if spec.captured_slots.is_empty() => None,
+        Some(cd) if cd.captured.len() == spec.captured_slots.len() && cd.captured.iter().all(|c| !c.2) => Some(cd.clone()),
+        _ => return 2,
+    };
+    let strict = || it.file_strict(it.pos.get().file as usize);
     for (i, p) in spec.params.iter().enumerate() {
         let v = if i < n {
             take(args.add(i)).into_deref()
@@ -152,21 +215,12 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
             }
         };
         let v = match &p.ty {
+            _ if Quick::accepts(spec.quick[i], &v) => v,
             Some(ty) if !(v.is_null() && matches!(p.default.as_ref().map(|d| &d.kind), Some(ast::ExprKind::Null))) => {
-                match it.coerce(v.clone(), ty, &spec.ctx, spec.class.as_ref(), f.static_class.as_ref(), strict) {
+                match it.coerce(v.clone(), ty, &spec.ctx, spec.class.as_ref(), f.static_class.as_ref(), strict()) {
                     Ok(Some(v)) => v,
                     Ok(None) => {
-                        *it.pending.borrow_mut() = Some(it.error(
-                            "TypeError",
-                            &format!(
-                                "{}(): Argument #{} (${}) must be of type {}, {} given",
-                                spec.display,
-                                i + 1,
-                                p.name.name,
-                                crate::call::type_str(ty),
-                                v.debug_type()
-                            ),
-                        ));
+                        *it.pending.borrow_mut() = Some(it.param_type_error(&spec.display, i, p, ty, &v, spec.ctx.file));
                         return 1;
                     }
                     Err(e) => {
@@ -177,12 +231,23 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
             }
             _ => v,
         };
+        if p.promote.is_some() {
+            if let Some(o) = &f.this {
+                o.set_prop(&p.name.name, v.clone());
+            }
+        }
         ptr::drop_in_place(locals.add(i));
         put(locals.add(i), v);
     }
     // Extra arguments are ignored (func_get_args() isn't compiled).
     for i in spec.params.len()..n {
         drop(take(args.add(i)));
+    }
+    if let Some(cd) = closure {
+        for ((_, v, _), &i) in cd.captured.iter().zip(&spec.captured_slots) {
+            ptr::drop_in_place(locals.add(i));
+            put(locals.add(i), v.clone());
+        }
     }
     if let (Some(i), Some(o)) = (spec.this_slot, &f.this) {
         ptr::drop_in_place(locals.add(i));
@@ -1407,6 +1472,7 @@ unsafe fn expand_args(it: &Interp, vals: Vec<Value>, meta: *const ast::Arg) -> R
 pub unsafe extern "C" fn rt_call_value(
     c: *mut Cx,
     callee: *const Value,
+    site: *const MethodSite,
     args: *mut Value,
     n: u64,
     locals: *const *mut Value,
@@ -1414,6 +1480,13 @@ pub unsafe extern "C" fn rt_call_value(
     dst: *mut Value,
 ) -> u64 {
     let (it, f) = cx(c);
+    if meta.is_null() {
+        if let Value::Object(o) = &*callee {
+            if let Some(st) = closure_call(it, o, &*site, args, n, dst) {
+                return st;
+            }
+        }
+    }
     let vals = take_args(args, n);
     let r = it.to_callable(f, &*callee).and_then(|callable| {
         if meta.is_null() {
@@ -1425,6 +1498,76 @@ pub unsafe extern "C" fn rt_call_value(
         }
     });
     status(it, r, |v| put(dst, v))
+}
+
+/// `$f(...)` on a closure: its compiled body, entered directly with the
+/// arguments and captured values (no interpreter frame variables). None =
+/// not taken (arguments untouched).
+unsafe fn closure_call(it: &Interp, o: &Rc<crate::value::Obj>, site: &MethodSite, args: *mut Value, n: u64, dst: *mut Value) -> Option<u64> {
+    let cd = match &*o.internal() {
+        crate::value::Internal::Closure(c) => match c {
+            Callable::Closure(cd) => cd.clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let (node, params, body, ret) = match &cd.kind {
+        crate::interp::ClosureKind::Closure(c) if !c.is_generator => {
+            (*c as *const ast::Closure as usize, &c.params, crate::compiler::Body::Block(&c.body), c.ret.as_ref())
+        }
+        crate::interp::ClosureKind::Arrow(a) if !a.is_generator => (*a as *const ast::ArrowFn as usize, &a.params, crate::compiler::Body::Expr(&a.body), a.ret.as_ref()),
+        _ => return None,
+    };
+    let entry = match site.cached.get() {
+        Some(mc) if mc.class as usize == node => mc.entry,
+        _ => {
+            let entry = it.native_entry(node, || crate::compiler::Target {
+                fn_id: node,
+                display: cd.name.clone(),
+                params,
+                captured: cd.captured.iter().map(|(n, _, _)| *n).collect(),
+                body,
+                ctx: cd.ctx.clone(),
+                class: cd.scope.clone(),
+            })?;
+            // (The cache's class field holds the closure's AST node here.)
+            site.cached.set(Some(MethodCache {
+                class: node as *const crate::class::Class,
+                scope: ptr::null(),
+                entry,
+                method: ptr::null(),
+                decl_class: ptr::null(),
+                display: "" as *const str,
+                sc: ptr::null(),
+                static_cls: ptr::null(),
+                this_cls: ptr::null(),
+            }));
+            site.frame.invalidate();
+            entry
+        }
+    };
+    let make = || Frame::for_call(cd.ctx.clone(), cd.name.clone(), node);
+    site.frame.with(make, |frame| enter_closure(it, &cd, entry, ret, frame, args, n, dst))
+}
+
+/// Run a closure's native entry in `frame` (set up here for this closure).
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn enter_closure(
+    it: &Interp,
+    cd: &Rc<crate::interp::ClosureData>,
+    entry: crate::compiler::Entry,
+    ret: Option<&ast::Type>,
+    frame: &mut Frame,
+    args: *mut Value,
+    n: u64,
+    dst: *mut Value,
+) -> Option<u64> {
+    frame.this = cd.this.clone();
+    frame.class = cd.scope.clone();
+    frame.static_class = cd.static_class.clone();
+    frame.func = cd.name.clone();
+    frame.closure = Some(cd.clone());
+    enter(it, entry, frame, args, n, dst, ret, cd.scope.as_ref(), &cd.name)
 }
 
 /// `$obj->$name(...)`.
@@ -1601,6 +1744,7 @@ unsafe fn static_call_general(
 pub unsafe extern "C" fn rt_new(
     c: *mut Cx,
     cref: *const ast::ClassRef,
+    site: *const MethodSite,
     args: *mut Value,
     n: u64,
     locals: *const *mut Value,
@@ -1608,8 +1752,15 @@ pub unsafe extern "C" fn rt_new(
     dst: *mut Value,
 ) -> u64 {
     let (it, f) = cx(c);
+    let site = &*site;
+    let cref = &*cref;
+    if meta.is_null() && matches!(cref, ast::ClassRef::Name(_)) {
+        if let Some(st) = new_cached(it, f, cref, site, args, n, dst) {
+            return st;
+        }
+    }
     let pos = take_args(args, n);
-    let r = it.class_ref(f, &*cref).and_then(|cls| {
+    let r = it.class_ref(f, cref).and_then(|cls| {
         // `new C` of a plain class without a constructor: no call machinery.
         if cls.plain_new && cls.ctor.is_none() && pos.is_empty() {
             return Ok(Value::Object(it.new_instance(&cls)?));
@@ -1624,6 +1775,101 @@ pub unsafe extern "C" fn rt_new(
     status(it, r, |v| put(dst, v))
 }
 
+/// `new C(...)` through the site cache: the class (resolved per calling
+/// scope and `static`) and its compiled constructor. None = not cached
+/// (nothing consumed); the general path resolves and reports errors.
+unsafe fn new_cached(it: &Interp, f: &mut Frame, cref: &'static ast::ClassRef, site: &MethodSite, args: *mut Value, n: u64, dst: *mut Value) -> Option<u64> {
+    let ptr_of = |c: Option<&Rc<crate::class::Class>>| c.map_or(ptr::null(), Rc::as_ptr);
+    let scope = ptr_of(f.class.as_ref());
+    let stc = ptr_of(f.static_class.as_ref());
+    let mc = match site.cached.get() {
+        Some(mc) if mc.scope == scope && mc.static_cls == stc => mc,
+        _ => {
+            // Only names the general path already resolved: resolving here
+            // must not autoload (a miss would then autoload twice).
+            let cls = match cref {
+                ast::ClassRef::Name(nm) if !matches!(&*nm.to_ascii_lowercase(), "self" | "parent" | "static") => {
+                    it.class_cache.borrow().get(&(nm.as_ptr() as usize)).cloned()?
+                }
+                _ => it.class_ref(f, cref).ok()?,
+            };
+            if cls.kind != ast::ClassKind::Class || cls.is_abstract || cls.is_a("throwable") {
+                return None;
+            }
+            let (entry, decl_class, method, display) = match &cls.ctor {
+                Some(ctor) => {
+                    if !it.member_visible(f.class.as_deref(), ctor.vis, &ctor.declaring) {
+                        return None;
+                    }
+                    let (entry, decl_class, display) = method_entry(it, ctor)?;
+                    (Some(entry), decl_class, Rc::as_ptr(ctor), Box::leak(display.to_string().into_boxed_str()) as *const str)
+                }
+                None if cls.plain_new => (None, None, ptr::null(), "" as *const str),
+                None => return None,
+            };
+            let mc = MethodCache {
+                class: Rc::as_ptr(&cls),
+                scope,
+                // No constructor: a null entry.
+                entry: entry.unwrap_or(no_ctor),
+                method,
+                decl_class: decl_class.as_ref().map_or(ptr::null(), Rc::as_ptr),
+                display,
+                sc: Rc::as_ptr(&cls),
+                static_cls: stc,
+                this_cls: ptr::null(),
+            };
+            site.cached.set(Some(mc));
+            site.frame.invalidate();
+            mc
+        }
+    };
+    let cls = rc_from(mc.class).unwrap();
+    if mc.method.is_null() {
+        if n != 0 {
+            return None;
+        }
+        return Some(status(it, it.new_instance(&cls), |o| put(dst, Value::Object(o))));
+    }
+    let o = match it.new_instance(&cls) {
+        Ok(o) => o,
+        Err(e) => return Some(status(it, Err::<(), _>(e), |_| ())),
+    };
+    let m = &*mc.method;
+    let crate::class::MethodBody::User(func) = &m.body else { unreachable!() };
+    let make = || {
+        let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
+        frame.static_class = Some(cls.clone());
+        frame.class = rc_from(mc.decl_class);
+        frame
+    };
+    let mut out = Value::Null;
+    let r = site.frame.with(make, |frame| {
+        frame.this = Some(o.clone());
+        enter(it, mc.entry, frame, args, n, &mut out, None, None, &*mc.display)
+    });
+    match r {
+        Some(0) => {
+            put(dst, Value::Object(o));
+            Some(0)
+        }
+        Some(st) => Some(st),
+        None => {
+            // Declined before binding (arguments untouched): run the
+            // constructor through the interpreter on this object.
+            let pos = take_args(args, n);
+            let ctor = cls.ctor.clone().unwrap();
+            let r = it.invoke_method(Some(o.clone()), &ctor, cls.clone(), pos, vec![]).map(|_| Value::Object(o));
+            Some(status(it, r, |v| put(dst, v)))
+        }
+    }
+}
+
+/// Placeholder entry for classes without a constructor (never called).
+unsafe extern "C" fn no_ctor(_: *mut Cx, _: *mut Value, _: u64, _: *mut Value) -> u64 {
+    2
+}
+
 /// kind 0: closure (`vals` = its `use` list, in order); kind 1: arrow fn
 /// (`vals` = values for `arrow_captures` names). `vals` are consumed.
 pub unsafe extern "C" fn rt_make_closure(c: *mut Cx, kind: u64, node: *const (), vals: *mut Value, n: u64, dst: *mut Value) -> u64 {
@@ -1631,12 +1877,12 @@ pub unsafe extern "C" fn rt_make_closure(c: *mut Cx, kind: u64, node: *const (),
     let vals = take_args(vals, n);
     let v = if kind == 0 {
         let cl = &*(node as *const ast::Closure);
-        let captured = cl.uses.iter().zip(vals).map(|(u, v)| (&*u.var.name, slot(v), false)).collect();
+        let captured = cl.uses.iter().zip(vals).map(|(u, v)| (&*u.var.name, v, false)).collect();
         it.make_closure(f, crate::interp::ClosureKind::Closure(cl), captured, cl.is_static)
     } else {
         let a = &*(node as *const ast::ArrowFn);
         let names = it.arrow_captures(a);
-        let captured = names.iter().zip(vals).map(|(n, v)| (*n, slot(v), false)).collect();
+        let captured = names.iter().zip(vals).map(|(n, v)| (*n, v, false)).collect();
         it.make_closure(f, crate::interp::ClosureKind::Arrow(a), captured, a.is_static)
     };
     put(dst, v);
@@ -1718,7 +1964,7 @@ pub unsafe extern "C" fn rt_iter_new(c: *mut Cx, subject: *const Value, out: *mu
     let r: R<Option<Iter>> = (|| {
         Ok(Some(match &*subject {
             Value::Array(a) => Iter::Array { arr: a.clone(), i: 0 },
-            Value::Object(o) if matches!(&*o.internal.borrow(), Internal::Generator(_)) || o.class.is_a("iterator") => {
+            Value::Object(o) if matches!(&*o.internal(), Internal::Generator(_)) || o.class.is_a("iterator") => {
                 Iter::Iterator { obj: o.clone(), started: false }
             }
             Value::Object(o) if o.class.is_a("iteratoraggregate") => match it.call_method(o, "getIterator", vec![])? {

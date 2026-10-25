@@ -75,7 +75,7 @@ pub fn track(make: impl FnOnce(u32) -> Rc<Obj>) -> Rc<Obj> {
 fn register_in(st: &State, o: &Rc<Obj>) {
     let p = Rc::as_ptr(o);
     let mut r = st.registry.borrow_mut();
-    o.gc_index.set(r.len() as u32);
+    o.set_gc_index(r.len() as u32);
     r.push(p);
     let n = st.since.get() + 1;
     st.since.set(n);
@@ -100,7 +100,7 @@ pub fn register(o: &Rc<Obj>) {
     let p = Rc::as_ptr(o);
     let _ = ST.try_with(|st| {
         let mut r = st.registry.borrow_mut();
-        o.gc_index.set(r.len() as u32);
+        o.set_gc_index(r.len() as u32);
         r.push(p);
         let n = st.since.get() + 1;
         st.since.set(n);
@@ -117,11 +117,11 @@ pub fn unregister(o: &Obj) {
 }
 
 fn unregister_in(st: &State, o: &Obj) {
-    let i = o.gc_index.get();
+    let i = o.gc_index();
     if i == u32::MAX {
         return;
     }
-    o.gc_index.set(u32::MAX);
+    o.set_gc_index(u32::MAX);
     {
         let mut r = st.registry.borrow_mut();
         let i = i as usize;
@@ -129,7 +129,7 @@ fn unregister_in(st: &State, o: &Obj) {
             r.swap_remove(i);
             if i < r.len() {
                 // SAFETY: registry entries are live objects (removed on drop).
-                unsafe { (*r[i]).gc_index.set(i as u32) };
+                unsafe { (*r[i]).set_gc_index(i as u32) };
             }
         }
     }
@@ -183,24 +183,17 @@ fn visit_obj(o: &Obj, f: &mut dyn FnMut(*const Obj)) -> bool {
         }
     }
     drop(props);
-    let Ok(internal) = o.internal.try_borrow() else { return false };
+    let Some(internal) = o.try_internal() else { return false };
     if let Internal::Closure(c) = &*internal {
-        if Rc::strong_count(c) == 1 {
-            match &**c {
+        {
+            match c {
                 Callable::Closure(cd) if Rc::strong_count(cd) == 1 => {
                     if let Some(t) = &cd.this {
                         f(Rc::as_ptr(t));
                     }
-                    for (_, slot, _) in &cd.captured {
-                        if Rc::strong_count(slot) == 1 {
-                            match slot.try_borrow() {
-                                Ok(x) => {
-                                    if !visit_value(&x, f) {
-                                        return false;
-                                    }
-                                }
-                                Err(_) => return false,
-                            }
+                    for (_, v, _) in &cd.captured {
+                        if !visit_value(v, f) {
+                            return false;
                         }
                     }
                 }
@@ -274,10 +267,10 @@ pub fn collect() -> usize {
         return 0;
     }
     // Destructors first (PHP semantics); the cycles are broken next time.
-    let pending: Vec<&Rc<Obj>> = garbage.iter().filter(|o| o.class.has_destruct && !o.destructed.get()).collect();
+    let pending: Vec<&Rc<Obj>> = garbage.iter().filter(|o| o.class.has_destruct && !o.destructed()).collect();
     if !pending.is_empty() {
         for o in pending {
-            o.destructed.set(true);
+            o.set_destructed();
             let o = (*o).clone();
             let _ = DESTRUCT_QUEUE.try_with(|q| q.borrow_mut().push(o));
         }
@@ -290,7 +283,7 @@ pub fn collect() -> usize {
     let mut doomed: Vec<(crate::props::Props, Internal)> = Vec::with_capacity(count);
     for o in &garbage {
         let props = o.props.try_borrow_mut().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default();
-        let internal = o.internal.try_borrow_mut().map(|mut i| std::mem::take(&mut *i)).unwrap_or_default();
+        let internal = o.internal_mut().map(|mut i| std::mem::take(&mut *i)).unwrap_or_default();
         doomed.push((props, internal));
     }
     drop(doomed);

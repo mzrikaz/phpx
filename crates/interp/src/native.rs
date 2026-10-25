@@ -50,8 +50,8 @@ fn arg(args: &[Value], i: usize) -> Value {
 // ---- Closure ---------------------------------------------------------------
 
 fn closure_of(o: Option<&Rc<Obj>>) -> Callable {
-    match &*o.expect("closure method needs $this").internal.borrow() {
-        Internal::Closure(c) => (**c).clone(),
+    match &*o.expect("closure method needs $this").internal() {
+        Internal::Closure(c) => c.clone(),
         _ => unreachable!("Closure object without callable"),
     }
 }
@@ -86,6 +86,7 @@ fn rebind(it: &Interp, c: &Callable, new_this: Value, scope: Option<Value>) -> R
     };
     let data = ClosureData {
         kind,
+        name: cd.name.clone(),
         captured: cd.captured.clone(),
         static_class: this.as_ref().map(|o| o.class.clone()).or_else(|| scope_cls.clone()),
         this,
@@ -164,7 +165,7 @@ pub fn promise_object(it: &Interp, p: Promise<Outcome>) -> Value {
 
 fn promise_of(it: &Interp, v: &Value) -> R<Promise<Outcome>> {
     if let Value::Object(o) = v {
-        if let Internal::Promise(p) = &*o.internal.borrow() {
+        if let Internal::Promise(p) = &*o.internal() {
             return Ok(p.clone());
         }
     }

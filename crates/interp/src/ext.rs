@@ -84,7 +84,7 @@ fn ser_obj(it: &Interp, o: &Rc<Obj>, out: &mut Vec<u8>) -> R<()> {
         out.extend_from_slice(format!("E:{}:\"{body}\";", body.len()).as_bytes());
         return Ok(());
     }
-    if matches!(&*o.internal.borrow(), Internal::Closure(_)) {
+    if matches!(&*o.internal(), Internal::Closure(_)) {
         return Err(it.error("Exception", "Serialization of 'Closure' is not allowed"));
     }
     if o.class.find_method("__serialize").is_some() {
@@ -1143,7 +1143,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             h.update(&key.iter().map(|b| b ^ 0x36).collect::<Vec<_>>());
         }
         let cls = it.find_class("HashContext")?.expect("prelude HashContext");
-        let o = Obj::new(cls, Internal::Data(Box::new(Box::new(HashState { h, hmac_key }))));
+        let o = Obj::new(cls, Internal::Data(Box::new(HashState { h, hmac_key })));
         Ok(Value::Object(o))
     });
     t.insert("hash_copy", |it, _, a| match arg(a, 0) {
@@ -1466,7 +1466,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
 
 fn with_hash<T>(it: &Interp, v: &Value, g: impl FnOnce(&mut HashState) -> T) -> R<T> {
     if let Value::Object(o) = v {
-        if let Internal::Data(d) = &mut *o.internal.borrow_mut() {
+        if let Some(Internal::Data(d)) = o.internal_mut().as_deref_mut() {
             if let Some(st) = d.downcast_mut::<HashState>() {
                 return Ok(g(st));
             }

@@ -56,7 +56,10 @@ pub fn reserve(it: &Interp, bytes: usize) -> R<()> {
 /// Run a built-in, turning a Rust panic (a phpx bug) into a PHP `Error`
 /// instead of aborting the process. Unwinding must not cross generated code.
 pub fn guarded(it: &Interp, name: &str, f: impl FnOnce() -> R<Value>) -> R<Value> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+    let saved = it.builtin_pos.replace(it.pos.get());
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    it.builtin_pos.set(saved);
+    match r {
         Ok(r) => r,
         Err(p) => {
             let msg = p

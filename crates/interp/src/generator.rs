@@ -205,7 +205,7 @@ fn current_key(g: &GenShared) -> Value {
 }
 
 fn gen_of(this: Option<&Rc<Obj>>) -> Rc<GenShared> {
-    match &*this.expect("Generator method needs $this").internal.borrow() {
+    match &*this.expect("Generator method needs $this").internal() {
         Internal::Generator(h) => h.0.clone(),
         _ => unreachable!("Generator object without state"),
     }

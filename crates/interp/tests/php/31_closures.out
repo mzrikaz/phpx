@@ -1,0 +1,19 @@
+13 46 79 
+42 {closure:App\Counter::named():7}|{closure:App\Counter::named():7}|App\Counter {closure:App\outer():9}
+222
+10
+610
+67
+50,100,150
+3,2,1
+2,4,6
+16
+n=7
+{closure:FILE:40}(): Argument #1 ($n) must be of type int, string given, called in FILE on line 42 @40
+{closure:FILE:43}(): Argument #1 ($z) must be of type int, string given @43
+{closure:FILE:44}
+hidden hidden
+ABC cba
+0:0 1:1 2:4 3:9 
+0,10,20,30,40
+DONE

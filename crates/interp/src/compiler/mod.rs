@@ -99,12 +99,12 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_place_update: 9 => true,
     rt_unset_place: 6 => true,
     rt_call: 7 => true,
-    rt_call_value: 7 => true,
+    rt_call_value: 8 => true,
     rt_method_call: 8 => true,
     rt_method_call_dyn: 8 => true,
     rt_prop_get_dyn: 4 => true,
     rt_static_call: 8 => true,
-    rt_new: 7 => true,
+    rt_new: 8 => true,
     rt_make_closure: 6 => true,
     rt_clone: 3 => true,
     rt_array_new: 1 => false,
@@ -323,7 +323,9 @@ impl Native {
             display: t.display.clone(),
             ctx: t.ctx.clone(),
             class: t.class.clone(),
-            simple: t.params.iter().all(|p| p.ty.is_none() && !p.by_ref && !p.variadic && p.promote.is_none()),
+            simple: t.captured.is_empty() && t.params.iter().all(|p| p.ty.is_none() && !p.by_ref && !p.variadic && p.promote.is_none()),
+            captured_slots: t.captured.iter().map(|c| a.locals.index[c] as usize).collect(),
+            quick: t.params.iter().map(|p| rt::Quick::of(p.ty.as_ref())).collect(),
         });
         let simple = spec.simple;
         let spec_addr = &*spec as *const LocalsSpec as i64;

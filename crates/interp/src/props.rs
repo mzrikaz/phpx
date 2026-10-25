@@ -87,30 +87,134 @@ impl Shape {
     }
 }
 
-/// `#[repr(C)]`: generated code reads `shape` (offset 0) and `data`
-/// (offset 8) directly for inline-cached property access.
+/// Property slots: a vector in two words (pointer, then u32 length and
+/// capacity) instead of `Vec`'s three, with the pointer first so generated
+/// code can read it at a fixed offset.
+#[repr(C)]
+pub struct Slots {
+    ptr: std::ptr::NonNull<Option<Value>>,
+    len: u32,
+    cap: u32,
+}
+
+impl Slots {
+    const fn new() -> Slots {
+        Slots { ptr: std::ptr::NonNull::dangling(), len: 0, cap: 0 }
+    }
+
+    fn layout(cap: u32) -> std::alloc::Layout {
+        std::alloc::Layout::array::<Option<Value>>(cap as usize).expect("too many properties")
+    }
+
+    fn from_vec(v: Vec<Option<Value>>) -> Slots {
+        if v.capacity() == 0 {
+            return Slots::new();
+        }
+        // Same layout as ours (an array of `cap` slots): take the buffer.
+        let mut v = std::mem::ManuallyDrop::new(v);
+        let (len, cap) = (v.len() as u32, v.capacity() as u32);
+        Slots { ptr: std::ptr::NonNull::new(v.as_mut_ptr()).unwrap(), len, cap }
+    }
+
+    fn from_slice(s: &[Option<Value>]) -> Slots {
+        if s.is_empty() {
+            return Slots::new();
+        }
+        let mut n = Slots::with_capacity(s.len() as u32);
+        for (i, v) in s.iter().enumerate() {
+            // SAFETY: capacity reserved; len updated as each slot is written.
+            unsafe { n.ptr.as_ptr().add(i).write(v.clone()) };
+            n.len += 1;
+        }
+        n
+    }
+
+    fn with_capacity(cap: u32) -> Slots {
+        // SAFETY: non-zero size.
+        let p = unsafe { std::alloc::alloc(Slots::layout(cap)) } as *mut Option<Value>;
+        let Some(ptr) = std::ptr::NonNull::new(p) else { std::alloc::handle_alloc_error(Slots::layout(cap)) };
+        Slots { ptr, len: 0, cap }
+    }
+
+    fn push(&mut self, v: Option<Value>) {
+        if self.len == self.cap {
+            let cap = (self.cap * 2).max(4);
+            // SAFETY: grow the buffer we own (or allocate the first one).
+            let p = unsafe {
+                if self.cap == 0 {
+                    std::alloc::alloc(Slots::layout(cap))
+                } else {
+                    std::alloc::realloc(self.ptr.as_ptr() as *mut u8, Slots::layout(self.cap), Slots::layout(cap).size())
+                }
+            } as *mut Option<Value>;
+            self.ptr = std::ptr::NonNull::new(p).unwrap_or_else(|| std::alloc::handle_alloc_error(Slots::layout(cap)));
+            self.cap = cap;
+        }
+        // SAFETY: len < cap.
+        unsafe { self.ptr.as_ptr().add(self.len as usize).write(v) };
+        self.len += 1;
+    }
+
+    fn remove(&mut self, i: usize) -> Option<Value> {
+        let len = self.len as usize;
+        assert!(i < len);
+        // SAFETY: i in bounds; the tail shifts down over the removed slot.
+        unsafe {
+            let p = self.ptr.as_ptr().add(i);
+            let v = p.read();
+            std::ptr::copy(p.add(1), p, len - i - 1);
+            self.len -= 1;
+            v
+        }
+    }
+}
+
+impl std::ops::Deref for Slots {
+    type Target = [Option<Value>];
+    #[inline]
+    fn deref(&self) -> &[Option<Value>] {
+        // SAFETY: len slots are initialized.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len as usize) }
+    }
+}
+
+impl std::ops::DerefMut for Slots {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [Option<Value>] {
+        // SAFETY: as above, uniquely borrowed.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len as usize) }
+    }
+}
+
+impl Drop for Slots {
+    fn drop(&mut self) {
+        // SAFETY: drop the initialized slots, then the buffer we own.
+        unsafe {
+            std::ptr::drop_in_place(&mut **self as *mut [Option<Value>]);
+            if self.cap > 0 {
+                std::alloc::dealloc(self.ptr.as_ptr() as *mut u8, Slots::layout(self.cap));
+            }
+        }
+    }
+}
+
+/// `#[repr(C)]`: generated code reads `shape` (offset 0) and the slot
+/// pointer (offset 8) directly for inline-cached property access.
 #[repr(C)]
 pub struct Props {
     shape: Rc<Shape>,
-    /// Always `vals.as_mut_ptr()`; refreshed after anything that can move
-    /// the buffer.
-    data: *mut Option<Value>,
-    vals: Vec<Option<Value>>,
+    vals: Slots,
 }
 
 impl Clone for Props {
     fn clone(&self) -> Self {
-        let mut p = Props { shape: self.shape.clone(), data: std::ptr::null_mut(), vals: self.vals.clone() };
-        p.sync();
-        p
+        Props { shape: self.shape.clone(), vals: Slots::from_slice(&self.vals) }
     }
 }
 
 impl Default for Props {
     fn default() -> Self {
-        let mut p = Props { shape: EMPTY.with(Rc::clone), data: std::ptr::null_mut(), vals: vec![] };
-        p.sync();
-        p
+        Props { shape: EMPTY.with(Rc::clone), vals: Slots::new() }
     }
 }
 
@@ -119,14 +223,13 @@ impl Props {
     /// uninitialized).
     pub fn with_shape(shape: Rc<Shape>, vals: Vec<Option<Value>>) -> Props {
         debug_assert_eq!(shape.names.len(), vals.len());
-        let mut p = Props { shape, data: std::ptr::null_mut(), vals };
-        p.sync();
-        p
+        Props { shape, vals: Slots::from_vec(vals) }
     }
 
-    #[inline]
-    fn sync(&mut self) {
-        self.data = self.vals.as_mut_ptr();
+    /// Like `with_shape`, cloning the values from a template.
+    pub fn from_template(shape: Rc<Shape>, vals: &[Option<Value>]) -> Props {
+        debug_assert_eq!(shape.names.len(), vals.len());
+        Props { shape, vals: Slots::from_slice(vals) }
     }
 
     pub fn shape(&self) -> &Rc<Shape> {
@@ -191,10 +294,21 @@ impl Props {
                     }
                 }
                 self.vals.push(Some(v));
-                self.sync();
                 None
             }
         }
+    }
+
+    /// Set a property the shape already has a slot for (writing through a
+    /// reference); gives the value back if there's none.
+    #[inline]
+    pub fn set_existing(&mut self, name: &str, v: Value) -> Result<(), Value> {
+        let Some(i) = self.shape.slot(name) else { return Err(v) };
+        match &mut self.vals[i] {
+            Some(Value::Ref(r)) => *r.borrow_mut() = v,
+            s => *s = Some(v),
+        }
+        Ok(())
     }
 
     /// The property's value, created as null if absent (for references).
@@ -221,7 +335,6 @@ impl Props {
             let mut names = self.shape.names.clone();
             names.remove(i);
             self.vals.remove(i);
-            self.sync();
             self.shape = Rc::new(Shape::new(names, self.shape.declared, false));
         }
         old
@@ -258,14 +371,16 @@ mod tests {
     #[test]
     fn compact_sizes() {
         // Guard against layout regressions: objects must stay small.
-        assert!(std::mem::size_of::<crate::value::Obj>() <= 96);
+        assert!(std::mem::size_of::<crate::value::Obj>() <= 48);
         assert_eq!(std::mem::size_of::<Option<crate::value::Value>>(), 16);
         let mut p = super::Props::default();
         p.insert(std::rc::Rc::from("a"), crate::value::Value::Int(1));
         p.insert(std::rc::Rc::from("b"), crate::value::Value::Int(2));
         let q = p.clone();
-        assert_eq!(q.data, q.vals.as_ptr() as *mut _);
-        assert_eq!(p.data, p.vals.as_ptr() as *mut _);
+        assert_eq!(q.len(), 2);
+        assert_eq!(std::mem::size_of::<super::Props>(), 24);
+        p.shift_remove("a");
+        assert_eq!(p.keys().map(|k| &**k).collect::<Vec<_>>(), ["b"]);
     }
 }
 

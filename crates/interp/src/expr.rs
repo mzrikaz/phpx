@@ -331,7 +331,7 @@ impl Interp {
                 for u in &c.uses {
                     let name: &'static str = &u.var.name;
                     if u.by_ref {
-                        captured.push((name, f.var_slot(name), true));
+                        captured.push((name, Value::Ref(f.var_slot(name)), true));
                     } else {
                         let v = match f.vars.get(name) {
                             Some(s) => s.borrow().clone(),
@@ -340,7 +340,7 @@ impl Interp {
                                 Value::Null
                             }
                         };
-                        captured.push((name, slot(v), false));
+                        captured.push((name, v, false));
                     }
                 }
                 self.make_closure(f, ClosureKind::Closure(c), captured, c.is_static)
@@ -349,7 +349,7 @@ impl Interp {
                 let names = self.arrow_captures(a);
                 let captured = names
                     .iter()
-                    .filter_map(|n| f.vars.get(n).map(|s| (*n, slot(s.borrow().clone()), false)))
+                    .filter_map(|n| f.vars.get(n).map(|s| (*n, s.borrow().clone(), false)))
                     .collect();
                 self.make_closure(f, ClosureKind::Arrow(a), captured, a.is_static)
             }
@@ -485,7 +485,7 @@ impl Interp {
                         }
                         Value::Null
                     }
-                    Value::Object(o) if matches!(&*o.internal.borrow(), Internal::Generator(_)) => {
+                    Value::Object(o) if matches!(&*o.internal(), Internal::Generator(_)) => {
                         // Delegate: forward values out and sent values in.
                         self.call_method(&o, "rewind", vec![])?;
                         while self.call_method(&o, "valid", vec![])?.truthy() {
@@ -602,7 +602,7 @@ impl Interp {
             "__CLASS__" => Value::str(f.class.as_ref().map(|c| &*c.name).unwrap_or("")),
             "__FUNCTION__" => Value::str(&f.func),
             "__METHOD__" => match &f.class {
-                Some(c) if !f.func.is_empty() => Value::str(&format!("{}::{}", c.name, f.func)),
+                Some(c) if !f.func.is_empty() && !f.func.starts_with("{closure") => Value::str(&format!("{}::{}", c.name, f.func)),
                 _ => Value::str(&f.func),
             },
             "__NAMESPACE__" => Value::str(&f.ctx.ns),
@@ -711,8 +711,10 @@ impl Interp {
         v
     }
 
-    pub fn make_closure(&self, f: &Frame, kind: ClosureKind, captured: Vec<(&'static str, Slot, bool)>, is_static: bool) -> Value {
+    pub fn make_closure(&self, f: &Frame, kind: ClosureKind, captured: Vec<(&'static str, Value, bool)>, is_static: bool) -> Value {
+        let name = self.closure_name(f, &kind);
         let data = ClosureData {
+            name,
             kind,
             captured,
             this: if is_static { None } else { f.this.clone() },
@@ -723,9 +725,38 @@ impl Interp {
         self.closure_object(crate::interp::Callable::Closure(Rc::new(data)))
     }
 
+    /// PHP 8.4+ closure name: `{closure:<where>:<line>}`, where <where> is
+    /// the enclosing function (`N\foo()`, `C::m()`, an outer closure) or,
+    /// at top level, the file.
+    fn closure_name(&self, f: &Frame, kind: &ClosureKind) -> Rc<str> {
+        let (node, off) = match kind {
+            ClosureKind::Closure(c) => (*c as *const ast::Closure as usize, c.span.start),
+            ClosureKind::Arrow(a) => (*a as *const ast::ArrowFn as usize, a.span.start),
+            ClosureKind::Wrap(_) => return Rc::from("{closure}"),
+        };
+        let outer_key = (Rc::as_ptr(&f.func) as *const u8 as usize, f.class.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize));
+        if let Some((k, n)) = self.closure_names.borrow().get(&node) {
+            if *k == outer_key {
+                return n.clone();
+            }
+        }
+        let outer = if f.func.is_empty() {
+            self.file_path(f.ctx.file)
+        } else if f.func.starts_with("{closure") {
+            f.func.to_string()
+        } else if let Some(c) = &f.class {
+            format!("{}::{}()", c.name, f.func)
+        } else {
+            format!("{}()", f.func)
+        };
+        let name: Rc<str> = Rc::from(format!("{{closure:{outer}:{}}}", self.line_of(f.ctx.file, off as u32)));
+        self.closure_names.borrow_mut().insert(node, (outer_key, name.clone()));
+        name
+    }
+
     pub fn closure_object(&self, c: crate::interp::Callable) -> Value {
         let cls = self.classes.borrow().get("closure").cloned().expect("Closure class");
-        Value::Object(Obj::new(cls, Internal::Closure(Rc::new(c))))
+        Value::Object(Obj::new(cls, Internal::Closure(c)))
     }
 
     // ---- chains: ->, ?->, [], () -----------------------------------------

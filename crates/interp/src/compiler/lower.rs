@@ -1374,9 +1374,12 @@ impl<'a> Lower<'a> {
                 let cv = self.own(cv);
                 let cv = self.materialize(cv);
                 let ca = self.addr(cv).unwrap();
+                let site = Box::new(super::rt::MethodSite { name: "", lname: "", cached: Default::default(), frame: Default::default() });
+                let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
+                self.msites.push(site);
                 let (aa, la, n_) = self.args(args)?;
                 let meta = self.arg_meta(args);
-                let r = self.helper_value("rt_call_value", |l| vec![l.cx, ca, aa, n_, la, meta])?;
+                let r = self.helper_value("rt_call_value", |l| vec![l.cx, ca, sp, aa, n_, la, meta])?;
                 self.release(cv);
                 r
             }
@@ -1449,9 +1452,12 @@ impl<'a> Lower<'a> {
             }
             New { class, args } => {
                 let cr = self.iconst(class as *const ClassRef as i64);
+                let site = Box::new(super::rt::MethodSite { name: "__construct", lname: "__construct", cached: Default::default(), frame: Default::default() });
+                let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
+                self.msites.push(site);
                 let (aa, la, n_) = self.args(args)?;
                 let meta = self.arg_meta(args);
-                self.helper_value("rt_new", |l| vec![l.cx, cr, aa, n_, la, meta])?
+                self.helper_value("rt_new", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?
             }
             Closure(c) => {
                 let vals: Vec<Option<u32>> = c.uses.iter().map(|u| self.locals.index.get(u.var.name.as_str()).copied()).collect();
