@@ -1123,6 +1123,9 @@ unsafe fn jit_site_call(site: &CallSite, args: *mut Value, n: u64, dst: *mut Val
 pub struct SiteFrame {
     frame: std::cell::UnsafeCell<Option<Box<Frame>>>,
     busy: std::cell::Cell<bool>,
+    /// Frames replaced while in use (the cached callee changed during a
+    /// recursive call): kept alive until that call has returned.
+    retired: std::cell::UnsafeCell<Vec<Box<Frame>>>,
 }
 
 /// After a direct call from generated code: ready the site frame for the
@@ -1140,18 +1143,30 @@ impl SiteFrame {
             return g(&mut f);
         }
         self.busy.set(true);
+        (*self.retired.get()).clear();
         let slot = &mut *self.frame.get();
-        let f = slot.get_or_insert_with(|| Box::new(make()));
+        // The frame itself (on the heap), not the slot: the slot may be
+        // emptied while the call runs (see `invalidate`).
+        let f: &mut Frame = &mut **slot.get_or_insert_with(|| Box::new(make()));
         let r = g(f);
         f.reset_after_call();
         self.busy.set(false);
         r
     }
 
-    /// Forget the frame (the cached callee changed).
+    /// Forget the frame (the cached callee changed). A frame in use is
+    /// retired rather than dropped: the running call still holds it, and it
+    /// must not be reused for the new callee (its scope would be stale).
     fn invalidate(&self) {
-        if !self.busy.get() {
-            unsafe { *self.frame.get() = None };
+        unsafe {
+            let slot = &mut *self.frame.get();
+            if self.busy.get() {
+                if let Some(f) = slot.take() {
+                    (*self.retired.get()).push(f);
+                }
+            } else {
+                *slot = None;
+            }
         }
     }
 }
