@@ -911,8 +911,24 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             _ => Err(it.error("ValueError", "func_get_arg(): Argument #1 ($position) must be less than the number of the arguments passed to the currently executed function")),
         }
     });
-    t.insert("debug_backtrace", |_, _, _| Ok(Value::array(PhpArray::new())));
-    t.insert("debug_print_backtrace", |_, _, _| Ok(Value::Null));
+    t.insert("debug_backtrace", |it, _, a| {
+        let opts = if has(a, 0) { int(it, a, 0)? } else { 1 };
+        let limit = if has(a, 1) { int(it, a, 1)?.max(0) as usize } else { 0 };
+        let args = opts & 2 == 0;
+        Ok(crate::trace::as_array(&crate::trace::entries(it, args, limit), opts & 1 != 0, args))
+    });
+    t.insert("debug_print_backtrace", |it, _, a| {
+        let opts = if has(a, 0) { int(it, a, 0)? } else { 0 };
+        let limit = if has(a, 1) { int(it, a, 1)?.max(0) as usize } else { 0 };
+        let args = opts & 2 == 0;
+        let trace = crate::trace::as_array(&crate::trace::entries(it, args, limit), false, args);
+        let s = crate::trace::trace_string(&trace);
+        // Without the closing "{main}" line.
+        let body = s.rsplit_once('#').map(|(b, _)| b).unwrap_or("");
+        it.echo(body.as_bytes());
+        Ok(Value::Null)
+    });
+    t.insert("__phpx_trace_string", |_, _, a| Ok(Value::str(&crate::trace::trace_string(&arg(a, 0)))));
     t.insert("php_uname", |it, _, a| {
         let mode = if has(a, 0) { bstr(it, a, 0)? } else { "a".into() };
         let host = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default().trim().to_string();

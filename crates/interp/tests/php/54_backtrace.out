@@ -1,0 +1,20 @@
+user
+1 make App\Model :: 11 [1,"abc"]
+#0 F(14): App\thrower(Array)
+#1 F(15): App\outer()
+#2 {main}
+App\thrower@14 App\outer@15 
+1
+#0 F(24): App\lvl()
+#1 F(25): App\lvl2()
+InvalidArgumentException: inner in F:26
+Stack trace:
+#0 {main}
+
+Next LogicException: outer in F:26
+Stack trace:
+#0 {main}
+2 x.php 7
+string(1) "v"
+array(0) {
+}

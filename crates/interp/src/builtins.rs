@@ -150,6 +150,8 @@ pub fn constants() -> HashMap<String, Value> {
     for (n, v) in [("EXTR_OVERWRITE", 0), ("EXTR_SKIP", 1), ("EXTR_PREFIX_SAME", 2), ("EXTR_PREFIX_ALL", 3), ("EXTR_REFS", 256)] {
         add(n, Value::Int(v));
     }
+    add("DEBUG_BACKTRACE_PROVIDE_OBJECT", Value::Int(1));
+    add("DEBUG_BACKTRACE_IGNORE_ARGS", Value::Int(2));
     add("E_ERROR", Value::Int(1));
     add("E_WARNING", Value::Int(2));
     add("E_NOTICE", Value::Int(8));

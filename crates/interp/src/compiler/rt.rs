@@ -21,6 +21,7 @@ use crate::interp::{slot, Callable, Ctrl, Frame, Interp, R};
 use crate::value::{Internal, Key, Obj, PhpArray, Value};
 
 // Fast built-in entries are registered with the other helpers.
+pub use crate::trace::{rt_call_pop, rt_call_push};
 pub use super::fastbi::{
     rt_fast_chr, rt_fast_implode, rt_fast_in_array, rt_fast_key_exists, rt_fast_ord, rt_fast_str_contains, rt_fast_str_ends_with,
     rt_fast_str_replace, rt_fast_str_starts_with, rt_fast_strpos, rt_fast_strtolower, rt_fast_strtoupper, rt_fast_substr, rt_fast_trim,

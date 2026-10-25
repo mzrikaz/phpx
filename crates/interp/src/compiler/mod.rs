@@ -102,6 +102,8 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_store_locals: 3 => false,
     rt_bind_slots: 4 => true,
     rt_unbind_slots: 2 => false,
+    rt_call_push: 4 => false,
+    rt_call_pop: 1 => false,
     rt_declare_class: 2 => true,
     rt_define_const: 3 => true,
     rt_release: 1 => false,
@@ -441,6 +443,11 @@ impl Native {
                 b, &mut self.module, &self.helpers, &a.locals, locals_slot, exit_ok, unwind, cxv, outv, pos_addr, t.ctx.file as u32,
                 &mut consts, &mut sites,
             );
+            // The call-stack record (functions and methods, not files).
+            // (Pushed in `init`, before parameters bind; popped on every exit.)
+            let call_rec = (!top_level).then(|| {
+                l.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, std::mem::size_of::<crate::trace::CallRec>() as u32, 3))
+            });
             let top_rcs = if top_level {
                 l.exit_ret = Some(exit_ret);
                 let n = (nlocals.max(1) * 8) as u32;
@@ -480,6 +487,10 @@ impl Native {
                     l.b.ins().brif(bad, unwind, &[], ok, &[]);
                     l.b.switch_to_block(ok);
                 }
+                if let Some(slot) = call_rec {
+                    let rec = l.b.ins().stack_addr(types::I64, slot, 0);
+                    l.call("rt_call_pop", &[rec]);
+                }
                 l.cleanup(nlocals);
                 if let Some(rcs) = top_rcs {
                     let ra = l.b.ins().stack_addr(types::I64, rcs, 0);
@@ -490,11 +501,21 @@ impl Native {
                 l.b.ins().return_(&[s]);
             }
             l.b.switch_to_block(decline);
+            if let Some(slot) = call_rec {
+                let rec = l.b.ins().stack_addr(types::I64, slot, 0);
+                l.call("rt_call_pop", &[rec]);
+            }
             let two = l.b.ins().iconst(types::I64, 2);
             l.b.ins().return_(&[two]);
             // Init: empty every slot, then load parameters.
             l.b.switch_to_block(init);
             l.init_slots(nlocals);
+            if let Some(slot) = call_rec {
+                let rec = l.b.ins().stack_addr(types::I64, slot, 0);
+                let sp = l.b.ins().iconst(types::I64, spec_addr);
+                let locals = l.b.ins().stack_addr(types::I64, locals_slot, 0);
+                l.call("rt_call_push", &[cxv, sp, locals, rec]);
+            }
             if let Some(rcs) = top_rcs {
                 let zero = l.b.ins().iconst(types::I64, 0);
                 for i in 0..nlocals {

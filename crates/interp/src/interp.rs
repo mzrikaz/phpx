@@ -1253,16 +1253,20 @@ impl Interp {
         let (file, line) = self.here();
         o.set_prop("file", Value::str(&file));
         o.set_prop("line", Value::Int(line as i64));
+        let args = self.ini_get("zend.exception_ignore_args").is_none_or(|v| v != "1" && !v.eq_ignore_ascii_case("on"));
+        o.set_prop("trace", crate::trace::as_array(&crate::trace::entries(self, args, 0), false, args));
     }
 
     /// Render an uncaught exception like PHP's fatal error message.
     pub fn uncaught_message(&self, o: &Rc<Obj>) -> String {
         let s = |n: &str| o.get_prop(n).and_then(|v| v.scalar_bytes()).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-        let (msg, file, line) = (s("message"), s("file"), s("line"));
-        format!(
-            "PHP Fatal error:  Uncaught {}: {msg} in {file}:{line}\nStack trace:\n#0 {{main}}\n  thrown in {file} on line {line}",
-            o.class.name
-        )
+        let (file, line) = (s("file"), s("line"));
+        // PHP prints the exception's string form (its chain and traces).
+        let text = match self.call_method(o, "__toString", vec![]) {
+            Ok(v) => v.scalar_bytes().map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default(),
+            Err(_) => format!("{}: {} in {file}:{line}\nStack trace:\n#0 {{main}}", o.class.name, s("message")),
+        };
+        format!("PHP Fatal error:  Uncaught {text}\n  thrown in {file} on line {line}")
     }
 
     pub fn static_prop_slot(&self, sp: &Rc<StaticProp>) -> R<Value> {

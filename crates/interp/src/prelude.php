@@ -59,10 +59,12 @@ final class WeakMap implements ArrayAccess, Countable, IteratorAggregate
 class Exception implements Throwable
 {
     protected $message = '';
+    private string $string = '';
     protected $code = 0;
     protected string $file = '';
     protected int $line = 0;
-    protected ?Throwable $previous = null;
+    private array $trace = [];
+    private ?Throwable $previous = null;
 
     public function __construct($message = '', $code = 0, ?Throwable $previous = null)
     {
@@ -76,23 +78,33 @@ class Exception implements Throwable
     final public function getPrevious(): ?Throwable { return $this->previous; }
     final public function getFile(): string { return $this->file; }
     final public function getLine(): int { return $this->line; }
-    final public function getTrace(): array { return []; }
-    final public function getTraceAsString(): string { return '#0 {main}'; }
+    final public function getTrace(): array { return $this->trace; }
+    final public function getTraceAsString(): string { return __phpx_trace_string($this->trace); }
 
     public function __toString(): string
     {
-        return static::class . ': ' . $this->message . ' in ' . $this->file . ':' . $this->line
-            . "\nStack trace:\n#0 {main}";
+        $chain = [];
+        for ($e = $this; $e !== null; $e = $e->getPrevious()) {
+            $chain[] = $e;
+        }
+        $out = '';
+        foreach (array_reverse($chain) as $i => $e) {
+            $out .= ($i > 0 ? "\n\nNext " : '') . get_class($e) . ($e->getMessage() === '' ? '' : ': ' . $e->getMessage())
+                . ' in ' . $e->getFile() . ':' . $e->getLine() . "\nStack trace:\n" . $e->getTraceAsString();
+        }
+        return $out;
     }
 }
 
 class Error implements Throwable
 {
     protected $message = '';
+    private string $string = '';
     protected $code = 0;
     protected string $file = '';
     protected int $line = 0;
-    protected ?Throwable $previous = null;
+    private array $trace = [];
+    private ?Throwable $previous = null;
 
     public function __construct($message = '', $code = 0, ?Throwable $previous = null)
     {
@@ -106,17 +118,42 @@ class Error implements Throwable
     final public function getPrevious(): ?Throwable { return $this->previous; }
     final public function getFile(): string { return $this->file; }
     final public function getLine(): int { return $this->line; }
-    final public function getTrace(): array { return []; }
-    final public function getTraceAsString(): string { return '#0 {main}'; }
+    final public function getTrace(): array { return $this->trace; }
+    final public function getTraceAsString(): string { return __phpx_trace_string($this->trace); }
 
     public function __toString(): string
     {
-        return static::class . ': ' . $this->message . ' in ' . $this->file . ':' . $this->line
-            . "\nStack trace:\n#0 {main}";
+        $chain = [];
+        for ($e = $this; $e !== null; $e = $e->getPrevious()) {
+            $chain[] = $e;
+        }
+        $out = '';
+        foreach (array_reverse($chain) as $i => $e) {
+            $out .= ($i > 0 ? "\n\nNext " : '') . get_class($e) . ($e->getMessage() === '' ? '' : ': ' . $e->getMessage())
+                . ' in ' . $e->getFile() . ':' . $e->getLine() . "\nStack trace:\n" . $e->getTraceAsString();
+        }
+        return $out;
     }
 }
 
-class ErrorException extends Exception {}
+class ErrorException extends Exception
+{
+    protected int $severity = E_ERROR;
+
+    public function __construct(string $message = '', int $code = 0, int $severity = E_ERROR, ?string $filename = null, ?int $line = null, ?Throwable $previous = null)
+    {
+        parent::__construct($message, $code, $previous);
+        $this->severity = $severity;
+        if ($filename !== null) {
+            $this->file = $filename;
+        }
+        if ($line !== null) {
+            $this->line = $line;
+        }
+    }
+
+    final public function getSeverity(): int { return $this->severity; }
+}
 class TypeError extends Error {}
 class ValueError extends Error {}
 class ArithmeticError extends Error {}
