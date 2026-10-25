@@ -1,0 +1,45 @@
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+array(1) {
+  [0]=>
+  string(3) "abc"
+}
+int(3)
+string(2) "/c"
+string(3) "a/b"
+string(12) "ÉLLO wörld"
+string(2) "xC"
+string(2) "ñ"
+string(2) "ñ"
+bool(true)
+array(3) {
+  [0]=>
+  string(5) "12-34"
+  [1]=>
+  string(2) "12"
+  [2]=>
+  string(2) "34"
+}
+bool(true)
+string(10) "_d_c_c_ón"
+bool(true)
+bool(false)
+string(14) "a&#233;&#8364;"
+string(6) "aé€"
+string(12) "étécafé x"
+string(7) "neutral"
+string(5) "UTF-8"
+int(63)
+array(2) {
+  [0]=>
+  string(5) "ASCII"
+  [1]=>
+  string(5) "UTF-8"
+}
+string(4) "a2b4"

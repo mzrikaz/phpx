@@ -102,6 +102,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::date::register(&mut t);
     crate::weak::register(&mut t);
     crate::pdo::register(&mut t);
+    crate::mbext::register(&mut t);
     t
 }
 
