@@ -993,12 +993,23 @@ unsafe fn take_args(args: *mut Value, n: u64) -> Vec<Value> {
     (0..n as usize).map(|i| take(args.add(i))).collect()
 }
 
+/// Generated code puts one more word after the `locals` pointers: a bit
+/// per argument the runtime bound by reference, so it can store
+/// property/element arguments back.
+unsafe fn mark_by_ref(locals: *const *mut Value, n: usize, i: usize) {
+    if i < 64 {
+        let mask = locals.add(n) as *mut u64;
+        *mask |= 1 << i;
+    }
+}
+
 unsafe fn with_refs(
     params: Option<&'static [ast::Param]>,
     mut pos: Vec<Value>,
     locals: *const *mut Value,
     call: impl FnOnce(Vec<Value>) -> R<Value>,
 ) -> R<Value> {
+    let n = pos.len();
     let mut cells = vec![];
     if let Some(ps) = params {
         for i in 0..pos.len() {
@@ -1011,6 +1022,7 @@ unsafe fn with_refs(
                 let cell = slot(take(local));
                 pos[i] = Value::Ref(cell.clone());
                 cells.push((local, cell));
+                mark_by_ref(locals, n, i);
             }
         }
     }
@@ -1273,11 +1285,13 @@ pub unsafe extern "C" fn rt_call(
             }
             if crate::call::BY_REF.iter().any(|(nm, _)| nm == bname) {
                 let mut vals = pos;
+                let n = vals.len();
                 let idxs: Vec<usize> = crate::call::BY_REF.iter().filter(|(nm, _)| nm == bname).map(|(_, i)| *i).filter(|i| *i < vals.len()).collect();
                 for &idx in &idxs {
                     let local = *locals.add(idx);
                     if !local.is_null() {
                         vals[idx] = take(local);
+                        mark_by_ref(locals, n, idx);
                     }
                 }
                 let r = crate::builtins::invoke(it, bname, crate::arginfo::spec(bname), *fun, f, &mut vals);

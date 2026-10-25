@@ -76,6 +76,68 @@ pub struct Lower<'a> {
     pub psites: Vec<Box<super::rt::PropSite>>,
     /// Top-level code: `return` exits through this block (status 3).
     pub exit_ret: Option<Block>,
+    /// Per pending call (innermost last): arguments to write back to
+    /// their place if the callee took them by reference.
+    write_backs: Vec<Vec<WriteBack>>,
+}
+
+/// A property or array-element argument (`sort($this->items)`): passed
+/// through a temp the runtime binds by reference, then stored back.
+struct WriteBack {
+    pos: usize,
+    target: &'static Expr,
+    temp: usize,
+}
+
+/// What's known at compile time about which arguments a call may take by
+/// reference.
+#[derive(Clone, Copy)]
+enum ByRef {
+    /// None of them (a built-in without by-reference parameters).
+    None,
+    /// A built-in's by-reference parameter positions (`BY_REF` table).
+    Builtin(&'static str),
+    /// Unknown until run time (user functions and methods).
+    Unknown,
+}
+
+impl ByRef {
+    fn for_function(name: &str) -> ByRef {
+        let l = name.trim_start_matches('\\').to_ascii_lowercase();
+        if crate::call::BY_REF.iter().any(|(n, _)| *n == l) {
+            let n: &'static str = crate::call::BY_REF.iter().find(|(n, _)| *n == l).unwrap().0;
+            ByRef::Builtin(n)
+        } else if crate::arginfo::spec(&l).is_some() {
+            ByRef::None
+        } else {
+            ByRef::Unknown
+        }
+    }
+
+    fn may_be_ref(self, i: usize) -> bool {
+        match self {
+            ByRef::None => false,
+            ByRef::Builtin(n) => crate::call::BY_REF.iter().any(|(m, j)| *m == n && *j == i),
+            ByRef::Unknown => true,
+        }
+    }
+}
+
+/// A write target that can be evaluated again without side effects.
+fn pure_place(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Var(_) => true,
+        ExprKind::Prop { object, name: MemberName::Ident(_), nullsafe: false } => pure_operand(object),
+        ExprKind::Index { base, index: Some(i) } => pure_place(base) && pure_operand(i),
+        _ => false,
+    }
+}
+
+fn pure_operand(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bytes(_) | ExprKind::Bool(_) | ExprKind::Null | ExprKind::Name(_) => true,
+        _ => pure_place(e),
+    }
 }
 
 /// An enclosing `try`: where its exceptions went before it, and the
@@ -133,6 +195,7 @@ impl<'a> Lower<'a> {
             msites: vec![],
             psites: vec![],
             exit_ret: None,
+            write_backs: vec![],
         }
     }
 
@@ -1392,9 +1455,10 @@ impl<'a> Lower<'a> {
                 let site = Box::new(super::rt::MethodSite::new("", ""));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
-                let (aa, la, n_) = self.args(args)?;
+                let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
                 let meta = self.arg_meta(args);
                 let r = self.helper_value("rt_call_value", |l| vec![l.cx, ca, sp, aa, n_, la, meta])?;
+                self.write_back(la, args.len())?;
                 self.release(cv);
                 r
             }
@@ -1407,13 +1471,15 @@ impl<'a> Lower<'a> {
                 let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name: n, cached: Default::default(), builtin: Default::default(), bspec: Default::default(), jit: Default::default() });
                 let sp = &*site as *const CallSite as i64;
                 self.sites.push(site);
-                let (aa, la, n_) = self.args(args)?;
+                let (aa, la, n_) = self.args(args, ByRef::for_function(n))?;
                 let sp = self.iconst(sp);
                 let meta = self.arg_meta(args);
-                match super::layout().filter(|_| args.iter().all(|a| !a.spread && a.name.is_none())) {
+                let r = match super::layout().filter(|_| args.iter().all(|a| !a.spread && a.name.is_none())) {
                     Some(lay) => self.direct_call(lay, sp, aa, n_, la, meta),
                     None => self.helper_value("rt_call", |l| vec![l.cx, sp, aa, n_, la, meta])?,
-                }
+                };
+                self.write_back(la, args.len())?;
+                r
             }
             MethodCall { object, name: MemberName::Dynamic(ne), args, nullsafe: false } => {
                 let o = self.expr(object)?;
@@ -1423,9 +1489,10 @@ impl<'a> Lower<'a> {
                 let nv = self.own(nv);
                 let nv = self.materialize(nv);
                 let (oa, na) = (self.addr(o).unwrap(), self.addr(nv).unwrap());
-                let (aa, la, n_) = self.args(args)?;
+                let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
                 let meta = self.arg_meta(args);
                 let r = self.helper_value("rt_method_call_dyn", |l| vec![l.cx, oa, na, aa, n_, la, meta])?;
+                self.write_back(la, args.len())?;
                 self.release(nv);
                 self.release(o);
                 r
@@ -1443,19 +1510,23 @@ impl<'a> Lower<'a> {
                 self.msites.push(site);
                 let r = if *nullsafe {
                     self.nullsafe(oa, |l| {
-                        let (aa, la, n_) = l.args(args)?;
+                        let (aa, la, n_) = l.args(args, ByRef::Unknown)?;
                         let sp = l.iconst(sp);
                         let meta = l.arg_meta(args);
-                        l.helper_value("rt_method_call", |l| vec![l.cx, oa, sp, aa, n_, la, meta])
+                        let r = l.helper_value("rt_method_call", |l| vec![l.cx, oa, sp, aa, n_, la, meta])?;
+                        l.write_back(la, args.len())?;
+                        Ok(r)
                     })?
                 } else {
-                    let (aa, la, n_) = self.args(args)?;
+                    let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
                     let sp = self.iconst(sp);
                     let meta = self.arg_meta(args);
-                    match super::layout().filter(|_| super::inline_rc() && args.iter().all(|a| !a.spread && a.name.is_none())) {
+                    let r = match super::layout().filter(|_| super::inline_rc() && args.iter().all(|a| !a.spread && a.name.is_none())) {
                         Some(lay) => self.direct_method_call(lay, oa, sp, aa, n_, la, meta),
                         None => self.helper_value("rt_method_call", |l| vec![l.cx, oa, sp, aa, n_, la, meta])?,
-                    }
+                    };
+                    self.write_back(la, args.len())?;
+                    r
                 };
                 if matches!(o, Op::Ptr(_, Some(_))) {
                     // A temporary (`(new C)->m()`) dies right after the call.
@@ -1473,18 +1544,22 @@ impl<'a> Lower<'a> {
                 let site = Box::new(super::rt::MethodSite::new(name, lname));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
-                let (aa, la, n_) = self.args(args)?;
+                let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
                 let meta = self.arg_meta(args);
-                self.helper_value("rt_static_call", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?
+                let r = self.helper_value("rt_static_call", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?;
+                self.write_back(la, args.len())?;
+                r
             }
             New { class, args } => {
                 let cr = self.iconst(class as *const ClassRef as i64);
                 let site = Box::new(super::rt::MethodSite::new("__construct", "__construct"));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
-                let (aa, la, n_) = self.args(args)?;
+                let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
                 let meta = self.arg_meta(args);
-                self.helper_value("rt_new", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?
+                let r = self.helper_value("rt_new", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?;
+                self.write_back(la, args.len())?;
+                r
             }
             Closure(c) => {
                 let vals: Vec<Option<u32>> = c.uses.iter().map(|u| self.locals.index.get(u.var.name.as_str()).copied()).collect();
@@ -1722,11 +1797,12 @@ impl<'a> Lower<'a> {
             let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name, cached: Default::default(), builtin: Default::default(), bspec: Default::default(), jit: Default::default() });
             let sp = &*site as *const CallSite as i64;
             l.sites.push(site);
-            let (aa, la, n_) = l.args(args)?;
+            let (aa, la, n_) = l.args(args, ByRef::None)?;
             let sp = l.iconst(sp);
             let meta = l.iconst(0);
             let ta = l.temp_addr(t);
             l.call_checked("rt_call", &[l.cx, sp, aa, n_, la, meta, ta]);
+            l.write_back(la, args.len())?;
             l.b.ins().jump(merge, &[]);
             Ok(())
         };
@@ -1776,9 +1852,11 @@ impl<'a> Lower<'a> {
                 let aa = self.b.ins().stack_addr(types::I64, slot, 0);
                 self.store_into(aa, Op::Ptr(va, None));
                 self.release(v);
-                let lslot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3));
+                // One argument pointer, then the by-reference mask word.
+                let lslot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 16, 3));
                 let zero = self.iconst(0);
                 self.b.ins().stack_store(types::I64, zero, lslot, 0);
+                self.b.ins().stack_store(types::I64, zero, lslot, 8);
                 let la = self.b.ins().stack_addr(types::I64, lslot, 0);
                 let (sp, one) = (self.iconst(sp), self.iconst(1));
                 let ta = self.temp_addr(t);
@@ -1963,28 +2041,94 @@ impl<'a> Lower<'a> {
         }
     }
 
-    fn args(&mut self, args: &'static [ast::Arg]) -> L<(CValue, CValue, CValue)> {
+    /// Lay out the arguments for a call: values in a contiguous array, and
+    /// for each argument a pointer the runtime may bind by reference (a
+    /// local's slot, or a write-back temp for a property/element), plus a
+    /// final word where the runtime reports which ones it bound. Call
+    /// `write_back` after the call.
+    fn args(&mut self, args: &'static [ast::Arg], by_ref: ByRef) -> L<(CValue, CValue, CValue)> {
         let n = args.len();
         let (slot, ids) = self.alloc_array(n);
-        let lslot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, (n.max(1) * 8) as u32, 3));
+        let lslot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, ((n + 1) * 8) as u32, 3));
         for i in 0..n {
             let a = self.b.ins().stack_addr(types::I64, slot, (i * 16) as i32);
             self.store_tag(a, tag::NULL);
         }
+        let mut wbs = vec![];
         for (i, a) in args.iter().enumerate() {
-            let la = match self.local_of(&a.value) {
-                Some(l) => self.local_addr(l),
-                None => self.iconst(0),
+            let place = !a.spread && a.name.is_none() && matches!(a.value.kind, ExprKind::Prop { .. } | ExprKind::Index { .. });
+            let wb = if place && by_ref.may_be_ref(i) && i < 64 {
+                if !pure_place(&a.value) {
+                    if let ByRef::Builtin(_) = by_ref {
+                        return Err("by-reference argument with side effects");
+                    }
+                    None
+                } else {
+                    Some(self.alloc_temp())
+                }
+            } else {
+                None
+            };
+            let la = match (self.local_of(&a.value), wb) {
+                (Some(l), _) => self.local_addr(l),
+                (None, Some(t)) => self.temp_addr(t),
+                (None, None) => self.iconst(0),
             };
             self.b.ins().stack_store(types::I64, la, lslot, (i * 8) as i32);
             let v = self.expr(&a.value)?;
             let dst = self.b.ins().stack_addr(types::I64, slot, (i * 16) as i32);
             self.store_into(dst, v);
+            if let Some(t) = wb {
+                // The temp starts as a copy of the argument.
+                let ta = self.temp_addr(t);
+                let dst = self.b.ins().stack_addr(types::I64, slot, (i * 16) as i32);
+                self.store_into(ta, Op::Ptr(dst, None));
+                wbs.push(WriteBack { pos: i, target: &a.value, temp: t });
+            }
         }
+        let zero = self.iconst(0);
+        self.b.ins().stack_store(types::I64, zero, lslot, (n * 8) as i32);
         self.free.extend(ids);
+        self.write_backs.push(wbs);
         let aa = self.b.ins().stack_addr(types::I64, slot, 0);
         let la = self.b.ins().stack_addr(types::I64, lslot, 0);
         Ok((aa, la, self.iconst(n as i64)))
+    }
+
+    /// After a call: store arguments the callee bound by reference back to
+    /// their property or element.
+    fn write_back(&mut self, la: CValue, n: usize) -> L<()> {
+        let wbs = self.write_backs.pop().unwrap_or_default();
+        if wbs.is_empty() {
+            return Ok(());
+        }
+        let mask = self.b.ins().load(types::I64, flags(), la, (n * 8) as i32);
+        for wb in wbs {
+            let (store, skip, done) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+            let bit = self.b.ins().band_imm_s(mask, 1i64 << wb.pos);
+            self.b.ins().brif(bit, store, &[], skip, &[]);
+            self.b.switch_to_block(store);
+            let (root, name, keys) = self.place(wb.target, false)?;
+            let (np, nl) = name;
+            let (kslot, kn, kids) = keys;
+            let va = self.temp_addr(wb.temp);
+            let ka = self.b.ins().stack_addr(types::I64, kslot, 0);
+            let knv = self.iconst(kn as i64);
+            let ap = self.iconst(0);
+            let ra = root.addr;
+            let r = self.helper_value("rt_place_assign", |l| vec![l.cx, ra, np, nl, ka, knv, ap, va])?;
+            self.release(r);
+            self.release_ids(&kids);
+            self.release_root(root);
+            self.b.ins().jump(done, &[]);
+            self.b.switch_to_block(skip);
+            self.b.ins().jump(done, &[]);
+            self.b.switch_to_block(done);
+            let ta = self.temp_addr(wb.temp);
+            self.clear(ta);
+            self.free.push(wb.temp);
+        }
+        Ok(())
     }
 
     fn match_expr(&mut self, subject: &'static Expr, arms: &'static [ast::MatchArm]) -> L<Op> {
