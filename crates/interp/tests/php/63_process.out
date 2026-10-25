@@ -1,0 +1,44 @@
+string(1) "c"
+array(3) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  [2]=>
+  string(1) "c"
+}
+int(0)
+string(9) "hi
+there
+"
+NULL
+one
+two
+string(3) "two"
+int(3)
+pass
+int(0)
+string(12) "hello
+world
+"
+string(4) "err
+"
+bool(true)
+string(25) "cat; echo err >&2; exit 5"
+int(5)
+string(5) "x y|z"
+int(0)
+bool(true)
+bool(false)
+bool(true)
+int(15)
+string(11) "from popen
+"
+int(0)
+string(9) "bar
+/tmp
+"
+string(5) "STDIO"
+string(1) "r"
+string(2) "x
+"

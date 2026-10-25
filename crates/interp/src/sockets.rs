@@ -18,6 +18,8 @@ use crate::value::{Key, PhpArray, Resource, Value};
 
 pub enum Conn {
     Plain(NetStream),
+    /// A child process's pipe (proc_open, popen).
+    Pipe(phpx_runtime::net::Pipe),
     Tls(Box<TlsStream>),
     Server(Listener),
     /// Mid-upgrade (stream_socket_enable_crypto) or failed.
@@ -26,6 +28,8 @@ pub enum Conn {
 
 pub struct Sock {
     pub conn: Conn,
+    /// popen(): the child, waited for by pclose().
+    pub child: Option<std::process::Child>,
     /// Host the stream connected to (TLS name check and SNI).
     host: String,
     unix: bool,
@@ -37,10 +41,16 @@ pub struct Sock {
 pub struct TimedOut;
 
 impl Sock {
+    /// A pipe stream (no host, no TLS).
+    pub fn pipe(p: phpx_runtime::net::Pipe, child: Option<std::process::Child>) -> Sock {
+        Sock { conn: Conn::Pipe(p), child, host: String::new(), unix: false, read_total: 0 }
+    }
+
     pub fn fd(&self) -> Option<BorrowedFd<'_>> {
         match &self.conn {
             Conn::Plain(s) => Some(s.as_fd()),
             Conn::Tls(t) => Some(t.as_fd()),
+            Conn::Pipe(p) => Some(p.as_fd()),
             Conn::Server(l) => Some(l.as_fd()),
             Conn::Gone => None,
         }
@@ -59,6 +69,7 @@ impl Sock {
         let r = match &mut self.conn {
             Conn::Plain(s) => s.read(buf, deadline),
             Conn::Tls(t) => t.read(buf, deadline),
+            Conn::Pipe(p) => p.read(buf, deadline),
             _ => return Ok(0),
         };
         match r {
@@ -75,6 +86,7 @@ impl Sock {
         let r = match &mut self.conn {
             Conn::Plain(s) => s.write_all(data, deadline),
             Conn::Tls(t) => t.write_all(data, deadline),
+            Conn::Pipe(p) => p.write_all(data, deadline),
             _ => return Err((32, "Broken pipe".into())),
         };
         r.map_err(|e| os_error(&e))
@@ -92,6 +104,9 @@ impl Sock {
     }
 
     pub fn stream_type(&self) -> &'static str {
+        if let Conn::Pipe(_) = self.conn {
+            return "STDIO";
+        }
         if self.unix {
             "unix_socket"
         } else {
@@ -203,7 +218,7 @@ fn ssl_options(it: &Interp, ctx: &Value) -> tls::Options {
 fn connect(t: &Target, deadline: Option<Instant>, ssl: &tls::Options) -> Result<Sock, (i32, String)> {
     if t.scheme == "unix" {
         let s = NetStream::connect_unix(&t.path, deadline).map_err(|e| os_error(&e))?;
-        return Ok(Sock { conn: Conn::Plain(s), host: String::new(), unix: true, read_total: 0 });
+        return Ok(Sock { conn: Conn::Plain(s), child: None, host: String::new(), unix: true, read_total: 0 });
     }
     if t.scheme == "udp" || t.scheme == "udg" {
         return Err((0, format!("Unable to find the socket transport \"{}\" - did you forget to enable it when you configured PHP?", t.scheme)));
@@ -217,7 +232,7 @@ fn connect(t: &Target, deadline: Option<Instant>, ssl: &tls::Options) -> Result<
         }
     };
     let s = NetStream::connect_tcp(&addrs[..], deadline).map_err(|e| os_error(&e))?;
-    let mut sock = Sock { conn: Conn::Plain(s), host: t.host.clone(), unix: false, read_total: 0 };
+    let mut sock = Sock { conn: Conn::Plain(s), child: None, host: t.host.clone(), unix: false, read_total: 0 };
     if t.tls() {
         sock.enable_tls(ssl, deadline)?;
     }
@@ -417,7 +432,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let l = if t.scheme == "unix" { Listener::bind_unix(&t.path) } else { Listener::bind_tcp((t.host.as_str(), t.port)) };
         match l {
             Ok(l) => {
-                let sock = Sock { conn: Conn::Server(l), host: t.host, unix: t.scheme == "unix", read_total: 0 };
+                let sock = Sock { conn: Conn::Server(l), child: None, host: t.host, unix: t.scheme == "unix", read_total: 0 };
                 Ok(new_stream(sock, &spec, it, None))
             }
             Err(e) => {
@@ -433,7 +448,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         };
         let deadline = wait.map(|d| Instant::now() + d);
         let res = with_sock(&arg(a, 0), |_, sk| match &sk.conn {
-            Conn::Server(l) => Some(l.accept(deadline).map(|(s, peer)| (Sock { conn: Conn::Plain(s), host: String::new(), unix: sk.unix, read_total: 0 }, peer))),
+            Conn::Server(l) => Some(l.accept(deadline).map(|(s, peer)| (Sock { conn: Conn::Plain(s), child: None, host: String::new(), unix: sk.unix, read_total: 0 }, peer))),
             _ => None,
         })
         .flatten();
@@ -459,7 +474,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                 Conn::Plain(s) => if remote { s.peer_addr() } else { s.local_addr() },
                 Conn::Tls(t) => if remote { t.socket().peer_addr() } else { t.socket().local_addr() },
                 Conn::Server(l) => if remote { None } else { l.local_addr() },
-                Conn::Gone => None,
+                Conn::Pipe(_) | Conn::Gone => None,
             };
             name.map(|n| Value::str(&n)).unwrap_or(Value::Bool(false))
         })
@@ -563,4 +578,9 @@ pub fn constants(add: &mut dyn FnMut(&str, Value)) {
     ] {
         add(k, Value::Int(v));
     }
+}
+
+/// A stream resource over a child process pipe.
+pub fn pipe_stream(sock: Sock, mode: &str) -> Value {
+    Resource::new("stream", Box::new(Stream::new(Backend::Socket(sock), mode, "", "")))
 }

@@ -35,6 +35,7 @@ mod glob;
 mod mbext;
 mod db;
 mod pdo;
+mod process;
 mod reflect;
 mod trace;
 mod weak;

@@ -103,6 +103,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::weak::register(&mut t);
     crate::pdo::register(&mut t);
     crate::mbext::register(&mut t);
+    crate::process::register(&mut t);
     t
 }
 
