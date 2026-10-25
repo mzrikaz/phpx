@@ -31,6 +31,8 @@ mod pstr;
 mod consts;
 mod consts_table;
 mod date;
+mod db;
+mod pdo;
 mod reflect;
 mod trace;
 mod weak;
