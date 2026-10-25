@@ -971,6 +971,10 @@ impl<'a> Lower<'a> {
                 let p = l.iconst(e as *const Expr as i64);
                 vec![l.cx, p]
             })?,
+            Array(items) if crate::expr::const_array(items).is_some() => {
+                let c = self.const_value(crate::expr::const_array(items).unwrap());
+                Op::Ptr(c, None)
+            }
             Array(items) => {
                 let t = self.alloc_temp();
                 let ta = self.temp_addr(t);

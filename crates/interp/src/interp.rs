@@ -277,6 +277,8 @@ pub struct Interp {
     /// Classes resolved from source names, keyed by the AST name's address.
     pub class_cache: RefCell<FxHashMap<usize, Rc<Class>>>,
     pub ini: RefCell<crate::ini::Ini>,
+    /// Constant array literals, built once (None: not constant).
+    pub const_arrays: RefCell<FxHashMap<usize, Option<Value>>>,
     /// eval() sources already parsed, by call site + code.
     pub eval_cache: RefCell<HashMap<String, (usize, &'static ast::File)>>,
     /// `@` nesting depth: warnings are suppressed while nonzero.
@@ -326,6 +328,7 @@ impl Interp {
             silence: Cell::new(0),
             eval_cache: RefCell::new(HashMap::new()),
             ini: RefCell::new(crate::ini::Ini::new()),
+            const_arrays: RefCell::new(FxHashMap::default()),
             class_cache: RefCell::new(FxHashMap::default()),
             response: RefCell::new(Default::default()),
             include_path: RefCell::new(".:/usr/share/php".into()),

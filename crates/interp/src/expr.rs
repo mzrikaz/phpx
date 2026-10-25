@@ -176,7 +176,10 @@ impl Interp {
             Var(n) => self.read_var(f, n)?,
             Name(n) => self.constant(f, n)?,
             MagicConst(m) => self.magic_const(f, m, e),
-            Array(items) => self.eval_array(f, items)?,
+            Array(items) => match self.const_array_cached(e, items) {
+                Some(v) => v,
+                None => self.eval_array(f, items)?,
+            },
             Assign { target, value } => {
                 if let Array(items) = &target.kind {
                     let v = self.eval(f, value)?;
@@ -604,6 +607,18 @@ impl Interp {
             "__NAMESPACE__" => Value::str(&f.ctx.ns),
             _ => Value::str(""),
         }
+    }
+
+    /// A literal array of constants is built once and shared (copy on write),
+    /// like PHP's immutable arrays.
+    fn const_array_cached(&self, e: &'static Expr, items: &'static [Option<ast::ArrayItem>]) -> Option<Value> {
+        let key = e as *const Expr as usize;
+        if let Some(v) = self.const_arrays.borrow().get(&key) {
+            return v.clone();
+        }
+        let v = const_array(items);
+        self.const_arrays.borrow_mut().insert(key, v.clone());
+        v
     }
 
     fn eval_array(&self, f: &mut Frame, items: &'static [Option<ast::ArrayItem>]) -> R<Value> {
@@ -1584,4 +1599,50 @@ pub fn key_repr(k: &Key) -> String {
         Key::Int(n) => n.to_string(),
         Key::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s)),
     }
+}
+
+/// The value of an array literal made only of constants (scalars, strings,
+/// nested constant arrays), or None.
+pub fn const_array(items: &[Option<ast::ArrayItem>]) -> Option<Value> {
+    fn scalar(e: &Expr) -> Option<Value> {
+        Some(match &e.kind {
+            ExprKind::Int(n) => Value::Int(*n),
+            ExprKind::Float(x) => Value::Float(*x),
+            ExprKind::Str(s) => Value::str(s),
+            ExprKind::Bytes(b) => Value::bytes(b.clone()),
+            ExprKind::Bool(b) => Value::Bool(*b),
+            ExprKind::Null => Value::Null,
+            ExprKind::Unary { op: ast::UnOp::Neg, expr } => match &expr.kind {
+                ExprKind::Int(n) => Value::Int(n.checked_neg()?),
+                ExprKind::Float(x) => Value::Float(-x),
+                _ => return None,
+            },
+            ExprKind::Array(inner) => const_array(inner)?,
+            _ => return None,
+        })
+    }
+    let mut a = PhpArray::new();
+    for it in items {
+        let it = it.as_ref()?;
+        if it.spread || it.by_ref {
+            return None;
+        }
+        let v = scalar(&it.value)?;
+        match &it.key {
+            None => {
+                a.push(v);
+            }
+            Some(k) => {
+                let key = match scalar(k)? {
+                    Value::Int(n) => Key::Int(n),
+                    Value::Str(s) => Key::from_bytes(&s),
+                    Value::Bool(b) => Key::Int(b as i64),
+                    Value::Null => Key::Str(crate::value::pstr("")),
+                    _ => return None,
+                };
+                a.insert(key, v);
+            }
+        }
+    }
+    Some(Value::array(a))
 }
