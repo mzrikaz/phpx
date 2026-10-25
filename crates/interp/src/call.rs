@@ -363,7 +363,7 @@ impl Interp {
             // Run with the caller's frame: scope-dependent built-ins
             // (get_object_vars, get_class_methods, ...) see its class.
             let mut vals: Vec<Value> = pos.into_iter().map(Value::into_deref).collect();
-            return crate::builtins::guarded(self, bname, || fun(self, f, &mut vals));
+            return crate::builtins::invoke(self, bname, crate::arginfo::spec(bname), fun, f, &mut vals);
         }
         let callable = Callable::Builtin(bname, fun);
         self.call_callable(&callable, pos, named)
@@ -409,6 +409,20 @@ impl Interp {
             count += 1;
         }
         Ok(Value::Int(count))
+    }
+
+    /// Evaluate a constant expression from source (a built-in parameter's
+    /// default, e.g. `ENT_QUOTES | ENT_SUBSTITUTE`).
+    pub fn eval_const_source(&self, src: &str) -> Option<Value> {
+        let code: &'static str = Box::leak(format!("<?php return {src};").into_boxed_str());
+        let (file, diags) = phpx_syntax::check(code);
+        if diags.iter().any(|d| d.is_error()) {
+            return None;
+        }
+        let file: &'static ast::File = Box::leak(Box::new(file));
+        let ast::StmtKind::Return(Some(e)) = &file.stmts.first()?.kind else { return None };
+        let mut f = Frame::new(self.file_ctx(0), 0);
+        self.eval(&mut f, e).ok()
     }
 
     /// `eval($code)`: run code in the caller's scope.
@@ -502,7 +516,7 @@ impl Interp {
         for (_, p) in &places {
             self.place_set(f, p, Value::Null)?;
         }
-        let r = crate::builtins::guarded(self, name, || fun(self, f, &mut vals));
+        let r = crate::builtins::invoke(self, name, crate::arginfo::spec(name), fun, f, &mut vals);
         for (i, p) in places {
             let v = std::mem::take(&mut vals[i]);
             self.place_set(f, &p, v)?;
@@ -632,13 +646,16 @@ impl Interp {
 
     #[inline(never)]
     fn call_builtin(&self, name: &str, fun: crate::interp::BuiltinFn, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
-        if !named.is_empty() {
-            return Err(self.error("Error", &format!("phpx: named arguments to built-in {name}() are not supported yet")));
-        }
+        let spec = crate::arginfo::spec(name);
+        let pos = match (named.is_empty(), spec) {
+            (true, _) => pos,
+            (false, Some(s)) => s.bind_named(self, pos, named)?,
+            (false, None) => return Err(self.error("Error", &format!("phpx: named arguments to built-in {name}() are not supported yet"))),
+        };
         let ctx = self.file_ctx(self.pos.get().file as usize);
         let mut frame = Frame::new(ctx, 0);
         let mut args: Vec<Value> = pos.into_iter().map(Value::into_deref).collect();
-        crate::builtins::guarded(self, name, || fun(self, &mut frame, &mut args))
+        crate::builtins::invoke(self, name, spec, fun, &mut frame, &mut args)
     }
 
     #[inline(never)]
@@ -800,7 +817,10 @@ impl Interp {
                 Flow::Return(v) => v,
                 _ => Value::Null,
             },
-            Body::Expr(e) => self.eval(&mut f, e)?,
+            Body::Expr(e) => {
+                self.pos.set(crate::interp::Pos { file: inv.ctx.file as u32, off: e.span.start });
+                self.eval(&mut f, e)?
+            }
         };
         // Checked before leaving: a TypeError points at the `return`.
         let result = if inv.ret.is_none() { result } else { self.check_return(&inv, result)? };

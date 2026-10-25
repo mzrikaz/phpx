@@ -5,6 +5,8 @@
 //! against: every behavior here is checked against real PHP output.
 
 mod alloc;
+mod arginfo;
+mod arginfo_table;
 mod arrays;
 mod builtins;
 mod call;

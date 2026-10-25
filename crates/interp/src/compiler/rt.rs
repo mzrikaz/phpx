@@ -1036,8 +1036,10 @@ pub struct CallSite {
     pub name: &'static str,
     /// (entry, function). Plain pointer: functions are never freed.
     pub cached: std::cell::Cell<Option<(crate::compiler::Entry, *const crate::interp::UserFn)>>,
-    /// Resolved plain built-in (no by-ref params, no caller-scope access).
+    /// Resolved plain built-in (no by-ref params, no caller-scope access),
+    /// with its PHP signature.
     pub builtin: std::cell::Cell<Option<crate::interp::BuiltinFn>>,
+    pub bspec: std::cell::Cell<Option<&'static crate::arginfo::Spec>>,
     /// The numeric JIT's entry for the argument types last seen here.
     pub jit: std::cell::Cell<Option<JitSite>>,
 }
@@ -1231,7 +1233,7 @@ pub unsafe extern "C" fn rt_call(
                 *v = std::mem::take(v).into_deref();
             }
         }
-        let r = crate::builtins::guarded(it, "built-in", || fun(it, f, vals));
+        let r = crate::builtins::invoke(it, (*site).name, (*site).bspec.get(), fun, f, vals);
         for v in vals.iter_mut() {
             if !matches!(v, Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) {
                 drop(std::mem::take(v));
@@ -1278,7 +1280,7 @@ pub unsafe extern "C" fn rt_call(
                         vals[idx] = take(local);
                     }
                 }
-                let r = crate::builtins::guarded(it, bname, || fun(it, f, &mut vals));
+                let r = crate::builtins::invoke(it, bname, crate::arginfo::spec(bname), *fun, f, &mut vals);
                 for &idx in &idxs {
                     let local = *locals.add(idx);
                     if !local.is_null() {
@@ -1289,11 +1291,13 @@ pub unsafe extern "C" fn rt_call(
             }
             // Plain built-in: call it directly with the caller's frame, and
             // remember it at this call site.
+            let spec = crate::arginfo::spec(bname);
             if !matches!(*bname, "get_class" | "get_parent_class") {
                 (*site).builtin.set(Some(*fun));
+                (*site).bspec.set(spec);
             }
             let mut vals: Vec<Value> = pos.into_iter().map(Value::into_deref).collect();
-            return crate::builtins::guarded(it, bname, || fun(it, f, &mut vals));
+            return crate::builtins::invoke(it, bname, spec, *fun, f, &mut vals);
         }
         let params = crate::call::callable_params(&callable);
         with_refs(params, pos, locals, |pos| it.call_callable(&callable, pos, vec![]))

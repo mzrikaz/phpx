@@ -1,0 +1,116 @@
+ok 'xxx'
+TypeError: str_repeat(): Argument #2 ($times) must be of type int, string given
+TypeError: str_repeat(): Argument #2 ($times) must be of type int, string given
+ok 'xx'
+ok 'x'
+TypeError: str_repeat(): Argument #1 ($string) must be of type string, array given
+ok 5
+ok 3
+ArgumentCountError: strlen() expects exactly 1 argument, 0 given
+ArgumentCountError: strlen() expects exactly 1 argument, 2 given
+ArgumentCountError: substr() expects at least 2 arguments, 1 given
+ArgumentCountError: substr() expects at most 3 arguments, 4 given
+TypeError: in_array(): Argument #2 ($haystack) must be of type array, string given
+TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, function "nope" not found or invalid function name
+TypeError: usort(): Argument #1 ($array) must be of type array, null given
+TypeError: implode(): Argument #2 ($array) must be of type ?array, string given
+ArgumentCountError: max() expects at least 1 argument, 0 given
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, int given
+TypeError: round(): Argument #1 ($num) must be of type int|float, string given
+ok 2.0
+TypeError: abs(): Argument #1 ($num) must be of type int|float, string given
+ok 3
+ok '    a'
+ok 'a--'
+ok '[
+    1,
+    2
+]'
+Error: Unknown named parameter $str
+ok '&lt;a href=&#039;x&#039;&gt;&amp;&lt;/a&gt;'
+ok array (
+  1 => 2,
+  2 => 3,
+  3 => 4,
+)
+ok false
+ok array (
+  5 => 'v',
+  6 => 'v',
+)
+ok '1,234.57'
+ok array (
+  0 => 'a',
+  1 => 'b,c',
+)
+Error: Unknown named parameter $string2
+ok array (
+  0 => 0,
+  1 => 2,
+)
+ok array (
+  0 => 'a',
+  1 => 'b',
+)
+ok 'OBJ'
+ok 3
+ok false
+ok true
+ok 'xxx'
+TypeError: str_repeat(): Argument #2 ($times) must be of type int, string given
+TypeError: str_repeat(): Argument #2 ($times) must be of type int, string given
+ok 'xx'
+ok 'x'
+TypeError: str_repeat(): Argument #1 ($string) must be of type string, array given
+ok 5
+ok 3
+ArgumentCountError: strlen() expects exactly 1 argument, 0 given
+ArgumentCountError: strlen() expects exactly 1 argument, 2 given
+ArgumentCountError: substr() expects at least 2 arguments, 1 given
+ArgumentCountError: substr() expects at most 3 arguments, 4 given
+TypeError: in_array(): Argument #2 ($haystack) must be of type array, string given
+TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, function "nope" not found or invalid function name
+TypeError: usort(): Argument #1 ($array) must be of type array, null given
+TypeError: implode(): Argument #2 ($array) must be of type ?array, string given
+ArgumentCountError: max() expects at least 1 argument, 0 given
+TypeError: count(): Argument #1 ($value) must be of type Countable|array, int given
+TypeError: round(): Argument #1 ($num) must be of type int|float, string given
+ok 2.0
+TypeError: abs(): Argument #1 ($num) must be of type int|float, string given
+ok 3
+ok '    a'
+ok 'a--'
+ok '[
+    1,
+    2
+]'
+Error: Unknown named parameter $str
+ok '&lt;a href=&#039;x&#039;&gt;&amp;&lt;/a&gt;'
+ok array (
+  1 => 2,
+  2 => 3,
+  3 => 4,
+)
+ok false
+ok array (
+  5 => 'v',
+  6 => 'v',
+)
+ok '1,234.57'
+ok array (
+  0 => 'a',
+  1 => 'b,c',
+)
+Error: Unknown named parameter $string2
+ok array (
+  0 => 0,
+  1 => 2,
+)
+ok array (
+  0 => 'a',
+  1 => 'b',
+)
+ok 'OBJ'
+ok 3
+ok false
+ok true

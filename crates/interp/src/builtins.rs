@@ -55,6 +55,15 @@ pub fn reserve(it: &Interp, bytes: usize) -> R<()> {
 
 /// Run a built-in, turning a Rust panic (a phpx bug) into a PHP `Error`
 /// instead of aborting the process. Unwinding must not cross generated code.
+/// Call built-in `name`: check the arguments against its PHP signature
+/// (when it has one), then run it guarded.
+pub fn invoke(it: &Interp, name: &str, spec: Option<&crate::arginfo::Spec>, fun: crate::interp::BuiltinFn, f: &mut crate::interp::Frame, args: &mut [Value]) -> R<Value> {
+    if let Some(s) = spec {
+        s.check(it, args)?;
+    }
+    guarded(it, name, || fun(it, f, args))
+}
+
 pub fn guarded(it: &Interp, name: &str, f: impl FnOnce() -> R<Value>) -> R<Value> {
     let saved = it.builtin_pos.replace(it.pos.get());
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));

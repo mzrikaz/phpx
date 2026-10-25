@@ -421,6 +421,9 @@ impl Native {
                     }
                 }
                 Body::Expr(e) => {
+                    // An arrow fn's body is one expression: diagnostics in
+                    // it point at its line.
+                    l.set_pos(e.span.start);
                     let v = l.expr(e)?;
                     // Arrow fn: its value is the return value.
                     l.store_result(v);
