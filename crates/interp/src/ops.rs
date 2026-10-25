@@ -38,7 +38,7 @@ impl Interp {
     pub fn to_key(&self, v: &Value) -> R<Key> {
         Ok(match v {
             Value::Int(n) => Key::Int(*n),
-            Value::Str(s) => Key::from_bytes(s),
+            Value::Str(s) => Key::from_pstr(s),
             Value::Bool(b) => Key::Int(*b as i64),
             Value::Null => Key::Str(crate::value::pbytes(b"")),
             Value::Float(f) => {

@@ -110,6 +110,16 @@ impl Key {
         }
     }
 
+    /// Like `from_bytes` for a string value: shares it instead of copying
+    /// (an array lookup with a string key then allocates nothing).
+    #[inline]
+    pub fn from_pstr(s: &PStr) -> Key {
+        match canonical_int(s) {
+            Some(n) => Key::Int(n),
+            None => Key::Str(s.clone()),
+        }
+    }
+
     pub fn to_value(&self) -> Value {
         match self {
             Key::Int(n) => Value::Int(*n),
@@ -119,7 +129,13 @@ impl Key {
 }
 
 /// "123" and "-5" yes; "0123", "-0", "1.0", " 1" no.
+#[inline]
 fn canonical_int(b: &[u8]) -> Option<i64> {
+    // Fast exit for the usual string key.
+    match b.first() {
+        Some(c) if c.is_ascii_digit() || *c == b'-' => {}
+        _ => return None,
+    }
     let digits = b.strip_prefix(b"-").unwrap_or(b);
     if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
         return None;

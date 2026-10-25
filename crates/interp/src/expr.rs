@@ -1760,7 +1760,7 @@ pub fn const_array(items: &[Option<ast::ArrayItem>]) -> Option<Value> {
             Some(k) => {
                 let key = match scalar(k)? {
                     Value::Int(n) => Key::Int(n),
-                    Value::Str(s) => Key::from_bytes(&s),
+                    Value::Str(s) => Key::from_pstr(&s),
                     Value::Bool(b) => Key::Int(b as i64),
                     Value::Null => Key::Str(crate::value::pstr("")),
                     _ => return None,

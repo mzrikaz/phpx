@@ -485,7 +485,7 @@ pub unsafe extern "C" fn rt_index_get(c: *mut Cx, base: *const Value, key: *cons
     if let Value::Array(a) = &*base {
         let found = match &*key {
             Value::Int(n) => a.get(&Key::Int(*n)),
-            Value::Str(s) => a.get(&Key::from_bytes(s)),
+            Value::Str(s) => a.get(&Key::from_pstr(s)),
             _ => None,
         };
         if let Some(v) = found {

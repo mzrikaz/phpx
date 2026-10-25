@@ -68,18 +68,26 @@ pub fn substr_range(len: usize, start: i64, length: Option<i64>) -> (usize, usiz
     (st as usize, end as usize)
 }
 
-fn find(h: &[u8], n: &[u8], from: usize) -> Option<usize> {
+pub(crate) fn find(h: &[u8], n: &[u8], from: usize) -> Option<usize> {
     if n.is_empty() {
         return (from <= h.len()).then_some(from);
     }
-    h.get(from..)?.windows(n.len()).position(|w| w == n).map(|p| p + from)
+    let rest = h.get(from..)?;
+    let p = match n {
+        [c] => memchr::memchr(*c, rest),
+        _ => memchr::memmem::find(rest, n),
+    };
+    p.map(|p| p + from)
 }
 
-fn rfind(h: &[u8], n: &[u8]) -> Option<usize> {
+pub(crate) fn rfind(h: &[u8], n: &[u8]) -> Option<usize> {
     if n.is_empty() {
         return Some(h.len());
     }
-    h.windows(n.len()).rposition(|w| w == n)
+    match n {
+        [c] => memchr::memrchr(*c, h),
+        _ => memchr::memmem::rfind(h, n),
+    }
 }
 
 fn replace_all(subject: &[u8], search: &[u8], rep: &[u8], ci: bool) -> (Vec<u8>, i64) {
@@ -722,11 +730,15 @@ fn is_entity(s: &[u8]) -> bool {
 }
 
 fn strpos_impl(it: &Interp, a: &[Value], ci: bool) -> R<Value> {
-    let (mut h, mut n) = (s(it, a, 0)?.to_vec(), s(it, a, 1)?.to_vec());
-    if ci {
-        h.make_ascii_lowercase();
-        n.make_ascii_lowercase();
-    }
+    let (h, n) = (s(it, a, 0)?, s(it, a, 1)?);
+    // Case-insensitive: compare lowercased copies (strpos borrows).
+    let lowered;
+    let (h, n): (&[u8], &[u8]) = if ci {
+        lowered = (h.to_ascii_lowercase(), n.to_ascii_lowercase());
+        (&lowered.0, &lowered.1)
+    } else {
+        (&h, &n)
+    };
     let off = if has(a, 2) { int(it, a, 2)? } else { 0 };
     let start = if off < 0 { h.len() as i64 + off } else { off };
     if start < 0 || start > h.len() as i64 {
