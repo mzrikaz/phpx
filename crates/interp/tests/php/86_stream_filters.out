@@ -1,0 +1,27 @@
+string(13) "stream filter"
+string(12) "HELLO WORLD
+"
+string(12) "SECOND LINE
+"
+bool(true)
+string(12) "Hello World
+"
+string(8) "bm9wcXJz"
+string(8) "YWJjZGU="
+string(5) "URYYB"
+string(6) "nested"
+string(10) "mixed case"
+bool(true)
+bool(true)
+bool(true)
+string(11) "gzip framed"
+string(8) "1f8b0800"
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+create my.upper
+close
+string(31) "ONE |TWO|[end:my.upper:{"x":1}]"
+bool(false)
+string(9) "Wikipedia"

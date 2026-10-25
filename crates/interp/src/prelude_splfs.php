@@ -105,6 +105,34 @@ class SplFileInfo implements Stringable
     public function __toString(): string { return $this->getPathname(); }
 }
 
+class php_user_filter
+{
+    public string $filtername = "";
+    public mixed $params = "";
+    public $stream = null;
+
+    public function filter($in, $out, &$consumed, bool $closing): int
+    {
+        return PSFS_ERR_FATAL;
+    }
+
+    public function onCreate(): bool
+    {
+        return true;
+    }
+
+    public function onClose(): void
+    {
+    }
+}
+
+final class StreamBucket
+{
+    public $bucket;
+    public string $data;
+    public int $datalen;
+}
+
 final class Directory
 {
     public readonly string $path;

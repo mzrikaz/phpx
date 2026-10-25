@@ -16,6 +16,7 @@ mod strings_more;
 mod misc_more;
 mod sysinfo;
 mod wrappers;
+mod filters;
 mod iconv_conv;
 mod builtins;
 mod callback;

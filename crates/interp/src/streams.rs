@@ -87,6 +87,11 @@ pub struct Stream {
     append: bool,
     /// A user stream's stream_eof() said so.
     user_eof: bool,
+    /// Read and write filter chains, and the filtered read-ahead.
+    rfilters: Vec<crate::filters::FilterRef>,
+    wfilters: Vec<crate::filters::FilterRef>,
+    fbuf: ReadBuf,
+    fdone: bool,
 }
 
 pub struct Dir {
@@ -106,6 +111,7 @@ fn path_arg(it: &Interp, a: &[Value], i: usize) -> R<String> {
 /// Run `g` on an open stream resource; TypeError for anything else.
 /// fclose(): a user stream's stream_flush/stream_close run first.
 pub(crate) fn close_stream(it: &Interp, v: &Value) {
+    let _ = with_stream(it, v, "fclose", |st| st.close_filters(it));
     if let Ok(Some(o)) = user_obj(it, v, "fclose") {
         crate::wrappers::method(it, &o, "stream_flush", vec![]);
         crate::wrappers::method(it, &o, "stream_close", vec![]);
@@ -141,7 +147,7 @@ pub(crate) fn with_stream<T>(it: &Interp, v: &Value, fname: &str, g: impl FnOnce
 
 impl Stream {
     pub(crate) fn new(backend: Backend, mode: &str, uri: &str, wrapper: &'static str) -> Stream {
-        Stream { backend, pos: 0, rbuf: ReadBuf::default(), eof: false, timeout: None, timed_out: false, blocking: true, context: None, mode: mode.to_string(), uri: uri.to_string(), wrapper, append: mode.starts_with('a'), user_eof: false }
+        Stream { backend, pos: 0, rbuf: ReadBuf::default(), eof: false, timeout: None, timed_out: false, blocking: true, context: None, mode: mode.to_string(), uri: uri.to_string(), wrapper, append: mode.starts_with('a'), user_eof: false, rfilters: vec![], wfilters: vec![], fbuf: ReadBuf::default(), fdone: false }
     }
 
     fn fill(&mut self, want: usize) -> usize {
@@ -173,6 +179,67 @@ impl Stream {
     }
 
     pub(crate) fn read(&mut self, n: usize, it: &Interp) -> Vec<u8> {
+        if self.rfilters.is_empty() {
+            return self.read_raw(n, it);
+        }
+        while self.fbuf.len() < n && !self.fdone {
+            let raw = self.read_raw(8192, it);
+            let closing = raw.is_empty();
+            let chain = self.rfilters.clone();
+            let out = crate::filters::apply(it, &chain, raw, closing);
+            self.fbuf.extend_from_slice(&out);
+            self.fdone = closing;
+        }
+        let out = self.fbuf.take(n);
+        self.eof = self.fdone && self.fbuf.is_empty();
+        out
+    }
+
+    /// Whether the stream was opened for reading / writing.
+    pub(crate) fn rw(&self) -> (bool, bool) {
+        let m = self.mode.as_str();
+        (m.contains('r') || m.contains('+'), !m.starts_with('r') || m.contains('+'))
+    }
+
+    pub(crate) fn add_filter(&mut self, f: crate::filters::FilterRef, read: bool, prepend: bool) {
+        let chain = if read { &mut self.rfilters } else { &mut self.wfilters };
+        if prepend {
+            chain.insert(0, f);
+        } else {
+            chain.push(f);
+        }
+    }
+
+    /// Detach a filter; a write filter flushes what it holds first.
+    pub(crate) fn remove_filter(&mut self, f: &crate::filters::FilterRef, it: &Interp) {
+        if let Some(i) = self.wfilters.iter().position(|x| std::rc::Rc::ptr_eq(x, f)) {
+            let rest: Vec<_> = self.wfilters[i..].to_vec();
+            let tail = crate::filters::apply(it, &rest, vec![], true);
+            self.wfilters.remove(i);
+            let after: Vec<_> = self.wfilters[i..].to_vec();
+            let tail = crate::filters::apply(it, &after, tail, false);
+            if !tail.is_empty() {
+                self.write_raw(&tail, it);
+            }
+        }
+        self.rfilters.retain(|x| !std::rc::Rc::ptr_eq(x, f));
+    }
+
+    /// fclose(): flush write filters and run user filters' onClose().
+    pub(crate) fn close_filters(&mut self, it: &Interp) {
+        if !self.wfilters.is_empty() {
+            let chain = self.wfilters.clone();
+            let tail = crate::filters::apply(it, &chain, vec![], true);
+            if !tail.is_empty() {
+                self.write_raw(&tail, it);
+            }
+        }
+        for f in self.rfilters.drain(..).chain(self.wfilters.drain(..)) {
+            crate::filters::closed(it, &f);
+        }
+    }
+
+    fn read_raw(&mut self, n: usize, it: &Interp) -> Vec<u8> {
         let out = match &mut self.backend {
             Backend::Memory(m) => {
                 let end = (self.pos + n).min(m.len());
@@ -227,6 +294,24 @@ impl Stream {
 
     fn read_line(&mut self, max: Option<usize>, it: &Interp) -> Option<Vec<u8>> {
         let mut out = vec![];
+        if !self.rfilters.is_empty() {
+            loop {
+                if max.is_some_and(|m| out.len() >= m) {
+                    break;
+                }
+                let b = self.read(1, it);
+                match b.first() {
+                    None => break,
+                    Some(&c) => {
+                        out.push(c);
+                        if c == b'\n' {
+                            break;
+                        }
+                    }
+                }
+            }
+            return (!out.is_empty()).then_some(out);
+        }
         if let Backend::User(_) = self.backend {
             loop {
                 let room = max.map_or(usize::MAX, |m| m.saturating_sub(out.len()));
@@ -314,6 +399,18 @@ impl Stream {
     }
 
     pub(crate) fn write(&mut self, data: &[u8], it: &Interp) -> usize {
+        if self.wfilters.is_empty() {
+            return self.write_raw(data, it);
+        }
+        let chain = self.wfilters.clone();
+        let out = crate::filters::apply(it, &chain, data.to_vec(), false);
+        if !out.is_empty() {
+            self.write_raw(&out, it);
+        }
+        data.len()
+    }
+
+    fn write_raw(&mut self, data: &[u8], it: &Interp) -> usize {
         match &mut self.backend {
             Backend::Memory(m) => {
                 if self.append {
@@ -411,6 +508,9 @@ impl Stream {
     }
 
     fn at_eof(&mut self) -> bool {
+        if !self.rfilters.is_empty() {
+            return self.fdone && self.fbuf.is_empty();
+        }
         match &self.backend {
             Backend::Memory(m) => self.eof || self.pos >= m.len() && self.eof,
             _ => self.eof,
@@ -430,6 +530,9 @@ impl Stream {
 pub fn open(it: &Interp, path: &str, mode: &str) -> Result<Value, String> {
     let m = mode.replace(['b', 't'], "");
     let lower = path.to_ascii_lowercase();
+    if lower.starts_with("php://filter/") {
+        return filter_url(it, path, mode);
+    }
     if let Some(rest) = lower.strip_prefix("php://") {
         let backend = match rest {
             "stdin" => Backend::Stdin,
@@ -486,6 +589,47 @@ pub fn open(it: &Interp, path: &str, mode: &str) -> Result<Value, String> {
         }
         Err(e) => Err(format!("fopen({path}): Failed to open stream: {}", io_msg(&e))),
     }
+}
+
+/// php://filter/read=a|b/write=c/resource=<url>
+fn filter_url(it: &Interp, path: &str, mode: &str) -> Result<Value, String> {
+    let spec = &path["php://filter/".len()..];
+    let Some(at) = spec.find("resource=") else {
+        return Err("fopen(): No URL resource specified".into());
+    };
+    let resource = &spec[at + 9..];
+    let (mut read, mut write) = (vec![], vec![]);
+    for part in spec[..at].split('/').filter(|p| !p.is_empty()) {
+        let (which, names) = match part.split_once('=') {
+            Some(("read", n)) => (1, n),
+            Some(("write", n)) => (2, n),
+            Some((_, n)) => (3, n),
+            None => (3, part),
+        };
+        for n in names.split('|').filter(|n| !n.is_empty()) {
+            let n = String::from_utf8_lossy(&crate::server::percent_decode_bytes(n)).into_owned();
+            if which & 1 != 0 {
+                read.push(n.clone());
+            }
+            if which & 2 != 0 {
+                write.push(n);
+            }
+        }
+    }
+    let res = open(it, resource, mode)?;
+    for (names, is_read) in [(read, true), (write, false)] {
+        for n in names {
+            match crate::filters::create(it, &n, &Value::Null, &res) {
+                Ok(Some(f)) => {
+                    let f = std::rc::Rc::new(std::cell::RefCell::new(f));
+                    let _ = with_stream(it, &res, "fopen", |st| st.add_filter(f, is_read, false));
+                }
+                Ok(None) => it.warn(&format!("fopen(): Unable to create filter ({n})")),
+                Err(e) => crate::errors::defer(e),
+            }
+        }
+    }
+    Ok(res)
 }
 
 pub fn io_msg(e: &std::io::Error) -> &'static str {
