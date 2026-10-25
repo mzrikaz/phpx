@@ -97,6 +97,16 @@ pub fn method_params(m: &Method) -> Option<&'static [ast::Param]> {
     }
 }
 
+/// __call/__callStatic's `$arguments`: the positional ones, then named
+/// ones under their names.
+fn magic_args(pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> Value {
+    let mut a = PhpArray::from_list(pos);
+    for (k, v) in named {
+        a.insert(crate::value::Key::Str(crate::value::pstr(&k)), v);
+    }
+    Value::array(a)
+}
+
 fn is_ref_target(e: &ast::Expr) -> bool {
     matches!(e.kind, ast::ExprKind::Var(_) | ast::ExprKind::Index { .. } | ast::ExprKind::Prop { .. } | ast::ExprKind::StaticProp { .. })
 }
@@ -1233,12 +1243,12 @@ impl Interp {
         match o.class.find_method_from(&lname, f.class.as_deref()).cloned() {
             Some(m) => {
                 if self.check_method_visible(f, &o.class, &m).is_err() && o.class.find_method("__call").is_some() {
-                    return self.magic_call(o, name, pos);
+                    return self.magic_call(o, name, pos, named);
                 }
                 self.check_method_visible(f, &o.class, &m)?;
                 self.invoke_method(Some(o.clone()), &m, o.class.clone(), pos, named)
             }
-            None if o.class.find_method("__call").is_some() => self.magic_call(o, name, pos),
+            None if o.class.find_method("__call").is_some() => self.magic_call(o, name, pos, named),
             None => {
                 // `$obj->prop(...)` where prop holds a closure is NOT a method call in PHP.
                 Err(self.error("Error", &format!("Call to undefined method {}::{name}()", o.class.name)))
@@ -1246,9 +1256,9 @@ impl Interp {
         }
     }
 
-    fn magic_call(&self, o: &Rc<Obj>, name: &str, pos: Vec<Value>) -> R<Value> {
+    fn magic_call(&self, o: &Rc<Obj>, name: &str, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
         let m = o.class.find_method("__call").cloned().unwrap();
-        let args = vec![Value::str(name), Value::array(PhpArray::from_list(pos))];
+        let args = vec![Value::str(name), magic_args(pos, named)];
         self.invoke_method(Some(o.clone()), &m, o.class.clone(), args, vec![])
     }
 
@@ -1256,7 +1266,7 @@ impl Interp {
     pub fn call_method(&self, o: &Rc<Obj>, name: &str, args: Vec<Value>) -> R<Value> {
         match o.class.find_method(&name.to_ascii_lowercase()).cloned() {
             Some(m) => self.invoke_method(Some(o.clone()), &m, o.class.clone(), args, vec![]),
-            None if o.class.find_method("__call").is_some() => self.magic_call(o, name, args),
+            None if o.class.find_method("__call").is_some() => self.magic_call(o, name, args, vec![]),
             None => Err(self.error("Error", &format!("Call to undefined method {}::{name}()", o.class.name))),
         }
     }
@@ -1297,10 +1307,10 @@ impl Interp {
             }
             None => {
                 if let (Some(this), Some(_)) = (&this_fits, cls.find_method("__call")) {
-                    return self.magic_call(this, name, pos);
+                    return self.magic_call(this, name, pos, named);
                 }
                 if let Some(m) = cls.find_method("__callstatic").cloned() {
-                    let args = vec![Value::str(name), Value::array(PhpArray::from_list(pos))];
+                    let args = vec![Value::str(name), magic_args(pos, named)];
                     let sc = if forwarding { f.static_class.clone().unwrap_or(cls.clone()) } else { cls.clone() };
                     return self.invoke_method(None, &m, sc, args, vec![]);
                 }

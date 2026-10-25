@@ -1,0 +1,30 @@
+array(1) {
+  ["withCore"]=>
+  bool(true)
+}
+NULL
+bool(true)
+array(1) {
+  ["withCore"]=>
+  bool(true)
+}
+NULL
+bool(true)
+array(2) {
+  [0]=>
+  array(1) {
+    [0]=>
+    string(1) "x"
+  }
+  ["withCore"]=>
+  bool(true)
+}
+array(1) {
+  [0]=>
+  string(1) "x"
+}
+bool(true)
+NULL
+bool(true)
+NULL
+bool(true)
