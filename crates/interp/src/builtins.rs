@@ -99,6 +99,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::ext::register(&mut t);
     crate::misc::register(&mut t);
     crate::ini::register(&mut t);
+    crate::date::register(&mut t);
     t
 }
 

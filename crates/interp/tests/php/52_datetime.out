@@ -1,0 +1,124 @@
+now                                2024-01-15 10:30:45
+today                              2024-01-15 00:00:00
+tomorrow                           2024-01-16 00:00:00
+yesterday                          2024-01-14 00:00:00
+midnight                           2024-01-15 00:00:00
+noon                               2024-01-15 12:00:00
++1 day                             2024-01-16 10:30:45
+-2 days                            2024-01-13 10:30:45
++1 week 2 days                     2024-01-24 10:30:45
+1 month ago                        2023-12-15 10:30:45
++1 month                           2024-02-15 10:30:45
+next monday                        2024-01-22 00:00:00
+last friday                        2024-01-12 00:00:00
+monday                             2024-01-15 00:00:00
+sunday                             2024-01-21 00:00:00
+next month                         2024-02-15 10:30:45
+last year                          2023-01-15 10:30:45
+first day of next month            2024-02-01 10:30:45
+last day of this month             2024-01-31 10:30:45
+first day of january 2025          2025-01-01 00:00:00
+last day of feb                    2024-02-29 00:00:00
+first monday of next month         2024-02-05 00:00:00
+last friday of january 2024        2024-01-26 00:00:00
+2024-03-10                         2024-03-10 00:00:00
+2024-03-10 14:15                   2024-03-10 14:15:00
+2024-03-10T14:15:16Z               2024-03-10 14:15:16
+2024-03-10T14:15:16+05:30          2024-03-10 08:45:16
+2024-03-10 14:15:16.250000         2024-03-10 14:15:16
+10 September 2000                  2000-09-10 00:00:00
+September 10, 2000                 2000-09-10 00:00:00
+Sep 10 2000                        2000-09-10 00:00:00
+15-Jan-2024                        2024-01-15 00:00:00
+01/02/2024                         2024-01-02 00:00:00
+02.01.2024                         2024-01-02 00:00:00
+20240102                           2024-01-02 00:00:00
+@86400                             1970-01-02 00:00:00
+10am                               2024-01-15 10:00:00
+3:30pm                             2024-01-15 15:30:00
+tomorrow 9:00                      2024-01-16 09:00:00
+noon tomorrow                      2024-01-16 00:00:00
+2024-01-31 +1 month                2024-03-02 00:00:00
+Sat, 01 Jan 2022 10:00:00 +0000    2022-01-01 10:00:00
+2024-W03-2                         2024-01-16 00:00:00
++3 weekdays                        2024-01-18 10:30:45
+next week                          2024-01-22 10:30:45
+this week                          2024-01-15 10:30:45
+1 year 2 months ago                2022-11-15 10:30:45
+January                            2024-01-15 00:00:00
+jan 2023                           2023-01-01 00:00:00
+2024-02                            2024-02-01 00:00:00
+1530                               2024-01-15 15:30:00
+garbage                            false
+                                   false
+Europe/Paris                       2024-01-15 09:30:45
+2024-01-01 Europe/Paris            2023-12-31 23:00:00
+2024-06-01 12:00 EST               2024-06-01 17:00:00
+2024-01-15 10:30:45.123456 CET +01:00 +0100 Europe/Paris 0 1705311045 1 15th January Monday Mon 14 31 1 2024 03 10 10 AM am 123 438 2024-01-15T10:30:45+01:00 Mon, 15 Jan 2024 10:30:45 +0100
+2024-01-15T10:30:45+01:00 Mon, 15 Jan 2024 10:30:45 +0100 Monday, 15-Jan-2024 10:30:45 CET
+2024-03-30T12:00:00+00:00 2024-03-31T12:00:00+01:00 BST
+2024-05-02T15:00:00+01:00 2024-03-30T10:30:00+00:00
++ 1 y 0 m 29 d 22 h 15 i 30 s, 395 days 395 0
+-395 01-01-01 22:15:30
+bool(true)
+bool(true)
+string(4) "2025"
+2023-08-15T14:30:00+00:00
+2023-08-15T00:00:00+00:00 000000
+2023-08-15T01:02:03+02:00 456789 +02:00
+bool(false)
+2020-03-02T02:02:01+00:00
+2020-03-01T21:02:01-05:00 EST -18000 America/New_York
+1969-12-31T19:00:00-05:00 0
+2024-01-01 Monday
+2023-11-14T22:13:20+00:00 +00:00
+{"date":"2020-01-01 00:00:00.000000","timezone_type":3,"timezone":"UTC"}
+O:17:"DateTimeImmutable":3:{s:4:"date";s:26:"2021-02-03 04:05:06.000000";s:13:"timezone_type";i:3;s:8:"timezone";s:10:"Asia/Tokyo";}
+2021-02-03T04:05:06+09:00
+1-2-10 2:30:0 (unknown)
+DateInterval Object
+(
+    [y] => 1
+    [m] => 2
+    [d] => 10
+    [h] => 2
+    [i] => 30
+    [s] => 0
+    [f] => 0
+    [invert] => 0
+    [days] => 
+    [from_string] => 
+)
+01/01 01/08 01/15 01/22 01/29 
+Mon Tue Wed Thu 
+DateMalformedStringException: Failed to parse time string (not a date) at position 0 (n): The timezone could not be found in the database
+DateInvalidTimeZoneException: DateTimeZone::__construct(): Unknown or bad timezone (Mars/Base)
+DateMalformedIntervalStringException: Unknown or bad format (X)
+Thu, 01 Jan 1970 01:00 1709251200 43200
+America/Los_Angeles 2024-01-15 02:30 PST 1704096000
+2024 45,30,2,15,1,1,2024,14,Monday,January,1705314645
+bool(false)
+bool(false)
+2024-03-10T03:30:00-07:00 PDT
+2024-03-10T03:30:00-07:00 PDT 2024-11-03T01:30:00-07:00 PDT
+DateTimeZone Object
+(
+    [timezone_type] => 1
+    [timezone] => +05:30
+)
+DateTimeZone Object
+(
+    [timezone_type] => 2
+    [timezone] => EST
+)
+DateTime Object
+(
+    [date] => 2020-02-02 00:00:00.000000
+    [timezone_type] => 3
+    [timezone] => UTC
+)
+\DateTimeImmutable::__set_state(array(
+   'date' => '2020-02-02 10:00:00.000000',
+   'timezone_type' => 1,
+   'timezone' => '+01:00',
+))

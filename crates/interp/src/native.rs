@@ -38,6 +38,9 @@ pub fn table() -> HashMap<(&'static str, &'static str), NativeMethod> {
     for (name, f) in crate::generator::natives() {
         t.insert(("generator", name), f);
     }
+    for (class, name, f) in crate::date::natives() {
+        t.insert((class, name), f);
+    }
     t.insert(("concurrency", "static run"), concurrency_run);
     t.insert(("concurrency", "static defer"), concurrency_defer);
     t

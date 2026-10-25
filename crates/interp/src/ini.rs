@@ -363,16 +363,6 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
         Ok(Value::Int(old))
     });
-    t.insert("date_default_timezone_get", |it, _, _| Ok(Value::str(&it.ini_get("date.timezone").filter(|t| !t.is_empty()).unwrap_or_else(|| "UTC".into()))));
-    t.insert("date_default_timezone_set", |it, _, a| {
-        let tz = bstr(it, a, 0)?;
-        if !crate::ini::valid_timezone(&tz) {
-            it.notice(&format!("date_default_timezone_set(): Timezone ID '{tz}' is invalid"));
-            return Ok(Value::Bool(false));
-        }
-        it.ini.borrow_mut().set("date.timezone", &tz);
-        Ok(Value::Bool(true))
-    });
     t.insert("memory_get_usage", |_, _, _| Ok(Value::Int(crate::alloc::used() as i64)));
     t.insert("memory_get_peak_usage", |_, _, _| Ok(Value::Int(crate::alloc::peak() as i64)));
     t.insert("memory_reset_peak_usage", |_, _, _| Ok(Value::Null));
@@ -389,7 +379,3 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
 }
 
-/// Timezone names accepted until the DateTime layer has a full tz database.
-pub fn valid_timezone(tz: &str) -> bool {
-    tz == "UTC" || tz == "GMT" || std::path::Path::new("/usr/share/zoneinfo").join(tz).is_file() || tz.contains('/')
-}

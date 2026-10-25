@@ -26,3 +26,5 @@ flate2 = "1"
 bcrypt = "0.15"
 libc = "0.2"
 memchr = "2"
+chrono-tz = "0.10"
+chrono = { version = "0.4", default-features = false }

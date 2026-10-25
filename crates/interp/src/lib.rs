@@ -28,6 +28,7 @@ mod ops;
 mod preg;
 mod props;
 mod pstr;
+mod date;
 mod reflect;
 mod sockets;
 mod streams;
