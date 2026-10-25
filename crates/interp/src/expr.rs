@@ -1303,8 +1303,26 @@ impl Interp {
                 let p = self.place(f, e)?;
                 self.place_ref(&p)
             }
+            ExprKind::Call { .. } | ExprKind::MethodCall { .. } | ExprKind::StaticCall { .. } => {
+                // `$a = &f()`: a `function &f()` hands back its cell; any
+                // other result notices and binds to a copy.
+                let site = match &e.kind {
+                    ExprKind::Call { callee, .. } => Some(callee.span.start),
+                    ExprKind::MethodCall { name: MemberName::Ident(i), .. } | ExprKind::StaticCall { name: MemberName::Ident(i), .. } => Some(i.span.start),
+                    _ => None,
+                };
+                let prev = self.want_ref.replace(site);
+                let r = self.eval(f, e);
+                self.want_ref.set(prev);
+                match r? {
+                    Value::Ref(cell) => Ok(cell),
+                    v => {
+                        self.notice("Only variables should be assigned by reference");
+                        Ok(slot(v))
+                    }
+                }
+            }
             _ => {
-                // `$a = &f()`: PHP notices and binds to a copy.
                 let v = self.eval(f, e)?;
                 Ok(slot(v))
             }
@@ -1373,8 +1391,17 @@ impl Interp {
                 if rest.is_empty() { Ok(cell_of(slot)) } else { self.ref_path(slot, rest) }
             }
             Value::Object(o) if o.class.is_a("arrayaccess") => {
-                self.warn(&format!("Indirect modification of overloaded element of {} has no effect", o.class.name));
-                Ok(slot(Value::Null))
+                let key = first.as_ref().map(Off::to_value).unwrap_or(Value::Null);
+                let o = o.clone();
+                match self.call_method_ref(&o, "offsetGet", vec![key])? {
+                    Value::Ref(cell) if rest.is_empty() => Ok(cell),
+                    Value::Ref(cell) => self.ref_path(&mut cell.borrow_mut(), rest),
+                    mut v @ Value::Object(_) if !rest.is_empty() => self.ref_path(&mut v, rest),
+                    _ => {
+                        self.notice(&format!("Indirect modification of overloaded element of {} has no effect", o.class.name));
+                        Ok(slot(Value::Null))
+                    }
+                }
             }
             _ => Err(self.error("Error", "Cannot create references to elements of a non-array")),
         }
@@ -1447,7 +1474,35 @@ impl Interp {
             self.call_method(&o, "offsetSet", vec![key, p.value])?;
             return Ok(());
         }
-        match self.call_method(&o, "offsetGet", vec![key])? {
+        // ArrayObject and ArrayIterator hand out their elements by
+        // reference: write the nested change back through offsetSet.
+        let by_ref = o.class.find_method("offsetget").is_some_and(|m| matches!(&*m.declaring, "arrayobject" | "arrayiterator"));
+        if by_ref {
+            let mut cur = if p.path[0].is_none() {
+                Value::Null
+            } else if self.call_method(&o, "offsetExists", vec![key.clone()])?.truthy() {
+                self.call_method(&o, "offsetGet", vec![key.clone()])?
+            } else {
+                Value::Null
+            };
+            if let Some(next) = self.write_path(&mut cur, &p.path[1..], p.value)? {
+                self.finish_pending(next)?;
+            }
+            if !matches!(cur, Value::Object(_)) {
+                self.call_method(&o, "offsetSet", vec![key, cur])?;
+            }
+            return Ok(());
+        }
+        match self.call_method_ref(&o, "offsetGet", vec![key])? {
+            Value::Ref(cell) => {
+                let mut cur = std::mem::take(&mut *cell.borrow_mut());
+                let r = self.write_path(&mut cur, &p.path[1..], p.value);
+                *cell.borrow_mut() = cur;
+                if let Some(next) = r? {
+                    self.finish_pending(next)?;
+                }
+                Ok(())
+            }
             Value::Object(inner) => {
                 let mut tmp = Value::Object(inner);
                 if let Some(next) = self.write_path(&mut tmp, &p.path[1..], p.value)? {
@@ -1456,7 +1511,7 @@ impl Interp {
                 Ok(())
             }
             _ => {
-                self.warn(&format!("Indirect modification of overloaded element of {} has no effect", o.class.name));
+                self.notice(&format!("Indirect modification of overloaded element of {} has no effect", o.class.name));
                 Ok(())
             }
         }

@@ -14,6 +14,9 @@ use crate::class::{Class, StaticProp};
 use crate::value::{Lower, Obj, Value};
 
 /// Non-local exits that unwind through Rust frames.
+/// `Interp::want_ref` for whichever call comes next.
+pub const WANT_REF_ANY: u32 = u32::MAX;
+
 #[derive(Clone)]
 pub enum Ctrl {
     Throw(Rc<Obj>),
@@ -348,6 +351,13 @@ pub struct Interp {
     pub file_strict: RefCell<Vec<bool>>,
     /// Exception raised inside native code, handed back with status 1.
     pub pending: RefCell<Option<Ctrl>>,
+    /// Set by a caller that binds a call's result by reference: the call
+    /// site's offset (`$x = &f()`; not calls nested in its arguments), or
+    /// `WANT_REF_ANY` for the next call (ArrayAccess writes). Taken by the
+    /// callee's entry.
+    pub want_ref: Cell<Option<u32>>,
+    /// Depth of the frame whose `return` yields a reference (usize::MAX: none).
+    pub ref_return_depth: Cell<usize>,
     /// See `file_ctx`.
     pub file_ctxs: RefCell<Vec<Option<Rc<NsCtx>>>>,
     /// Native compiler for whole functions (None when disabled).
@@ -407,6 +417,8 @@ impl Interp {
                 })
             }),
             pending: RefCell::new(None),
+            want_ref: Cell::new(None),
+            ref_return_depth: Cell::new(usize::MAX),
             file_ctxs: RefCell::new(vec![]),
             native: RefCell::new(crate::compiler::Native::from_env()),
             decl_ctx: RefCell::new(FxHashMap::default()),
@@ -526,6 +538,16 @@ impl Interp {
         let _ = w.write_all(&base);
         let _ = w.write_all(data);
         let _ = w.flush();
+    }
+
+    /// `return e;`: the value, or e's cell when this frame was called for a
+    /// reference (`Interp::want_ref`).
+    #[inline]
+    fn return_value(&self, f: &mut Frame, e: &'static ast::Expr) -> R<Value> {
+        if self.ref_return_depth.get() == f.depth && matches!(e.kind, ast::ExprKind::Var(_) | ast::ExprKind::Index { .. } | ast::ExprKind::Prop { .. } | ast::ExprKind::StaticProp { .. }) {
+            return Ok(Value::Ref(self.make_ref(f, e)?));
+        }
+        self.eval(f, e)
     }
 
     pub fn warn(&self, msg: &str) {
@@ -831,7 +853,7 @@ impl Interp {
                 self.eval(f, e)?;
                 Ok(Flow::Normal)
             }
-            StmtKind::Return(Some(e)) => Ok(Flow::Return(self.eval(f, e)?)),
+            StmtKind::Return(Some(e)) => Ok(Flow::Return(self.return_value(f, e)?)),
             StmtKind::If { cond, then, elseifs, else_ } if elseifs.is_empty() => {
                 if self.eval(f, cond)?.truthy() {
                     self.exec_block(f, then)
@@ -1034,7 +1056,7 @@ impl Interp {
             StmtKind::Continue(lvl) => return Ok(Flow::Continue(self.level(f, lvl)?)),
             StmtKind::Return(e) => {
                 let v = match e {
-                    Some(e) => self.eval(f, e)?,
+                    Some(e) => self.return_value(f, e)?,
                     None => Value::Null,
                 };
                 return Ok(Flow::Return(v));

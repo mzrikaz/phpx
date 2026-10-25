@@ -71,6 +71,8 @@ struct Invoke<'a> {
     fn_id: usize,
     captured: &'a [(&'static str, Value, bool)],
     is_generator: bool,
+    /// `function &f()`: may hand back a reference (see `Interp::want_ref`).
+    by_ref: bool,
 }
 
 /// Parameters of user code, so arguments for `&$x` params can be passed by
@@ -717,7 +719,7 @@ impl Interp {
     pub fn call_callable(&self, c: &Callable, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
         match c {
             Callable::User(u) => {
-                if named.is_empty() {
+                if named.is_empty() && self.want_ref.get().is_none() {
                     if let Some(v) = self.try_jit(u, &pos) {
                         return Ok(v);
                     }
@@ -736,6 +738,7 @@ impl Interp {
                     fn_id: u.decl as *const _ as usize,
                     captured: &[],
                     is_generator: u.decl.is_generator,
+                    by_ref: u.decl.by_ref,
                 },
                 pos,
                 named,
@@ -812,6 +815,7 @@ impl Interp {
                 fn_id,
                 captured: &cd.captured,
                 is_generator,
+                by_ref: false,
             },
             pos,
             named,
@@ -892,6 +896,7 @@ impl Interp {
                         fn_id: *func as *const _ as usize,
                         captured: &[],
                         is_generator: func.is_generator,
+                        by_ref: func.by_ref,
                     },
                     pos,
                     named,
@@ -908,9 +913,21 @@ impl Interp {
             return Err(self.stack_overflow());
         }
         let saved_pos = self.pos.get();
+        let ret_ref = inv.by_ref
+            && match self.want_ref.get() {
+                Some(crate::interp::WANT_REF_ANY) => true,
+                Some(off) => off == saved_pos.off,
+                None => false,
+            };
+        if ret_ref {
+            self.want_ref.set(None);
+        }
         let mut f = self.bind_args(&inv, pos, named, saved_pos)?;
         if inv.is_generator {
             return Ok(self.start_generator(f, inv.body, saved_pos));
+        }
+        if ret_ref {
+            return self.invoke_ref(&inv, f, saved_pos);
         }
         if let Some(r) = self.native_call(&inv, &mut f) {
             // (Compiled code checked the declared return type.)
@@ -932,6 +949,36 @@ impl Interp {
         };
         // Checked before leaving: a TypeError points at the `return`.
         let result = if inv.ret.is_none() { result } else { self.check_return(&inv, result)? };
+        self.pos.set(saved_pos);
+        Ok(result)
+    }
+
+    /// A `function &f()` call whose caller binds the result by reference:
+    /// interpreted, with `return $place;` handing back the place's cell.
+    #[inline(never)]
+    fn invoke_ref(&self, inv: &Invoke, mut f: Frame, saved_pos: crate::interp::Pos) -> R<Value> {
+        let _call = crate::trace::enter(self, &f, inv.params, saved_pos);
+        let prev = self.ref_return_depth.replace(f.depth);
+        let result = match inv.body {
+            Body::Block(stmts) => self.exec_block(&mut f, stmts).map(|flow| match flow {
+                Flow::Return(v) => v,
+                _ => Value::Null,
+            }),
+            Body::Expr(e) => self.eval(&mut f, e),
+        };
+        self.ref_return_depth.set(prev);
+        let result = match result? {
+            Value::Ref(cell) => {
+                if inv.ret.is_some() {
+                    let v = cell.borrow().clone();
+                    let checked = self.check_return(inv, v)?;
+                    *cell.borrow_mut() = checked;
+                }
+                Value::Ref(cell)
+            }
+            v if inv.ret.is_some() => self.check_return(inv, v)?,
+            v => v,
+        };
         self.pos.set(saved_pos);
         Ok(result)
     }
@@ -1212,6 +1259,15 @@ impl Interp {
             None if o.class.find_method("__call").is_some() => self.magic_call(o, name, args),
             None => Err(self.error("Error", &format!("Call to undefined method {}::{name}()", o.class.name))),
         }
+    }
+
+    /// call_method() for a caller that binds the result by reference: a
+    /// `function &name()` hands back `Value::Ref`, anything else a value.
+    pub fn call_method_ref(&self, o: &Rc<Obj>, name: &str, args: Vec<Value>) -> R<Value> {
+        let prev = self.want_ref.replace(Some(crate::interp::WANT_REF_ANY));
+        let r = self.call_method(o, name, args);
+        self.want_ref.set(prev);
+        r
     }
 
     pub fn static_call(

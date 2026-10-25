@@ -107,7 +107,18 @@ fn key(it: &Interp, a: &[Value]) -> R<Rc<Obj>> {
 fn map_get(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) -> R<Value> {
     let o = this.expect("WeakMap method");
     let k = key(it, &a)?;
-    match with_map(o, |m| m.find(&k).map(|i| m.0[i].1.clone())) {
+    // `$r = &$map[$k]` and `$map[$k][] = ...` share the element's cell.
+    let want_ref = it.want_ref.get() == Some(crate::interp::WANT_REF_ANY);
+    let found = with_map(o, |m| {
+        m.find(&k).map(|i| {
+            let v = &mut m.0[i].1;
+            if want_ref && !matches!(v, Value::Ref(_)) {
+                *v = Value::Ref(crate::interp::slot(std::mem::take(v)));
+            }
+            if want_ref { v.clone() } else { v.deref() }
+        })
+    });
+    match found {
         Some(v) => Ok(v),
         None => Err(it.error("Error", &format!("Object {}#{} not contained in WeakMap", k.class.name, k.id))),
     }
@@ -120,7 +131,10 @@ fn map_set(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) ->
     with_map(o, |m| {
         m.purge();
         match m.find(&k) {
-            Some(i) => m.0[i].1 = v,
+            Some(i) => match &m.0[i].1 {
+                Value::Ref(cell) => *cell.borrow_mut() = v,
+                _ => m.0[i].1 = v,
+            },
             None => m.0.push((Rc::downgrade(&k), v)),
         }
     });
@@ -130,7 +144,7 @@ fn map_set(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) ->
 fn map_exists(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) -> R<Value> {
     let o = this.expect("WeakMap method");
     let k = key(it, &a)?;
-    Ok(Value::Bool(with_map(o, |m| m.find(&k).is_some_and(|i| !m.0[i].1.is_null()))))
+    Ok(Value::Bool(with_map(o, |m| m.find(&k).is_some_and(|i| !m.0[i].1.deref().is_null()))))
 }
 
 fn map_unset(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) -> R<Value> {
@@ -167,7 +181,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let Some(Value::Object(o)) = a.first().map(Value::deref) else { return Ok(Value::array(PhpArray::new())) };
         let items = with_map(&o, |m| {
             m.purge();
-            m.0.iter().filter_map(|(k, v)| Some(Value::array(PhpArray::from_list([Value::Object(k.upgrade()?), v.clone()])))).collect::<Vec<_>>()
+            m.0.iter().filter_map(|(k, v)| Some(Value::array(PhpArray::from_list([Value::Object(k.upgrade()?), v.deref()])))).collect::<Vec<_>>()
         });
         Ok(Value::array(PhpArray::from_list(items)))
     });
