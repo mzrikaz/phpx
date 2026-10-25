@@ -1494,7 +1494,7 @@ impl<'a> Lower<'a> {
             }
             Call { callee, args } => {
                 let ExprKind::Name(n) = &callee.kind else { unreachable!() };
-                let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name: n, cached: Default::default(), builtin: Default::default(), bspec: Default::default(), jit: Default::default() });
+                let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name: n, cached: Default::default(), builtin: Default::default(), bspec: Default::default(), builtin_ref: Default::default(), jit: Default::default() });
                 let sp = &*site as *const CallSite as i64;
                 self.sites.push(site);
                 let (aa, la, n_) = self.args(args, ByRef::for_function(n))?;
@@ -1953,7 +1953,7 @@ impl<'a> Lower<'a> {
         self.b.ins().brif(shadowed, slow, &[], fast, &[]);
         // Generic call: also the fallback for the cases the fast code skips.
         let generic = |l: &mut Self| -> L<()> {
-            let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name, cached: Default::default(), builtin: Default::default(), bspec: Default::default(), jit: Default::default() });
+            let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name, cached: Default::default(), builtin: Default::default(), bspec: Default::default(), builtin_ref: Default::default(), jit: Default::default() });
             let sp = &*site as *const CallSite as i64;
             l.sites.push(site);
             let (aa, la, n_) = l.args(args, ByRef::None)?;
@@ -2004,7 +2004,7 @@ impl<'a> Lower<'a> {
                 // Other types: the real built-in (errors, Countable, ...)
                 // with the value already evaluated.
                 self.b.switch_to_block(no);
-                let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name, cached: Default::default(), builtin: Default::default(), bspec: Default::default(), jit: Default::default() });
+                let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name, cached: Default::default(), builtin: Default::default(), bspec: Default::default(), builtin_ref: Default::default(), jit: Default::default() });
                 let sp = &*site as *const CallSite as i64;
                 self.sites.push(site);
                 let (slot, ids) = self.alloc_array(1);

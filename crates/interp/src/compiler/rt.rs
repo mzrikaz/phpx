@@ -1064,6 +1064,9 @@ pub struct CallSite {
     /// with its PHP signature.
     pub builtin: std::cell::Cell<Option<crate::interp::BuiltinFn>>,
     pub bspec: std::cell::Cell<Option<&'static crate::arginfo::Spec>>,
+    /// Resolved built-in with by-reference parameters (preg_match, sort,
+    /// ...): the function and those parameters' positions.
+    pub builtin_ref: std::cell::Cell<Option<(crate::interp::BuiltinFn, &'static [usize])>>,
     /// The numeric JIT's entry for the argument types last seen here.
     pub jit: std::cell::Cell<Option<JitSite>>,
 }
@@ -1265,6 +1268,35 @@ pub unsafe extern "C" fn rt_call(
         }
         return status(it, r, |v| put(dst, v));
     }
+    if let Some((fun, refs)) = (*site).builtin_ref.get() {
+        // By-reference built-in: lend the variables' values, write them back.
+        let vals = std::slice::from_raw_parts_mut(args, n as usize);
+        for (i, v) in vals.iter_mut().enumerate() {
+            if refs.contains(&i) && !locals.is_null() {
+                let local = *locals.add(i);
+                if !local.is_null() {
+                    *v = take(local);
+                    mark_by_ref(locals, n as usize, i);
+                    continue;
+                }
+            }
+            if let Value::Ref(_) = v {
+                *v = std::mem::take(v).into_deref();
+            }
+        }
+        let r = crate::builtins::invoke(it, (*site).name, (*site).bspec.get(), fun, f, vals);
+        for (i, v) in vals.iter_mut().enumerate() {
+            if refs.contains(&i) && !locals.is_null() {
+                let local = *locals.add(i);
+                if !local.is_null() {
+                    put(local, std::mem::take(v));
+                    continue;
+                }
+            }
+            drop(std::mem::take(v));
+        }
+        return status(it, r, |v| put(dst, v));
+    }
     if let Some(st) = jit_site_call(&*site, args, n, dst) {
         return st;
     }
@@ -1297,6 +1329,8 @@ pub unsafe extern "C" fn rt_call(
             }
             let refs = crate::call::by_ref_params(bname);
             if !refs.is_empty() {
+                (*site).builtin_ref.set(Some((*fun, refs)));
+                (*site).bspec.set(crate::arginfo::spec(bname));
                 let mut vals = pos;
                 let n = vals.len();
                 let idxs: Vec<usize> = refs.iter().copied().filter(|i| *i < vals.len()).collect();
