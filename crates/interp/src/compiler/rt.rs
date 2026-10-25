@@ -1849,90 +1849,211 @@ pub unsafe extern "C" fn rt_new(
 /// scope and `static`) and its compiled constructor. None = not cached
 /// (nothing consumed); the general path resolves and reports errors.
 unsafe fn new_cached(it: &Interp, f: &mut Frame, cref: &'static ast::ClassRef, site: &MethodSite, args: *mut Value, n: u64, dst: *mut Value) -> Option<u64> {
-    let ptr_of = |c: Option<&Rc<crate::class::Class>>| c.map_or(ptr::null(), Rc::as_ptr);
-    let scope = ptr_of(f.class.as_ref());
-    let stc = ptr_of(f.static_class.as_ref());
-    let mc = match site.cached.get() {
-        Some(mc) if mc.scope == scope && mc.static_cls == stc => mc,
-        _ => {
-            // Only names the general path already resolved: resolving here
-            // must not autoload (a miss would then autoload twice).
-            let cls = match cref {
-                ast::ClassRef::Name(nm) if !matches!(&*nm.to_ascii_lowercase(), "self" | "parent" | "static") => {
-                    it.class_cache.borrow().get(&(nm.as_ptr() as usize)).cloned()?
-                }
-                _ => it.class_ref(f, cref).ok()?,
-            };
-            if cls.kind != ast::ClassKind::Class || cls.is_abstract || cls.is_a("throwable") {
-                return None;
-            }
-            let (entry, decl_class, method) = match &cls.ctor {
-                Some(ctor) => {
-                    if !it.member_visible(f.class.as_deref(), ctor.vis, &ctor.declaring) {
-                        return None;
-                    }
-                    let (entry, decl_class) = method_entry(it, ctor)?;
-                    (Some(entry), decl_class, Rc::as_ptr(ctor))
-                }
-                None if cls.plain_new => (None, None, ptr::null()),
-                None => return None,
-            };
-            let mc = MethodCache {
-                class: Rc::as_ptr(&cls),
-                scope,
-                // No constructor: a null entry.
-                entry: entry.unwrap_or(no_ctor),
-                method,
-                decl_class: decl_class.as_ref().map_or(ptr::null(), Rc::as_ptr),
-                sc: Rc::as_ptr(&cls),
-                static_cls: stc,
-                this_cls: ptr::null(),
-            };
-            site.cached.set(Some(mc));
-            site.frame.invalidate();
-            mc
+    let mc = match new_cache(it, f, cref, site) {
+        Ok(Some(mc)) => mc,
+        Ok(None) => return None,
+        Err(e) => {
+            // Arguments are dropped with the error.
+            drop(take_args(args, n));
+            return Some(status(it, Err::<(), _>(e), |_| ()));
         }
     };
-    let cls = rc_from(mc.class).unwrap();
-    if mc.method.is_null() {
-        if n != 0 {
-            return None;
-        }
-        return Some(status(it, it.new_instance(&cls), |o| put(dst, Value::Object(o))));
+    if mc.method.is_null() && n != 0 {
+        return None;
     }
-    let o = match it.new_instance(&cls) {
+    let o = match new_object(it, &mc) {
         Ok(o) => o,
         Err(e) => return Some(status(it, Err::<(), _>(e), |_| ())),
     };
+    if mc.method.is_null() {
+        put(dst, Value::Object(o));
+        return Some(0);
+    }
+    let mut out = Value::Null;
+    let st = run_ctor(it, site, &mc, &o, args, n, ptr::null(), &mut out);
+    if st == 0 {
+        put(dst, Value::Object(o));
+    }
+    Some(st)
+}
+
+/// The class (resolved for this calling scope and `static`) and compiled
+/// constructor `new` at this site uses, filling the cache on a miss. None:
+/// not cacheable (the general path resolves and reports errors).
+unsafe fn new_cache(it: &Interp, f: &Frame, cref: &'static ast::ClassRef, site: &MethodSite) -> R<Option<MethodCache>> {
+    let ptr_of = |c: Option<&Rc<crate::class::Class>>| c.map_or(ptr::null(), Rc::as_ptr);
+    let scope = ptr_of(f.class.as_ref());
+    let stc = ptr_of(f.static_class.as_ref());
+    if let Some(mc) = site.cached.get() {
+        if mc.scope == scope && mc.static_cls == stc {
+            return Ok(Some(mc));
+        }
+    }
+    // Resolve (autoloading if needed) here: a class that can't be found is
+    // an error before the arguments are evaluated, as in PHP.
+    let cls = match cref {
+        ast::ClassRef::Name(_) => {
+            let mut f2 = Frame::for_call(f.ctx.clone(), f.func.clone(), 0);
+            f2.class = f.class.clone();
+            f2.static_class = f.static_class.clone();
+            f2.this = f.this.clone();
+            match it.class_ref(&mut f2, cref) {
+                Ok(c) => c,
+                Err(e) => return Err(e),
+            }
+        }
+        _ => return Ok(None),
+    };
+    if cls.kind != ast::ClassKind::Class || cls.is_abstract || cls.is_a("throwable") {
+        return Ok(None);
+    }
+    let mut pending_compile = false;
+    let (entry, decl_class, method, direct) = match &cls.ctor {
+        Some(ctor) => {
+            if !it.member_visible(f.class.as_deref(), ctor.vis, &ctor.declaring) {
+                return Ok(None);
+            }
+            let plain = crate::call::method_params(ctor).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
+            match method_entry(it, ctor) {
+                Some((entry, decl_class)) => (Some(entry), decl_class, Rc::as_ptr(ctor), plain),
+                // Not compiled (yet): the object is still created here; the
+                // constructor runs interpreted until it compiles.
+                None => {
+                    pending_compile = true;
+                    (None, None, Rc::as_ptr(ctor), false)
+                }
+            }
+        }
+        None if cls.plain_new => (None, None, ptr::null(), false),
+        None => return Ok(None),
+    };
+    let mc = MethodCache {
+        class: Rc::as_ptr(&cls),
+        scope,
+        // No constructor: a null entry.
+        entry: entry.unwrap_or(no_ctor),
+        method,
+        decl_class: decl_class.as_ref().map_or(ptr::null(), Rc::as_ptr),
+        sc: Rc::as_ptr(&cls),
+        static_cls: stc,
+        // (Unused by `new` sites otherwise.)
+        this_cls: if pending_compile { CTOR_NOT_COMPILED } else { ptr::null() },
+    };
+    site.cached.set(Some(mc));
+    site.frame.invalidate();
+    // Compiled code may call the constructor directly.
+    site.direct.set(match entry {
+        Some(e) if direct => e as usize,
+        _ => 0,
+    });
+    Ok(Some(mc))
+}
+
+/// A new instance of the cached class (no constructor run).
+unsafe fn new_object(it: &Interp, mc: &MethodCache) -> R<Rc<crate::value::Obj>> {
+    // Classes live for the whole run: borrow the cached pointer as an Rc
+    // without touching its count.
+    let cls = std::mem::ManuallyDrop::new(Rc::from_raw(mc.class));
+    it.new_instance(&cls)
+}
+
+/// Run the cached constructor on `o` (its result goes to `out`); an
+/// interpreted run when the compiled one declines.
+#[allow(clippy::too_many_arguments)]
+unsafe fn run_ctor(it: &Interp, site: &MethodSite, mc: &MethodCache, o: &Rc<crate::value::Obj>, args: *mut Value, n: u64, locals: *const *mut Value, out: *mut Value) -> u64 {
+    let mut mc = *mc;
+    if mc.this_cls == CTOR_NOT_COMPILED {
+        // The constructor wasn't compiled when the site was cached: maybe it
+        // is now (it compiles after a few calls).
+        let m = std::mem::ManuallyDrop::new(Rc::from_raw(mc.method));
+        if let Some((entry, decl_class)) = method_entry(it, &m) {
+            mc.entry = entry;
+            mc.this_cls = ptr::null();
+            mc.decl_class = decl_class.as_ref().map_or(ptr::null(), Rc::as_ptr);
+            site.cached.set(Some(mc));
+            site.frame.invalidate();
+            let plain = crate::call::method_params(&m).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
+            site.direct.set(if plain { entry as usize } else { 0 });
+        }
+    }
+    let mc = &mc;
     let m = &*mc.method;
     let crate::class::MethodBody::User(func) = &m.body else { unreachable!() };
     let make = || {
         let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
-        frame.static_class = Some(cls.clone());
+        frame.static_class = rc_from(mc.class);
         frame.class = rc_from(mc.decl_class);
         frame
     };
-    let mut out = Value::Null;
     let r = site.frame.with(make, |frame| {
         frame.this = Some(o.clone());
-        enter(it, mc.entry, frame, args, n, &mut out)
+        enter(it, mc.entry, frame, args, n, out)
     });
     match r {
-        Some(0) => {
-            put(dst, Value::Object(o));
-            Some(0)
-        }
-        Some(st) => Some(st),
+        Some(st) => st,
         None => {
             // Declined before binding (arguments untouched): run the
             // constructor through the interpreter on this object.
             let pos = take_args(args, n);
+            let cls = std::mem::ManuallyDrop::new(Rc::from_raw(mc.class));
             let ctor = cls.ctor.clone().unwrap();
-            let r = it.invoke_method(Some(o.clone()), &ctor, cls.clone(), pos, vec![]).map(|_| Value::Object(o));
-            Some(status(it, r, |v| put(dst, v)))
+            let params = crate::call::method_params(&ctor);
+            let r = if locals.is_null() {
+                it.invoke_method(Some(o.clone()), &ctor, (*cls).clone(), pos, vec![])
+            } else {
+                with_refs(params, pos, locals, |pos| it.invoke_method(Some(o.clone()), &ctor, (*cls).clone(), pos, vec![]))
+            };
+            status(it, r, |v| put(out, v))
         }
     }
 }
+
+/// `new C(...)` in compiled code, first step: the object, before the
+/// arguments are evaluated (PHP's order). 0: created in `dst`, the
+/// constructor comes next (`rt_new_ctor` or a direct call); 3: created, no
+/// constructor; 2: not handled here (nothing done; use `rt_new`).
+pub unsafe extern "C" fn rt_new_object(c: *mut Cx, cref: *const ast::ClassRef, site: *const MethodSite, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    let mc = match new_cache(it, f, &*cref, &*site) {
+        Ok(Some(mc)) => mc,
+        Ok(None) => return 2,
+        Err(e) => {
+            *it.pending.borrow_mut() = Some(e);
+            return 1;
+        }
+    };
+    match new_object(it, &mc) {
+        Ok(o) => {
+            put(dst, Value::Object(o));
+            if mc.method.is_null() { 3 } else { 0 }
+        }
+        Err(e) => {
+            *it.pending.borrow_mut() = Some(e);
+            1
+        }
+    }
+}
+
+/// Second step: run the constructor on the object at `obj` (the cache was
+/// just validated by `rt_new_object`). The constructor's result goes to
+/// `dst`.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn rt_new_ctor(c: *mut Cx, obj: *const Value, site: *const MethodSite, args: *mut Value, n: u64, locals: *const *mut Value, meta: *const ast::Arg, dst: *mut Value) -> u64 {
+    let (it, _) = cx(c);
+    let site = &*site;
+    let (Some(mc), Value::Object(o)) = (site.cached.get(), &*obj) else { unreachable!("rt_new_ctor without rt_new_object") };
+    if !meta.is_null() {
+        let r = expand_args(it, take_args(args, n), meta).and_then(|(pos, named)| {
+            let cls = std::mem::ManuallyDrop::new(Rc::from_raw(mc.class));
+            it.invoke_method(Some(o.clone()), cls.ctor.as_ref().unwrap(), (*cls).clone(), pos, named)
+        });
+        return status(it, r, |v| put(dst, v));
+    }
+    run_ctor(it, site, &mc, o, args, n, locals, dst)
+}
+
+/// A `new` site's cache: the constructor had no compiled entry yet.
+const CTOR_NOT_COMPILED: *const crate::class::Class = 1 as *const _;
 
 /// Placeholder entry for classes without a constructor (never called).
 unsafe extern "C" fn no_ctor(_: *mut Cx, _: *mut Value, _: u64, _: *mut Value) -> u64 {

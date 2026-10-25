@@ -1,0 +1,8 @@
+B A 12 arg 3
+B A 45 arg 1
+B A 32 arg 4
+B A object(A)#1 (1) {
+  ["b"]=>
+  object(B)#5 (0) {
+  }
+}

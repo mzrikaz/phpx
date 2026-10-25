@@ -1565,11 +1565,17 @@ impl<'a> Lower<'a> {
                 let site = Box::new(super::rt::MethodSite::new("__construct", "__construct"));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
-                let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
-                let meta = self.arg_meta(args);
-                let r = self.helper_value("rt_new", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?;
-                self.write_back(la, args.len())?;
-                r
+                let plain = matches!(class, ClassRef::Name(_)) && args.iter().all(|a| !a.spread && a.name.is_none());
+                match super::layout().filter(|_| plain && super::inline_rc()) {
+                    Some(lay) => self.new_native(lay, cr, sp, args)?,
+                    None => {
+                        let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
+                        let meta = self.arg_meta(args);
+                        let r = self.helper_value("rt_new", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?;
+                        self.write_back(la, args.len())?;
+                        r
+                    }
+                }
             }
             Closure(c) => {
                 let vals: Vec<Option<u32>> = c.uses.iter().map(|u| self.locals.index.get(u.var.name.as_str()).copied()).collect();
@@ -1679,6 +1685,65 @@ impl<'a> Lower<'a> {
             },
             |l, ta| l.call_checked("rt_static_call", &[l.cx, cr, sp, aa, n, la, meta, ta]),
         )
+    }
+
+    /// `new C(...)`: the object first (PHP evaluates the arguments after
+    /// creating it), then the constructor called directly like a method;
+    /// `rt_new` handles what the site can't cache.
+    fn new_native(&mut self, lay: super::Layout, cr: CValue, sp: CValue, args: &'static [ast::Arg]) -> L<Op> {
+        let t = self.alloc_temp();
+        let ta = self.temp_addr(t);
+        let st = self.call("rt_new_object", &[self.cx, cr, sp, ta]).unwrap();
+        let failed = self.b.ins().icmp_imm_s(IntCC::Equal, st, 1);
+        let cont = self.b.create_block();
+        self.b.ins().brif(failed, self.unwind, &[], cont, &[]);
+        self.b.switch_to_block(cont);
+        let (aa, la, n) = self.args(args, ByRef::Unknown)?;
+        let (ctor_b, chk3, noctor_b, slow_b, done) =
+            (self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(slow_b);
+        let is0 = self.b.ins().icmp_imm_s(IntCC::Equal, st, 0);
+        self.b.ins().brif(is0, ctor_b, &[], chk3, &[]);
+        self.b.switch_to_block(chk3);
+        let is3 = self.b.ins().icmp_imm_s(IntCC::Equal, st, 3);
+        self.b.ins().brif(is3, noctor_b, &[], slow_b, &[]);
+
+        self.b.switch_to_block(ctor_b);
+        let meta = self.iconst(0);
+        let r = self.emit_direct(
+            lay,
+            sp,
+            lay.msite_busy,
+            aa,
+            n,
+            |l, slow| {
+                let entry = l.b.ins().load(types::I64, flags(), sp, lay.msite_direct);
+                let c1 = l.b.create_block();
+                l.b.ins().brif(entry, c1, &[], slow, &[]);
+                l.b.switch_to_block(c1);
+                let frame = l.b.ins().load(types::I64, flags(), sp, lay.msite_frame);
+                let rc = l.b.ins().load(types::I64, flags(), ta, tag::PAYLOAD);
+                (entry, frame, Some(rc))
+            },
+            |l, out| l.call_checked("rt_new_ctor", &[l.cx, ta, sp, aa, n, la, meta, out]),
+        );
+        // The constructor's own return value is discarded.
+        self.release(r);
+        self.b.ins().jump(done, &[]);
+
+        self.b.switch_to_block(noctor_b);
+        // No constructor: the arguments were evaluated for their effects.
+        self.call("rt_release_n", &[aa, n]);
+        self.b.ins().jump(done, &[]);
+
+        self.b.switch_to_block(slow_b);
+        let meta = self.iconst(0);
+        self.call_checked("rt_new", &[self.cx, cr, sp, aa, n, la, meta, ta]);
+        self.b.ins().jump(done, &[]);
+
+        self.b.switch_to_block(done);
+        self.write_back(la, args.len())?;
+        Ok(Op::Ptr(self.temp_addr(t), Some(t)))
     }
 
     /// The shared shape of a direct call. `guard` branches to `slow` unless

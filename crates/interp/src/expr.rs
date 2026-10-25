@@ -355,9 +355,12 @@ impl Interp {
                     ast::ClassRef::Anonymous(c) => self.declare_anon_class(f, c)?,
                     other => self.class_ref(f, other)?,
                 };
+                // The object exists before the arguments are evaluated (PHP's
+                // order: visible in object handles).
+                let o = self.instantiate_begin(f, &cls)?;
                 let params = cls.find_method("__construct").and_then(|m| crate::call::method_params(m));
                 let (pos, named) = self.eval_args_for(f, args, params)?;
-                Value::Object(self.instantiate(f, &cls, pos, named)?)
+                Value::Object(self.instantiate_finish(&cls, o, pos, named)?)
             }
             Clone(x) => {
                 let v = self.eval(f, x)?;

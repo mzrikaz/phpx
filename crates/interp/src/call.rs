@@ -1212,6 +1212,13 @@ impl Interp {
     // ---- objects -----------------------------------------------------------
 
     pub fn instantiate(&self, f: &Frame, cls: &Rc<Class>, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Rc<Obj>> {
+        let o = self.instantiate_begin(f, cls)?;
+        self.instantiate_finish(cls, o, pos, named)
+    }
+
+    /// `new`, first half: the checks and the object (PHP creates it before
+    /// evaluating the constructor's arguments).
+    pub fn instantiate_begin(&self, f: &Frame, cls: &Rc<Class>) -> R<Rc<Obj>> {
         let what = match cls.kind {
             ClassKind::Interface => Some("interface"),
             ClassKind::Trait => Some("trait"),
@@ -1222,16 +1229,25 @@ impl Interp {
         if let Some(w) = what {
             return Err(self.error("Error", &format!("Cannot instantiate {w} {}", cls.name)));
         }
+        // Like PHP: the object exists (and takes a handle) before the
+        // constructor's visibility is checked.
         let o = self.new_instance(cls)?;
         if !cls.plain_new && cls.is_a("throwable") {
             self.set_throw_site(&o);
         }
-        if let Some(ctor) = cls.ctor.clone() {
+        if let Some(ctor) = &cls.ctor {
             if !self.member_visible(f.class.as_deref(), ctor.vis, &ctor.declaring) {
                 let vis = if ctor.vis == Vis::Private { "private" } else { "protected" };
                 let scope = f.class.as_ref().map(|c| format!("scope {}", c.name)).unwrap_or_else(|| "global scope".into());
                 return Err(self.error("Error", &format!("Call to {vis} {}::__construct() from {scope}", cls.name)));
             }
+        }
+        Ok(o)
+    }
+
+    /// `new`, second half: run the constructor.
+    pub fn instantiate_finish(&self, cls: &Rc<Class>, o: Rc<Obj>, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Rc<Obj>> {
+        if let Some(ctor) = cls.ctor.clone() {
             self.invoke_method(Some(o.clone()), &ctor, cls.clone(), pos, named)?;
         }
         Ok(o)
