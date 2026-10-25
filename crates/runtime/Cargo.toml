@@ -1,0 +1,10 @@
+[package]
+name = "phpx-runtime"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+corosensei = "0.3.4"
+polling = "3"
+socket2 = "0.5"
