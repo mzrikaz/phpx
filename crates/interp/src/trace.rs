@@ -27,6 +27,8 @@ pub struct CallRec {
     pub pos: Pos,
     /// The callee is a built-in class/function written in PHP (prelude).
     pub internal: bool,
+    /// The interpreter's current position: restored to `pos` on return.
+    pub cur: *const std::cell::Cell<Pos>,
 }
 
 impl CallRec {
@@ -40,6 +42,7 @@ impl CallRec {
             nparams: 0,
             pos: Pos { file: 0, off: 0 },
             internal: false,
+            cur: std::ptr::null(),
         }
     }
 }
@@ -59,6 +62,10 @@ pub fn push(rec: &mut CallRec) {
 #[inline(always)]
 pub fn pop(rec: &CallRec) {
     phpx_runtime::set_task_word(rec.prev as usize);
+    // Back in the caller: diagnostics point at its statement again.
+    if let Some(cur) = unsafe { rec.cur.as_ref() } {
+        cur.set(rec.pos);
+    }
 }
 
 /// Pops on drop (interpreted calls, including the error path).
@@ -71,13 +78,14 @@ impl Drop for Guard {
 }
 
 /// An interpreted call: push a record for `f` called from `pos`.
-pub fn enter(f: &Frame, params: &'static [ast::Param], pos: Pos) -> Guard {
+pub fn enter(it: &Interp, f: &Frame, params: &'static [ast::Param], pos: Pos) -> Guard {
     let mut rec = Box::new(CallRec {
         frame: f as *const Frame,
         params: params.as_ptr(),
         nparams: params.len(),
         pos,
         internal: f.ctx.file == PRELUDE_FILE,
+        cur: &it.pos,
         ..CallRec::empty()
     });
     push(&mut rec);
@@ -94,6 +102,7 @@ pub unsafe extern "C" fn rt_call_push(c: *mut crate::compiler::rt::Cx, spec: *co
         locals,
         pos: it.pos.get(),
         internal: (&*spec).ctx.file == PRELUDE_FILE,
+        cur: &it.pos,
         ..CallRec::empty()
     };
     push(rec);

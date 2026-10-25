@@ -860,7 +860,7 @@ impl Interp {
             self.pos.set(saved_pos);
             return r;
         }
-        let _call = crate::trace::enter(&f, inv.params, saved_pos);
+        let _call = crate::trace::enter(self, &f, inv.params, saved_pos);
         let result = match inv.body {
             Body::Block(stmts) => match self.exec_block(&mut f, stmts)? {
                 Flow::Return(v) => v,
