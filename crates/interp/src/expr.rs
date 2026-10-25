@@ -490,7 +490,11 @@ impl Interp {
             Include { kind, path } => {
                 let p = self.eval(f, path)?;
                 let p = self.to_str(&p)?;
-                self.include(f, *kind, &String::from_utf8_lossy(&p))?
+                // Back in this file afterwards (the included file moved it).
+                let saved = self.pos.get();
+                let r = self.include(f, *kind, &String::from_utf8_lossy(&p))?;
+                self.pos.set(saved);
+                r
             }
             Yield { key, value } => {
                 let Some(g) = f.gen.clone() else { return Err(self.error("Error", "Cannot yield outside a generator")) };

@@ -246,6 +246,25 @@ fn debug_info(it: &Interp, o: &std::rc::Rc<crate::value::Obj>) -> Option<Vec<(cr
     }
 }
 
+/// The class argument of class_implements/class_parents/class_uses: a
+/// warning and None when it doesn't exist.
+pub fn spl_class_arg(it: &Interp, a: &[Value], fname: &str) -> R<Option<std::rc::Rc<crate::class::Class>>> {
+    match arg(a, 0) {
+        Value::Object(o) => Ok(Some(o.class.clone())),
+        Value::Str(n) => {
+            let n = String::from_utf8_lossy(&n).into_owned();
+            let autoload = !has(a, 1) || arg(a, 1).truthy();
+            let found = if autoload { it.find_class(&n)? } else { it.classes.borrow().get(&*it.lower.get(n.trim_start_matches('\\'))).cloned() };
+            if found.is_none() {
+                let tail = if autoload { " and could not be loaded" } else { "" };
+                it.warn(&format!("{fname}(): Class {n} does not exist{tail}"));
+            }
+            Ok(found)
+        }
+        other => Err(it.error("TypeError", &format!("{fname}(): Argument #1 ($object_or_class) must be of type object|string, {} given", other.type_name()))),
+    }
+}
+
 fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     // output
     t.insert("var_dump", |it, _, a| {
@@ -544,11 +563,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::Bool(cls.is_some_and(|c| c.lname != target && c.is_a(&target))))
     });
     t.insert("class_implements", |it, _, a| {
-        let cls = match arg(a, 0) {
-            Value::Object(o) => o.class.clone(),
-            Value::Str(n) => it.lookup_class(&String::from_utf8_lossy(&n))?,
-            _ => return Ok(Value::Bool(false)),
-        };
+        let Some(cls) = spl_class_arg(it, a, "class_implements")? else { return Ok(Value::Bool(false)) };
         let mut out = PhpArray::new();
         for anc in cls.ancestors.iter().skip(1) {
             if let Some(c) = it.classes.borrow().get(anc) {

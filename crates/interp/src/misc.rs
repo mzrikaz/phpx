@@ -1155,10 +1155,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::array(m))
     });
     t.insert("class_parents", |it, _, a| {
-        let cls = match arg(a, 0) {
-            Value::Object(o) => Some(o.class.clone()),
-            v => it.find_class(&it.to_string_lossy(&v)?)?,
-        };
+        let cls = crate::builtins::spl_class_arg(it, a, "class_parents")?;
         let Some(cls) = cls else { return Ok(Value::Bool(false)) };
         let mut m = PhpArray::new();
         let mut p = cls.parent.clone();
@@ -1169,10 +1166,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::array(m))
     });
     t.insert("class_uses", |it, _, a| {
-        let cls = match arg(a, 0) {
-            Value::Object(o) => Some(o.class.clone()),
-            v => it.find_class(&it.to_string_lossy(&v)?)?,
-        };
+        let cls = crate::builtins::spl_class_arg(it, a, "class_uses")?;
         let Some(cls) = cls else { return Ok(Value::Bool(false)) };
         let mut m = PhpArray::new();
         for t in it.class_traits(&cls) {
