@@ -1,0 +1,53 @@
+array(6) {
+  [0]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  [2]=>
+  array(1) {
+    [0]=>
+    int(3)
+  }
+  [3]=>
+  int(1)
+  [7]=>
+  NULL
+  [10]=>
+  string(1) "x"
+  [11]=>
+  object(stdClass)#1 (0) {
+  }
+}
+array(5) {
+  [0]=>
+  int(3)
+  [2]=>
+  string(1) "a"
+  [3]=>
+  string(1) "b"
+  [6]=>
+  string(2) "03"
+  [7]=>
+  string(2) " 3"
+}
+array(2) {
+  [0]=>
+  int(3)
+  [4]=>
+  string(3) "abc"
+}
+array(2) {
+  [0]=>
+  string(1) "b"
+  [1]=>
+  string(1) "a"
+}
+array(2) {
+  [0]=>
+  int(4)
+  [2]=>
+  string(1) "3"
+}

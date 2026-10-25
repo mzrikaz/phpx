@@ -390,6 +390,33 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("key_exists", |it, _, a| key_exists(it, a));
     t.insert("array_unique", |it, _, a| {
         let x = arr(it, a, 0, "array_unique")?;
+        let flags = if has(a, 1) { int(it, a, 1)? } else { 2 };
+        if flags != 2 {
+            // PHP sorts (position, value) pairs, then drops each later
+            // duplicate of a run of equal neighbours.
+            let cmp = sort_cmp(it, flags);
+            let mut items: Vec<(usize, Value)> = x.values().enumerate().collect();
+            crate::zsort::sort(&mut items, |p, q| cmp(&p.1, &q.1));
+            let mut drop = vec![false; items.len()];
+            let mut kept = 0;
+            for i in 1..items.len() {
+                if cmp(&items[kept].1, &items[i].1) != Ordering::Equal {
+                    kept = i;
+                } else if items[kept].0 > items[i].0 {
+                    drop[items[kept].0] = true;
+                    kept = i;
+                } else {
+                    drop[items[i].0] = true;
+                }
+            }
+            let mut out = PhpArray::new();
+            for (i, (k, v)) in x.iter().enumerate() {
+                if !drop[i] {
+                    out.insert(k.clone(), v.clone());
+                }
+            }
+            return Ok(Value::array(out));
+        }
         let mut seen: HashSet<PStr> = HashSet::new();
         let mut out = PhpArray::new();
         for (k, v) in x.iter() {
