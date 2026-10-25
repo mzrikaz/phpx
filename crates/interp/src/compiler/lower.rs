@@ -1553,7 +1553,10 @@ impl<'a> Lower<'a> {
                 self.msites.push(site);
                 let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
                 let meta = self.arg_meta(args);
-                let r = self.helper_value("rt_static_call", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?;
+                let r = match super::layout().filter(|_| args.iter().all(|a| !a.spread && a.name.is_none()) && matches!(class, ClassRef::Name(_))) {
+                    Some(lay) => self.direct_static_call(lay, cr, sp, aa, n_, la, meta),
+                    None => self.helper_value("rt_static_call", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?,
+                };
                 self.write_back(la, args.len())?;
                 r
             }
@@ -1642,6 +1645,39 @@ impl<'a> Lower<'a> {
                 (entry, frame, Some(rc))
             },
             |l, ta| l.call_checked("rt_method_call", &[l.cx, oa, sp, aa, n, la, meta, ta]),
+        )
+    }
+
+    /// `A::m(...)` on a static method: like `direct_call`, for the cached
+    /// calling scope and `static` class.
+    #[allow(clippy::too_many_arguments)]
+    fn direct_static_call(&mut self, lay: super::Layout, cr: CValue, sp: CValue, aa: CValue, n: CValue, la: CValue, meta: CValue) -> Op {
+        self.emit_direct(
+            lay,
+            sp,
+            lay.msite_busy,
+            aa,
+            n,
+            |l, slow| {
+                let caller = l.b.ins().load(types::I64, flags(), l.cx, lay.cx_frame);
+                let scope = l.b.ins().load(types::I64, flags(), caller, lay.frame_class);
+                let want = l.b.ins().load(types::I64, flags(), sp, lay.msite_scope);
+                let same = l.b.ins().icmp(IntCC::Equal, scope, want);
+                let (c1, c2, c3) = (l.b.create_block(), l.b.create_block(), l.b.create_block());
+                l.b.ins().brif(same, c1, &[], slow, &[]);
+                l.b.switch_to_block(c1);
+                let st = l.b.ins().load(types::I64, flags(), caller, lay.frame_static);
+                let want = l.b.ins().load(types::I64, flags(), sp, lay.msite_class);
+                let same = l.b.ins().icmp(IntCC::Equal, st, want);
+                l.b.ins().brif(same, c2, &[], slow, &[]);
+                l.b.switch_to_block(c2);
+                let entry = l.b.ins().load(types::I64, flags(), sp, lay.msite_direct);
+                l.b.ins().brif(entry, c3, &[], slow, &[]);
+                l.b.switch_to_block(c3);
+                let frame = l.b.ins().load(types::I64, flags(), sp, lay.msite_frame);
+                (entry, frame, None)
+            },
+            |l, ta| l.call_checked("rt_static_call", &[l.cx, cr, sp, aa, n, la, meta, ta]),
         )
     }
 

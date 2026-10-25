@@ -1777,6 +1777,12 @@ unsafe fn static_lookup(
     };
     site.cached.set(Some(mc));
     site.frame.invalidate();
+    // Direct calls from compiled code (static methods only: no `$this` to
+    // lend), keyed by the caller's raw scope and `static` class words.
+    let direct = m.is_static && crate::call::method_params(&m).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
+    site.direct.set(if direct { entry as usize } else { 0 });
+    site.direct_class.set(*(std::ptr::addr_of!(f.static_class) as *const usize));
+    site.direct_scope.set(scope_key(f));
     Some(mc)
 }
 

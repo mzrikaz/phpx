@@ -145,6 +145,8 @@ pub struct Layout {
     pub frame_class: i32,
     /// `Frame::this` (an `Option<Rc<Obj>>`: the Rc's inner pointer or 0).
     pub frame_this: i32,
+    /// `Frame::static_class` (raw Rc word or 0).
+    pub frame_static: i32,
     /// `CallSite::direct`, its frame pointer and busy flag.
     pub site_direct: i32,
     pub site_frame: i32,
@@ -220,6 +222,7 @@ fn probe_layout() -> Option<Layout> {
         cx_frame: offset_of!(rt::Cx, frame) as i32,
         frame_class: offset_of!(crate::interp::Frame, class) as i32,
         frame_this: offset_of!(crate::interp::Frame, this) as i32,
+        frame_static: offset_of!(crate::interp::Frame, static_class) as i32,
         site_direct: offset_of!(rt::CallSite, direct) as i32,
         site_frame: (offset_of!(rt::CallSite, frame) + rt::SiteFrame::FRAME) as i32,
         site_busy: (offset_of!(rt::CallSite, frame) + rt::SiteFrame::BUSY) as i32,
