@@ -1,0 +1,6 @@
+load Missing\Thing
+bool(false)
+load x
+load y
+bool(true)
+int(8)

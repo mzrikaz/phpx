@@ -211,6 +211,15 @@ impl Interp {
         }
     }
 
+    /// A class named by a run-time string: always fully qualified (the
+    /// current namespace doesn't apply), except self/parent/static.
+    fn string_class(&self, f: &Frame, n: &str) -> R<Rc<Class>> {
+        match &*n.to_ascii_lowercase() {
+            "self" | "static" | "parent" => self.named_class(f, n),
+            _ => self.named_class(f, &format!("\\{}", n.trim_start_matches('\\'))),
+        }
+    }
+
     pub fn find_function(&self, ctx: &NsCtx, name: &str) -> Option<Callable> {
         let lookup = |full: &str| -> Option<Callable> {
             let l = self.lower.get(full);
@@ -579,7 +588,7 @@ impl Interp {
             Value::Str(s) => {
                 let s = String::from_utf8_lossy(s).into_owned();
                 if let Some((cls, m)) = s.split_once("::") {
-                    let class = self.named_class(f, cls)?;
+                    let class = self.string_class(f, cls)?;
                     return self.method_callable(f, None, &class, m);
                 }
                 self.find_function(&f.ctx, &format!("\\{}", s.trim_start_matches('\\')))
@@ -595,7 +604,7 @@ impl Interp {
                         self.method_callable(f, Some(o), &class, &m)
                     }
                     Value::Str(c) => {
-                        let class = self.named_class(f, &String::from_utf8_lossy(&c))?;
+                        let class = self.string_class(f, &String::from_utf8_lossy(&c))?;
                         self.method_callable(f, None, &class, &m)
                     }
                     _ => Err(self.error("Error", "Array callback must have exactly two elements")),
