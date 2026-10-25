@@ -4,6 +4,27 @@ What has been built so far, grouped by milestone (most recent first).
 Entries before the first commit (2026-10-25) are reconstructed from the code
 and project notes; later entries follow the git history.
 
+## 2026-10-25 — Compatibility and hardening
+
+- **Built-in signatures** from PHP's Reflection (`tools/arginfo`): PHP's
+  `ArgumentCountError`/`TypeError` for built-ins, coercive-mode juggling,
+  `strict_types`, invalid-callback errors, named arguments.
+- **SPL** written in PHP: `ArrayObject`, `ArrayIterator`,
+  `SplDoublyLinkedList`/`SplStack`/`SplQueue`, heaps, `SplPriorityQueue`,
+  `SplFixedArray`, `SplObjectStorage`, and the standard iterators.
+- `__debugInfo()` in `var_dump`/`print_r`; `get_defined_functions()`;
+  `ArrayAccess` offsets of any type; `round()` uses PHP 8.4's algorithm;
+  `json_encode` honours `$depth`; `var_export` of `stdClass` and nested
+  properties; private methods bind to the calling class.
+- **Native-code fixes**: by-reference arguments that are properties or
+  array elements (`sort($this->items)`) were silently copied; a temp
+  double free in the `count()`/`strlen()` intrinsic (seen when a
+  namespaced function shadows a built-in, as Laravel does).
+- **Hardening**: recursion detection for self-referencing values,
+  stack budget for deeply nested source, dumps stop at `memory_limit`,
+  fuzz harness and the crashes it found (lexer, `unpack`, `intval`,
+  `base_convert`, `number_format`).
+
 ## 2026-10-25 — Calls, objects and memory
 
 - **Direct calls**: compiled code calls cached compiled functions and

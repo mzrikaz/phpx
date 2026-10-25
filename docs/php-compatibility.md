@@ -60,17 +60,18 @@ Known places where phpx output can differ from PHP 8.5 today.
 
 | Gap | Detail | Plan |
 |---|---|---|
-| Destructor timing | `__destruct` runs at the next statement boundary after the last reference dies, not in the middle of an expression. Output order differs only if a destructor prints during an expression that also prints | Acceptable for now; revisit if real code depends on it |
+| Destructor timing | `__destruct` runs at the next statement boundary after the last reference dies, or right after a call made on a temporary object (`(new C)->m()`), as in PHP. Other mid-expression deaths still wait for the statement end | Revisit if real code depends on it |
 | Warning/notice destination | phpx writes warnings, notices and deprecations to **stderr**; PHP CLI prints them to **stdout** (with default `display_errors`). Tests run PHP with `display_errors=stderr` so stdout compares cleanly | HTTP mode and `display_errors` ini handling |
 | `${var}` deprecation | PHP 8.2+ prints `Deprecated: Using ${var} in strings is deprecated`; phpx does not | Emit it |
 | `PHP_VERSION` constant | phpx reports `8.4.0` / `PHP_VERSION_ID` `80400` (set in `builtins.rs`) while the reference is 8.5.x | Bump to 8.5 so version checks in CMSs take 8.5 code paths |
 | Pipe operator `\|>` | PHP 8.5 syntax not parsed yet | Implement in parser + interpreter |
 | Resource IDs | `var_dump($fp)` shows `resource(4)` where PHP shows `resource(5)` in the same script (PHP allocates STDIN/STDOUT/STDERR and other resources first) | Align the initial resource counter |
-| Non-PHP functions visible | `function_exists('log2')`, `function_exists('lcg')` and `__phpx_stack_remaining` return true; PHP has no such functions | Remove or rename internal helpers |
 | Non-UTF-8 source files | Source is decoded with `from_utf8_lossy`, so Latin-1 bytes inside string literals become U+FFFD | Keep sources as bytes |
 | Stack traces | `getTrace()` returns `[]` and `getTraceAsString()` returns `#0 {main}` | Real backtraces (`debug_backtrace` is also missing) |
 | Missing built-ins | Calling an unimplemented function throws `Error: Call to undefined function` | [stdlib.md](stdlib.md) lists what is missing |
-| Missing classes | No `Reflection*`, `DateTime*`, `ArrayObject`, `SplStack`/SPL data structures, `WeakMap`, DOM/XML classes, `PDO`, `mysqli` | Roadmap items 2 and 6 |
+| Missing classes | No `Reflection*`, `DateTime*`, `WeakMap`, SPL file/directory iterators, DOM/XML classes, `PDO`, `mysqli` | Roadmap items 2 and 6 |
+| `serialize()` of references | A structure that contains itself through a reference raises the call-stack Error instead of producing `R:`/`r:` back-references | Implement reference tracking in `serialize` |
+| Compile-depth limit | PHP refuses source nested beyond ~10,000 levels (or 3,000 `if`s) at compile time; phpx accepts deeper nesting while the stack allows, then reports the same "Maximum call stack size ... reached during compilation" error | Acceptable (more lenient) |
 | Superglobals in CLI | `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST` are empty arrays; `$_SESSION` is not set (like PHP CLI without a session) | HTTP server mode |
 | `ini_get` / `ini_set` | Minimal; most directives are not modelled | To verify per directive as CMSs need them |
 

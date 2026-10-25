@@ -38,7 +38,7 @@ Target: `wp-admin/setup-config.php` output identical to PHP.
 - [x] Secure `random_bytes` (OS CSPRNG)
 - [ ] Reflection API (`ReflectionClass`, `ReflectionMethod`, ...)
 - [ ] DateTime family (`DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`, `DatePeriod`) and `strtotime`/`gmdate`
-- [ ] SPL data structures and iterators (`ArrayObject`, `SplObjectStorage`, `SplStack`, iterators)
+- [x] SPL data structures and iterators (`ArrayObject`, `SplObjectStorage`, `SplStack`, heaps, iterators); file/directory iterators still missing
 - [ ] `set_error_handler` invoking user handlers (Laravel converts warnings to exceptions)
 - [ ] WordPress setup page byte-identical to PHP (currently blocked on mysqli check)
 
@@ -107,7 +107,7 @@ See [performance.md](performance.md).
 
 - [ ] DateTime family (`DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`, `DatePeriod`)
 - [ ] Reflection (classes, methods, properties, parameters, attributes)
-- [ ] SPL data structures and iterators (`ArrayObject`, `SplObjectStorage`, `SplStack`, …)
+- [x] SPL data structures and iterators (`ArrayObject`, `SplObjectStorage`, `SplStack`, …) — file/directory iterators (`SplFileInfo`, `RecursiveDirectoryIterator`) still missing
 - [ ] curl (async-capable)
 - [ ] gd / imagick
 - [ ] xml parser, DOM, SimpleXML, XMLReader/XMLWriter

@@ -27,9 +27,9 @@ Fix plan:
       conservatively (never frees reachable data, may miss some garbage).
       `gc_collect_cycles()` counts objects only (PHP also counts arrays).
 - [x] `eval()` parsed code cached per call site + source.
-- [ ] Compact object layout (declared props as slots): objects are 333 bytes
-      vs PHP's 105; constant array literals are rebuilt each evaluation
-      (169 vs 17 bytes).
+- [x] Compact object layout: an object with one property is 112 bytes
+      (PHP 87; was 333); constant array literals are shared (17 bytes, like
+      PHP).
 - [ ] Per-request arenas in server mode (drop everything a request allocated).
 
 ## Security issues
@@ -38,17 +38,31 @@ Fix plan:
 |---|---|
 | `random_int()` used a non-cryptographic xorshift generator (predictable tokens) | **fixed**: OS CSPRNG, rejection sampling |
 | `random_bytes()` / `openssl_random_pseudo_bytes()` used xorshift | **fixed**: `/dev/urandom` |
-| No `memory_limit` | **fixed**: counting allocator, PHP fatal error, pre-checks in `str_repeat`/`str_pad`/`array_fill` (enforced at 3x until compact objects) |
+| No `memory_limit` | **fixed**: counting allocator, PHP fatal error, pre-checks in `str_repeat`/`str_pad`/`array_fill`/`number_format`; `var_dump`/`print_r`/`var_export` stop at the limit instead of building output quadratic in nesting depth |
 | `unserialize()`/`json_*`/`serialize` deep nesting overflowed the native stack | **fixed**: `max_depth` (4096) + stack checks raise PHP errors |
-| `max_execution_time` not enforced | open |
+| Deeply nested source (also via `eval()`) overflowed the stack in the parser, checks, compiler or interpreter and aborted the process | **fixed**: stack budget; PHP's "Maximum call stack size ... reached during compilation" error (a catchable `ParseError` from `eval`) |
+| Self-referencing structures (`$a[] = &$a`) segfaulted `count(COUNT_RECURSIVE)`, dumps, `==`, `sort`, `array_walk_recursive`, `array_replace_recursive`, `json_encode` | **fixed**: recursion detection with PHP's warnings/errors |
+| Lexer panic on a trailing backslash in an unterminated string; `unpack()`, `intval()`, `base_convert()`, `number_format()` panics on hostile arguments | **fixed** (found by fuzzing) |
+| `max_execution_time` not enforced | **fixed** (CPU-time watcher; compiled loops are interruptible) |
 | Regex: fancy-regex backtracking; verify a backtrack limit equivalent to `pcre.backtrack_limit` (ReDoS) | to verify |
 | `unserialize()` object injection on untrusted data | same as PHP (supports `allowed_classes`) |
 | No `open_basedir` / `disable_functions` | open (PHP default is also unrestricted) |
-| 79 `unsafe` blocks (native compiler ABI, raw frame pointers, `with_globals` aliasing the main frame) | needs audit; run test suite under Miri/ASan where possible |
-| Native code relies on `Rc` memory layout (checked at startup by `rc_layout_ok()`) | guarded |
+| `unsafe` code (native compiler ABI, allocator, object layout, GC registry) | audit in progress |
+| Native code relies on memory layouts (checked at startup by `probe_layout()` / `rc_layout_ok()`) | guarded |
 | Runtime panics abort the script | **partly fixed**: panics inside built-ins become PHP `Error`s; panics elsewhere still abort |
 | No HTTP server yet, so no network-facing attack surface beyond the runtime's demo | n/a until `phpx serve` |
 
-Next steps: fuzz the lexer/parser and `unserialize`/`pack`/`parse_url` with
-cargo-fuzz, run the differential suite under AddressSanitizer, add
-`memory_limit` accounting.
+## Fuzzing
+
+`cargo test --release -p phpx-interp --test fuzz -- --ignored` runs three
+randomized suites (seed: `PHPX_FUZZ_SEED`, amount: `PHPX_FUZZ_ITERS`):
+
+- `parser`: mutated test sources (bit flips, token splices, deep nesting,
+  truncation) through the lexer, parser and checks;
+- `builtins`: random input for `unserialize`, `json_decode`, `unpack`,
+  `pack`, `sprintf`, regexes, `str_getcsv`, `parse_url`;
+- `all_builtins`: `tools/fuzz/all_builtins.php` calls every built-in
+  without side effects with hostile arguments.
+
+As of 2026-10-25: 180,000 parser mutations and ~700,000 built-in calls
+without a panic after the fixes above.
