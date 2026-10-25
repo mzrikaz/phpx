@@ -288,6 +288,8 @@ pub struct MatchArm {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Closure {
+    /// Where the closure starts (its name includes the line).
+    pub span: Span,
     pub params: Vec<Param>,
     pub uses: Vec<ClosureUse>,
     pub ret: Option<Type>,
@@ -307,6 +309,7 @@ pub struct ClosureUse {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArrowFn {
+    pub span: Span,
     pub params: Vec<Param>,
     pub ret: Option<Type>,
     pub body: Expr,

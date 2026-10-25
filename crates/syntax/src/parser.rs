@@ -1348,7 +1348,7 @@ impl Parser {
             let ret = self.return_type()?;
             self.expect_p("=>")?;
             let (body, is_generator) = self.function_body(|p| p.expr_bp(0))?;
-            let f = ArrowFn { params, ret, body, by_ref, is_generator, is_static, attrs };
+            let f = ArrowFn { span: start, params, ret, body, by_ref, is_generator, is_static, attrs };
             return Ok(Expr::new(ExprKind::ArrowFn(Box::new(f)), self.since(start)));
         }
         self.expect_kw("function")?;
@@ -1369,7 +1369,7 @@ impl Parser {
         }
         let ret = self.return_type()?;
         let (body, is_generator) = self.function_body(|p| p.block())?;
-        let c = Closure { params, uses, ret, body, by_ref, is_generator, is_static, attrs };
+        let c = Closure { span: start, params, uses, ret, body, by_ref, is_generator, is_static, attrs };
         Ok(Expr::new(ExprKind::Closure(Box::new(c)), self.since(start)))
     }
 
