@@ -1,0 +1,10 @@
+bool(true)
+string(1) "a"
+string(1) "b"
+string(1) "a"
+bool(false)
+string(19) "[[1,2,3],["b","b"]]"
+array(1) {
+  [0]=>
+  int(9)
+}

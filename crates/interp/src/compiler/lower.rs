@@ -132,6 +132,15 @@ impl ByRef {
     }
 }
 
+/// `C::$p` or an element path under it.
+fn rooted_at_static_prop(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::StaticProp { .. } => true,
+        ExprKind::Index { base, .. } => rooted_at_static_prop(base),
+        _ => false,
+    }
+}
+
 /// A write target that can be evaluated again without side effects.
 fn pure_place(e: &Expr) -> bool {
     match &e.kind {
@@ -2293,6 +2302,10 @@ impl<'a> Lower<'a> {
         }
         let mut wbs = vec![];
         for (i, a) in args.iter().enumerate() {
+            if by_ref.may_be_ref(i) && rooted_at_static_prop(&a.value) {
+                // No write-back path for static properties: interpret.
+                return Err("by-reference static property argument");
+            }
             let place = !a.spread && a.name.is_none() && matches!(a.value.kind, ExprKind::Prop { .. } | ExprKind::Index { .. });
             let wb = if place && by_ref.may_be_ref(i) && i < 64 {
                 if !pure_place(&a.value) {
