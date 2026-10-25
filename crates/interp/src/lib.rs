@@ -38,6 +38,8 @@ mod errors;
 mod tokenizer;
 mod zsort;
 mod dom;
+mod xmlwriter;
+mod xml_ext;
 mod db;
 mod pdo;
 mod process;

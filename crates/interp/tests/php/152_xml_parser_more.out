@@ -1,0 +1,28 @@
+int(1)
+S:doc:[]
+int(1)
+S:item:{"a":"1"}
+int(1)
+C:"hello" E:item S:item:[]
+int(1)
+C:"x" E:item E:doc
+NS false urn:d
+NS 'x' urn:x
+S URN:D#R []
+S URN:X#A {"URN:X#K":"1","K":"2"}
+E URN:X#A
+S URN:D#B []
+E URN:D#B
+E URN:D#R
+e93f
+"<a><\/b>" => 0 76 Mismatched tag line 1
+"<a>" => 0 77 Tag not finished line 1
+"<a attr><\/a>" => 0 41 Attribute without value line 1
+"" => 0 4 Not well-formed (invalid token) line 1
+"text" => 0 4 Not well-formed (invalid token) line 1
+"<a>&nope;<\/a>" => 0 26 Undeclared entity error line 1
+"<a><!-- x --><\/a>extra" => 0 5 Invalid document end line 1
+[{"tag":"ROOT","type":"open","level":1},{"tag":"A","type":"complete","level":2,"value":"1"},{"tag":"A","type":"complete","level":2,"value":"2"},{"tag":"B","type":"open","level":2,"attributes":{"X":"y"},"value":"t"},{"tag":"C","type":"complete","level":3},{"tag":"B","value":"u","type":"cdata","level":2},{"tag":"B","type":"close","level":2},{"tag":"ROOT","type":"close","level":1}]
+{"ROOT":[0,7],"A":[1,2],"B":[3,5,6],"C":[4]}
+bool(true)
+string(5) "UTF-8"

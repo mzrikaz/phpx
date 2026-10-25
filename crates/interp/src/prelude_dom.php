@@ -105,3 +105,11 @@ class DOMProcessingInstruction extends DOMNode
 class DOMXPath
 {
 }
+
+class XMLWriter
+{
+}
+
+final class XMLParser
+{
+}

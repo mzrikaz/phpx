@@ -82,7 +82,7 @@ pub fn guarded(it: &Interp, name: &str, f: impl FnOnce() -> R<Value>) -> R<Value
 }
 
 /// Extensions phpx implements (enough for feature checks to pass).
-pub const EXTENSIONS: &[&str] = &["Core", "date", "pcre", "hash", "json", "SPL", "standard", "filter", "zlib", "ctype", "random", "Reflection", "PDO", "pdo_mysql"];
+pub const EXTENSIONS: &[&str] = &["Core", "date", "libxml", "pcre", "zlib", "ctype", "dom", "filter", "hash", "json", "mbstring", "SPL", "PDO", "pdo_mysql", "random", "Reflection", "standard", "tokenizer", "xml", "xmlwriter"];
 
 /// All built-in functions.
 pub fn table() -> HashMap<&'static str, BuiltinFn> {
@@ -106,6 +106,8 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::mbext::register(&mut t);
     crate::tokenizer::register(&mut t);
     crate::dom::register(&mut t);
+    crate::xmlwriter::register(&mut t);
+    crate::xml_ext::register(&mut t);
     crate::process::register(&mut t);
     crate::errors::register(&mut t);
     t

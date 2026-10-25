@@ -1,0 +1,113 @@
+default "<!-- c -->"
+start ROOT {"A":"1","B":"x & y"}
+cdata "line1\nline2 "
+cdata "<"
+cdata "tag"
+cdata ">"
+cdata " "
+cdata "A"
+cdata " "
+cdata " cd <x> "
+start CHILD []
+end CHILD
+cdata "t"
+cdata "\u00e9xt"
+pi pi "data"
+end ROOT
+int(1)
+int(0)
+Array
+(
+    [0] => Array
+        (
+            [tag] => a
+            [type] => open
+            [level] => 1
+            [attributes] => Array
+                (
+                    [x] => 1
+                )
+
+        )
+
+    [1] => Array
+        (
+            [tag] => b
+            [type] => complete
+            [level] => 2
+            [value] => hi
+        )
+
+    [2] => Array
+        (
+            [tag] => c
+            [type] => complete
+            [level] => 2
+        )
+
+    [3] => Array
+        (
+            [tag] => a
+            [value] => 
+  text
+            [type] => cdata
+            [level] => 1
+        )
+
+    [4] => Array
+        (
+            [tag] => d
+            [type] => complete
+            [level] => 2
+            [value] => x
+        )
+
+    [5] => Array
+        (
+            [tag] => a
+            [value] => more
+
+            [type] => cdata
+            [level] => 1
+        )
+
+    [6] => Array
+        (
+            [tag] => a
+            [type] => close
+            [level] => 1
+        )
+
+)
+Array
+(
+    [a] => Array
+        (
+            [0] => 0
+            [1] => 3
+            [2] => 5
+            [3] => 6
+        )
+
+    [b] => Array
+        (
+            [0] => 1
+        )
+
+    [c] => Array
+        (
+            [0] => 2
+        )
+
+    [d] => Array
+        (
+            [0] => 4
+        )
+
+)
+int(0)
+int(76)
+string(14) "Mismatched tag"
+int(1)
+int(1)
+int(1)

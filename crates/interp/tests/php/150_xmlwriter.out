@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root a="x&quot;é&lt;">
+ <a>1 &amp; 2</a>
+ <b x="y">t</b>
+ <empty/>
+ <emptystr></emptystr>
+ <c>mixed  <d>in</d>
+ </c>
+ <!-- note -->
+ <p:ns p:k="v" xmlns:p="urn:p"/>
+<![CDATA[raw <x>]]><?php echo 1;?>
+ <full></full>
+</root>
+---
+<r>é<s/></r>
+<a>
+	<b>
+		<c>x</c>
+	</b>
+</a>
+string(27) "<?xml version="1.0"?>
+<x/>
+"
+string(27) "<?xml version="1.0"?>
+<x/>
+"
+XMLWriter::startElement(): Argument #2 must be a valid element name, "1bad" given
