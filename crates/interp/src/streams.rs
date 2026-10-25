@@ -19,6 +19,8 @@ pub(crate) enum Backend {
     Stdout,
     Stderr,
     Output,
+    /// A user-space wrapper's stream object (stream_wrapper_register()).
+    User(std::rc::Rc<crate::value::Obj>),
 }
 
 /// Read-ahead for file streams: a buffer and a cursor into it (consuming
@@ -83,6 +85,8 @@ pub struct Stream {
     uri: String,
     wrapper: &'static str,
     append: bool,
+    /// A user stream's stream_eof() said so.
+    user_eof: bool,
 }
 
 pub struct Dir {
@@ -90,11 +94,35 @@ pub struct Dir {
     at: usize,
 }
 
+/// A directory handle over a fixed list of entries.
+pub(crate) fn dir_resource(entries: Vec<String>) -> Value {
+    Resource::new("stream", Box::new(Dir { entries, at: 0 }))
+}
+
 fn path_arg(it: &Interp, a: &[Value], i: usize) -> R<String> {
     Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
 }
 
 /// Run `g` on an open stream resource; TypeError for anything else.
+/// fclose(): a user stream's stream_flush/stream_close run first.
+pub(crate) fn close_stream(it: &Interp, v: &Value) {
+    if let Ok(Some(o)) = user_obj(it, v, "fclose") {
+        crate::wrappers::method(it, &o, "stream_flush", vec![]);
+        crate::wrappers::method(it, &o, "stream_close", vec![]);
+    }
+    if let Value::Resource(r) = v {
+        r.close();
+    }
+}
+
+/// The wrapper object of a user stream.
+fn user_obj(it: &Interp, v: &Value, fname: &str) -> R<Option<std::rc::Rc<crate::value::Obj>>> {
+    with_stream(it, v, fname, |st| match &st.backend {
+        Backend::User(o) => Some(o.clone()),
+        _ => None,
+    })
+}
+
 pub(crate) fn with_stream<T>(it: &Interp, v: &Value, fname: &str, g: impl FnOnce(&mut Stream) -> T) -> R<T> {
     if let Value::Resource(r) = v {
         let mut d = r.data.borrow_mut();
@@ -113,7 +141,7 @@ pub(crate) fn with_stream<T>(it: &Interp, v: &Value, fname: &str, g: impl FnOnce
 
 impl Stream {
     pub(crate) fn new(backend: Backend, mode: &str, uri: &str, wrapper: &'static str) -> Stream {
-        Stream { backend, pos: 0, rbuf: ReadBuf::default(), eof: false, timeout: None, timed_out: false, blocking: true, context: None, mode: mode.to_string(), uri: uri.to_string(), wrapper, append: mode.starts_with('a') }
+        Stream { backend, pos: 0, rbuf: ReadBuf::default(), eof: false, timeout: None, timed_out: false, blocking: true, context: None, mode: mode.to_string(), uri: uri.to_string(), wrapper, append: mode.starts_with('a'), user_eof: false }
     }
 
     fn fill(&mut self, want: usize) -> usize {
@@ -162,6 +190,14 @@ impl Stream {
                 }
                 return self.rbuf.take(n);
             }
+            Backend::User(_) => {
+                self.fill_user(n, it);
+                let out = self.rbuf.take(n);
+                if self.rbuf.is_empty() && self.user_eof {
+                    self.eof = true;
+                }
+                return out;
+            }
             Backend::Stdin => {
                 it.flush();
                 let mut buf = vec![0u8; n];
@@ -177,8 +213,47 @@ impl Stream {
         out
     }
 
+    /// Read ahead from a user stream (stream_read in 8 KiB chunks, like PHP).
+    fn fill_user(&mut self, want: usize, it: &Interp) -> usize {
+        let Backend::User(o) = &self.backend else { return self.rbuf.len() };
+        let o = o.clone();
+        while self.rbuf.len() < want && !self.user_eof {
+            let (data, eof) = crate::wrappers::read(it, &o, 8192);
+            self.user_eof = eof || data.is_empty();
+            self.rbuf.extend_from_slice(&data);
+        }
+        self.rbuf.len()
+    }
+
     fn read_line(&mut self, max: Option<usize>, it: &Interp) -> Option<Vec<u8>> {
         let mut out = vec![];
+        if let Backend::User(_) = self.backend {
+            loop {
+                let room = max.map_or(usize::MAX, |m| m.saturating_sub(out.len()));
+                if room == 0 {
+                    break;
+                }
+                if self.rbuf.is_empty() && self.fill_user(1, it) == 0 {
+                    self.eof = true;
+                    break;
+                }
+                let avail = &self.rbuf.bytes()[..self.rbuf.len().min(room)];
+                match memchr::memchr(b'\n', avail) {
+                    Some(i) => {
+                        out.extend(self.rbuf.take(i + 1));
+                        break;
+                    }
+                    None => {
+                        let n = avail.len();
+                        out.extend(self.rbuf.take(n));
+                    }
+                }
+            }
+            if self.rbuf.is_empty() && self.user_eof {
+                self.eof = true;
+            }
+            return (!out.is_empty()).then_some(out);
+        }
         if let Backend::File(_) | Backend::Socket(_) = self.backend {
             // Files and sockets: find the newline in the read-ahead buffer, a chunk at a
             // time.
@@ -285,6 +360,10 @@ impl Stream {
                 }
             }
             Backend::Stdin => 0,
+            Backend::User(o) => {
+                let o = o.clone();
+                crate::wrappers::write(it, &o, data)
+            }
         }
     }
 
@@ -375,6 +454,13 @@ pub fn open(it: &Interp, path: &str, mode: &str) -> Result<Value, String> {
             crate::server::percent_decode_bytes(data)
         };
         return Ok(Resource::new("stream", Box::new(Stream::new(Backend::Memory(bytes), mode, path, "RFC2397"))));
+    }
+    if let Some(r) = crate::wrappers::open(it, path, mode) {
+        return r;
+    }
+    if crate::wrappers::disabled(path) {
+        let scheme = path.split_once("://").map_or("file", |s| s.0);
+        return Err(format!("fopen(): Unable to find the wrapper \"{scheme}\" - did you forget to enable it when you configured PHP?"));
     }
     let local = path.strip_prefix("file://").unwrap_or(path);
     if path.contains("://") && !path.starts_with("file://") {
@@ -560,6 +646,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("fclose", |it, _, a| {
         let v = arg(a, 0);
         with_stream(it, &v, "fclose", |_| ())?;
+        close_stream(it, &v);
         if let Value::Resource(r) = v {
             r.close();
         }
@@ -613,20 +700,47 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("ftell", |it, _, a| {
         let v = arg(a, 0);
+        if let Some(o) = user_obj(it, &v, "ftell")? {
+            let pos = crate::wrappers::method(it, &o, "stream_tell", vec![]).map(|p| it.to_int(&p)).transpose()?;
+            let buffered = with_stream(it, &v, "ftell", |st| st.rbuf.len() as i64)?;
+            return Ok(match pos {
+                Some(p) => Value::Int(p - buffered),
+                None => Value::Bool(false),
+            });
+        }
         with_stream(it, &v, "ftell", |st| Value::Int(st.tell()))
     });
     t.insert("fseek", |it, _, a| {
         let off = int(it, a, 1)?;
         let whence = if has(a, 2) { int(it, a, 2)? } else { 0 };
         let v = arg(a, 0);
+        if let Some(o) = user_obj(it, &v, "fseek")? {
+            // A relative seek is from the position PHP reports (past the read-ahead).
+            let buffered = with_stream(it, &v, "fseek", |st| st.rbuf.len() as i64)?;
+            let off = if whence == 1 { off - buffered } else { off };
+            let ok = crate::wrappers::method(it, &o, "stream_seek", vec![Value::Int(off), Value::Int(whence)]).is_some_and(|r| r.truthy());
+            with_stream(it, &v, "fseek", |st| {
+                st.rbuf.clear();
+                st.eof = false;
+                st.user_eof = false;
+            })?;
+            return Ok(Value::Int(if ok { 0 } else { -1 }));
+        }
         with_stream(it, &v, "fseek", |st| Value::Int(if st.seek(off, whence) { 0 } else { -1 }))
     });
-    t.insert("rewind", |it, _, a| {
+    t.insert("rewind", |it, f, a| {
         let v = arg(a, 0);
+        if user_obj(it, &v, "rewind")?.is_some() {
+            let r = (it.builtins["fseek"])(it, f, &mut [v, Value::Int(0), Value::Int(0)])?;
+            return Ok(Value::Bool(matches!(r, Value::Int(0))));
+        }
         with_stream(it, &v, "rewind", |st| Value::Bool(st.seek(0, 0)))
     });
     t.insert("fflush", |it, _, a| {
         let v = arg(a, 0);
+        if let Some(o) = user_obj(it, &v, "fflush")? {
+            return Ok(Value::Bool(crate::wrappers::method(it, &o, "stream_flush", vec![]).is_some_and(|r| r.truthy())));
+        }
         with_stream(it, &v, "fflush", |st| {
             if let Backend::File(f) = &mut st.backend {
                 let _ = f.flush();
@@ -637,6 +751,9 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("ftruncate", |it, _, a| {
         let size = int(it, a, 1)?.max(0) as u64;
         let v = arg(a, 0);
+        if let Some(o) = user_obj(it, &v, "ftruncate")? {
+            return Ok(Value::Bool(crate::wrappers::method(it, &o, "stream_truncate", vec![Value::Int(size as i64)]).is_some_and(|r| r.truthy())));
+        }
         with_stream(it, &v, "ftruncate", |st| {
             Value::Bool(match &mut st.backend {
                 Backend::Memory(m) => {
@@ -653,10 +770,20 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("flock", |it, _, a| {
         let v = arg(a, 0);
+        if let Some(o) = user_obj(it, &v, "flock")? {
+            let op = int(it, a, 1)?;
+            return Ok(Value::Bool(crate::wrappers::method(it, &o, "stream_lock", vec![Value::Int(op)]).is_some_and(|r| r.truthy())));
+        }
         with_stream(it, &v, "flock", |_| Value::Bool(true))
     });
     t.insert("fstat", |it, _, a| {
         let v = arg(a, 0);
+        if let Some(o) = user_obj(it, &v, "fstat")? {
+            return Ok(match crate::wrappers::method(it, &o, "stream_stat", vec![]) {
+                Some(Value::Array(st)) => Value::array(crate::wrappers::normalize_stat(&st)),
+                _ => Value::Bool(false),
+            });
+        }
         with_stream(it, &v, "fstat", |st| match &st.backend {
             Backend::File(f) => f.metadata().map(|m| stat_array(&m)).unwrap_or(Value::Bool(false)),
             _ => {
@@ -742,11 +869,18 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                 }
                 return Value::array(m);
             }
-            put("wrapper_type", Value::str(if st.wrapper == "plainfile" { "plainfile" } else { "PHP" }));
+            if let Backend::User(o) = &st.backend {
+                put("wrapper_data", Value::Object(o.clone()));
+            }
+            put("wrapper_type", Value::str(match st.wrapper {
+                "plainfile" | "user-space" => st.wrapper,
+                _ => "PHP",
+            }));
             put("stream_type", Value::str(match st.wrapper {
                 "plainfile" => "STDIO",
                 "TEMP" => "TEMP",
                 "MEMORY" => "MEMORY",
+                "user-space" => "user-space",
                 _ => "STDIO",
             }));
             put("mode", Value::str(&st.mode));
@@ -793,7 +927,6 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("stream_is_local", |_, _, _| Ok(Value::Bool(true)));
     t.insert("stream_isatty", |_, _, _| Ok(Value::Bool(false)));
     t.insert("posix_isatty", |_, _, _| Ok(Value::Bool(false)));
-    t.insert("stream_get_wrappers", |_, _, _| Ok(Value::array(PhpArray::from_list(["php", "file"].map(Value::str)))));
 
     // ---- directories -------------------------------------------------------------
     t.insert("opendir", |it, _, a| {

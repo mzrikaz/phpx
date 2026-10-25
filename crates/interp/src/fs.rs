@@ -128,7 +128,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         if length.is_some_and(|l| l < 0) {
             return Err(it.error("ValueError", "file_get_contents(): Argument #5 ($length) must be greater than or equal to 0"));
         }
-        if p.starts_with("php://") || p.starts_with("data:") || (p.contains("://") && !p.starts_with("file://")) {
+        if p.starts_with("php://") || p.starts_with("data:") || (p.contains("://") && !p.starts_with("file://")) || crate::wrappers::class_for(&p).is_some() || crate::wrappers::disabled(&p) {
             let res = match crate::streams::open(it, &p, "rb") {
                 Ok(r) => r,
                 Err(msg) => {
@@ -147,6 +147,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                 }
                 out
             })?;
+            crate::streams::close_stream(it, &res);
             let start = (offset.max(0) as usize).min(data.len());
             let end = length.map_or(data.len(), |l| (start + l as usize).min(data.len()));
             return Ok(Value::bytes(data[start..end].to_vec()));
@@ -189,7 +190,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             v => it.to_str(&v)?.to_vec(),
         };
         let append = int(it, a, 2)? & 8 != 0;
-        if p.starts_with("php://") || (p.contains("://") && !p.starts_with("file://")) {
+        if p.starts_with("php://") || (p.contains("://") && !p.starts_with("file://")) || crate::wrappers::class_for(&p).is_some() || crate::wrappers::disabled(&p) {
             let res = match crate::streams::open(it, &p, if append { "ab" } else { "wb" }) {
                 Ok(r) => r,
                 Err(msg) => {
@@ -198,6 +199,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                 }
             };
             let n = crate::streams::with_stream(it, &res, "file_put_contents", |st| st.write(&data, it))?;
+            crate::streams::close_stream(it, &res);
             return Ok(Value::Int(n as i64));
         }
         let p = p.strip_prefix("file://").map(str::to_string).unwrap_or(p);

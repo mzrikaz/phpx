@@ -1,0 +1,78 @@
+bool(true)
+bool(false)
+bool(true)
+close mem://a.txt
+int(18)
+close mem://a.txt
+string(18) "line1
+line2
+line3
+"
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+int(18)
+int(1700000000)
+string(6) "line1
+"
+string(3) "lin"
+int(9)
+bool(false)
+string(24) "line1
+line2
+line3
+line4
+"
+bool(true)
+int(24)
+string(10) "user-space"
+string(10) "user-space"
+string(10) "MemWrapper"
+close mem://a.txt
+close mem://a.txt
+array(4) {
+  [0]=>
+  string(5) "line1"
+  [1]=>
+  string(5) "line2"
+  [2]=>
+  string(5) "line3"
+  [3]=>
+  string(5) "line4"
+}
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+close mem://dir/y
+array(2) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(1) "y"
+}
+array(2) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(1) "y"
+}
+close mem://dir/z
+close mem://dir/z
+close mem://dir/w
+close mem://dir/w
+bool(true)
+string(2) "yy"
+bool(true)
+string(2) "yy"
+bool(true)
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(true)
+string(5) "plain"
