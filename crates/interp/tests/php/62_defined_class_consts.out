@@ -1,0 +1,10 @@
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+bool(false)
+enum(Lv::Emergency)
+int(5)
+bool(true)
+Undefined constant K::Z
+Undefined constant "NOPE"

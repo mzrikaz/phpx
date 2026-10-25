@@ -501,6 +501,14 @@ fn find_const_ast(it: &Interp, cls: &Rc<Class>, name: &str) -> Option<(Rc<Class>
     None
 }
 
+/// Whether class constant `name` of `cls` is visible from `scope`.
+pub fn const_visible(it: &Interp, cls: &Rc<Class>, name: &str, scope: Option<&Class>) -> bool {
+    match find_const_ast(it, cls, name) {
+        Some((declaring, Some(m), ..)) => it.member_visible(scope, Vis::of(m), &declaring.lname),
+        _ => true,
+    }
+}
+
 fn consts_desc(it: &Interp, cls: &Rc<Class>) -> Value {
     let names: Vec<Rc<str>> = cls.consts.borrow().keys().cloned().collect();
     // Own constants first, then each ancestor's (PHP's order).

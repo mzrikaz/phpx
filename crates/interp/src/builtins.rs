@@ -650,9 +650,18 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
         Ok(Value::array(out))
     });
-    t.insert("defined", |it, _, a| {
+    t.insert("defined", |it, f, a| {
         let n = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
-        Ok(Value::Bool(it.constants.borrow().contains_key(n.trim_start_matches('\\'))))
+        let n = n.trim_start_matches('\\');
+        if let Some((class, name)) = n.split_once("::") {
+            // Class constants and enum cases, visible from the caller.
+            let Some(cls) = it.find_class(class)? else { return Ok(Value::Bool(false)) };
+            if !cls.consts.borrow().contains_key(name) {
+                return Ok(Value::Bool(false));
+            }
+            return Ok(Value::Bool(crate::reflect::const_visible(it, &cls, name, f.class.as_deref())));
+        }
+        Ok(Value::Bool(it.constants.borrow().contains_key(n)))
     });
     t.insert("constant", |it, f, a| {
         let n = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
