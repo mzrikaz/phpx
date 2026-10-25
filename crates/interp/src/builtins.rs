@@ -542,8 +542,8 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("property_exists", |it, _, a| {
         let p = String::from_utf8_lossy(&s(it, a, 1)?).into_owned();
         Ok(Value::Bool(match arg(a, 0) {
-            Value::Object(o) => o.class.find_prop(&p).is_some() || o.props.borrow().contains_key(&*p),
-            Value::Str(n) => it.lookup_class(&String::from_utf8_lossy(&n)).ok().is_some_and(|c| c.find_prop(&p).is_some()),
+            Value::Object(o) => o.class.find_prop(&p).is_some() || has_static_prop(&o.class, &p) || o.props.borrow().contains_key(&*p),
+            Value::Str(n) => it.lookup_class(&String::from_utf8_lossy(&n)).ok().is_some_and(|c| c.find_prop(&p).is_some() || has_static_prop(&c, &p)),
             _ => false,
         }))
     });
@@ -938,6 +938,12 @@ fn min_max(it: &Interp, a: &[Value], want: std::cmp::Ordering, name: &str) -> R<
 }
 
 /// Cryptographically secure bytes from the OS (random_bytes(), tokens).
+/// property_exists() for a static property: declared by the class or
+/// inherited (an ancestor's private one isn't).
+fn has_static_prop(c: &crate::class::Class, name: &str) -> bool {
+    c.static_props.get(name).is_some_and(|sp| sp.vis != crate::class::Vis::Private || *sp.declaring == *c.lname)
+}
+
 pub fn secure_bytes(n: usize) -> Vec<u8> {
     use std::io::Read;
     let mut buf = vec![0u8; n];
