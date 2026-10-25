@@ -443,6 +443,11 @@ impl Native {
             return Err("excluded (PHPX_NATIVE_MAX / PHPX_NATIVE_SKIP)");
         }
         let mut a = analyze::analyze_mode(t.params, &t.captured, t.body, top_level)?;
+        if top_level && a.uses_this {
+            // A file included from a method sees its `$this`; file code
+            // binds frame variables, which `$this` is not.
+            return Err("$this in included file code");
+        }
         self.count += 1;
         let this_slot = if a.uses_this { Some(a.locals.slot("this") as usize) } else { None };
         let nlocals = a.locals.names.len();
