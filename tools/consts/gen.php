@@ -6,7 +6,7 @@
 //
 // Constants phpx defines itself take precedence over these.
 
-$exts = ['Core', 'standard', 'pcre', 'date', 'json', 'SPL', 'ctype', 'filter', 'hash', 'mbstring', 'zlib', 'random', 'iconv', 'session', 'tokenizer'];
+$exts = ['Core', 'standard', 'pcre', 'date', 'json', 'SPL', 'ctype', 'filter', 'hash', 'mbstring', 'zlib', 'random', 'iconv', 'session', 'tokenizer', 'libxml', 'dom'];
 $skip = ['TRUE', 'FALSE', 'NULL'];
 
 function lit(string $s): string
