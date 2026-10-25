@@ -165,6 +165,8 @@ impl Interp {
             return Ok(None);
         }
         let loaders = self.autoloaders.borrow().clone();
+        // Loading runs other files; errors and traces stay at the use site.
+        let at = self.pos.get();
         let mut result = Ok(None);
         for loader in loaders {
             if let Err(e) = self.call_callable(&loader, vec![Value::str(full)], vec![]) {
@@ -177,6 +179,7 @@ impl Interp {
             }
         }
         self.autoloading.borrow_mut().remove(&*l);
+        self.pos.set(at);
         result
     }
 
