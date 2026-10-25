@@ -62,7 +62,7 @@ enum SortBy {
     Key,
 }
 
-fn sort_generic(it: &Interp, f: &Frame, a: &mut Vec<Value>, by: SortBy, reverse: bool, keep_keys: bool, user: bool) -> R<Value> {
+fn sort_generic(it: &Interp, f: &Frame, a: &mut [Value], by: SortBy, reverse: bool, keep_keys: bool, user: bool) -> R<Value> {
     let fname = "sort";
     let arr = by_ref_array(it, a, fname)?;
     // Raw entries: an element that is a reference stays one after moving.
@@ -564,14 +564,18 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("krsort", |it, f, a| sort_generic(it, f, a, SortBy::Key, true, true, false));
     t.insert("uksort", |it, f, a| sort_generic(it, f, a, SortBy::Key, false, true, true));
     t.insert("natsort", |it, f, a| {
-        a.truncate(1);
-        a.push(Value::Int(6));
-        sort_generic(it, f, a, SortBy::Value, false, true, false)
+        // natsort = asort with SORT_NATURAL (| SORT_FLAG_CASE).
+        let mut v = vec![std::mem::take(&mut a[0]), Value::Int(6)];
+        let r = sort_generic(it, f, &mut v, SortBy::Value, false, true, false);
+        a[0] = std::mem::take(&mut v[0]);
+        r
     });
     t.insert("natcasesort", |it, f, a| {
-        a.truncate(1);
-        a.push(Value::Int(6 | 8));
-        sort_generic(it, f, a, SortBy::Value, false, true, false)
+        // natsort = asort with SORT_NATURAL (| SORT_FLAG_CASE).
+        let mut v = vec![std::mem::take(&mut a[0]), Value::Int(6 | 8)];
+        let r = sort_generic(it, f, &mut v, SortBy::Value, false, true, false);
+        a[0] = std::mem::take(&mut v[0]);
+        r
     });
 
     // stack/queue (by reference)

@@ -1444,7 +1444,7 @@ fn ptr_move(it: &Interp, a: &mut [Value], kind: u8) -> R<Value> {
 
 /// array_udiff / array_uintersect (compare values) and the *_ukey variants
 /// (compare keys) with a user comparator (last argument).
-fn set_op(it: &Interp, f: &mut crate::interp::Frame, a: &mut Vec<Value>, keep_common: bool, by_value: bool) -> R<Value> {
+fn set_op(it: &Interp, f: &mut crate::interp::Frame, a: &mut [Value], keep_common: bool, by_value: bool) -> R<Value> {
     let c = callable(it, f, a, a.len() - 1)?;
     let base = crate::builtins::arr(it, a, 0, "array_udiff")?;
     let others: Vec<Rc<PhpArray>> = (1..a.len() - 1).map(|i| crate::builtins::arr(it, a, i, "array_udiff")).collect::<R<_>>()?;

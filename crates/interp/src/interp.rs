@@ -92,7 +92,7 @@ pub struct ClosureData {
     pub ctx: Rc<NsCtx>,
 }
 
-pub type BuiltinFn = fn(&Interp, &mut Frame, &mut Vec<Value>) -> R<Value>;
+pub type BuiltinFn = fn(&Interp, &mut Frame, &mut [Value]) -> R<Value>;
 pub type NativeMethod = fn(&Interp, Option<&Rc<Obj>>, &Rc<Class>, Vec<Value>) -> R<Value>;
 
 #[derive(Clone)]

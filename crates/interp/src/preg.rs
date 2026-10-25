@@ -264,7 +264,7 @@ fn expand(rep: &str, caps: &Captures) -> String {
     out
 }
 
-fn replace(it: &Interp, f: &mut crate::interp::Frame, a: &mut Vec<Value>, callback: bool) -> R<Value> {
+fn replace(it: &Interp, f: &mut crate::interp::Frame, a: &mut [Value], callback: bool) -> R<Value> {
     let patterns: Vec<Value> = match arg(a, 0) {
         Value::Array(x) => x.values().collect(),
         v => vec![v],

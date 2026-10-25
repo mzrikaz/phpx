@@ -93,7 +93,7 @@ fn key_string(k: &Key) -> String {
     }
 }
 
-fn composer_autoload(it: &Interp, f: &mut Frame, a: &mut Vec<Value>) -> R<Value> {
+fn composer_autoload(it: &Interp, f: &mut Frame, a: &mut [Value]) -> R<Value> {
     let class = it.to_string_lossy(&a.first().cloned().unwrap_or_default())?;
     if let Some(path) = it.composer_find(class.trim_start_matches('\\')) {
         it.include(f, phpx_syntax::ast::IncludeKind::RequireOnce, &path.display().to_string())?;

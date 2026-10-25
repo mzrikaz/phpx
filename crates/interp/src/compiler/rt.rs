@@ -303,13 +303,12 @@ pub unsafe extern "C" fn rt_concat_assign(c: *mut Cx, local: *mut Value, rhs: *c
     let (it, _) = cx(c);
     // Fast path: appending an int or string to a string we own.
     if let (Value::Str(s), Value::Int(_) | Value::Str(_)) = (&mut *local, &*rhs) {
-        let buf = Rc::make_mut(s);
         match &*rhs {
-            Value::Int(n) => {
-                use std::io::Write;
-                let _ = write!(buf, "{n}");
+            Value::Int(n) => s.push_int(*n),
+            Value::Str(r) => {
+                let r = r.clone();
+                s.push_bytes(&r);
             }
-            Value::Str(r) => buf.extend_from_slice(r),
             _ => unreachable!(),
         }
         return 0;
@@ -318,7 +317,7 @@ pub unsafe extern "C" fn rt_concat_assign(c: *mut Cx, local: *mut Value, rhs: *c
         let cur = take(local);
         let v = match cur {
             Value::Str(mut s) => {
-                Rc::make_mut(&mut s).extend_from_slice(&b);
+                s.push_bytes(&b);
                 Value::Str(s)
             }
             other => {
@@ -364,14 +363,11 @@ pub unsafe extern "C" fn rt_cast(c: *mut Cx, kind: u64, v: *const Value, dst: *m
 }
 
 /// Append a value's string form to `buf` (ints formatted in place).
-fn append_str(it: &Interp, buf: &mut Vec<u8>, v: &Value) -> R<()> {
+fn append_str(it: &Interp, buf: &mut crate::value::PStr, v: &Value) -> R<()> {
     match v {
-        Value::Str(s) => buf.extend_from_slice(s),
-        Value::Int(n) => {
-            use std::io::Write;
-            let _ = write!(buf, "{n}");
-        }
-        other => buf.extend_from_slice(&it.to_str(other)?),
+        Value::Str(s) => buf.push_bytes(s),
+        Value::Int(n) => buf.push_int(*n),
+        other => buf.push_bytes(&it.to_str(other)?),
     }
     Ok(())
 }
@@ -380,15 +376,15 @@ fn append_str(it: &Interp, buf: &mut Vec<u8>, v: &Value) -> R<()> {
 pub unsafe extern "C" fn rt_interp(c: *mut Cx, parts: *const *const Value, n: u64, dst: *mut Value) -> u64 {
     let (it, _) = cx(c);
     let parts = std::slice::from_raw_parts(parts, n as usize);
-    let cap: usize = parts.iter().map(|p| if let Value::Str(s) = &**p { s.len() } else { 8 }).sum();
-    let mut buf = Vec::with_capacity(cap);
+    let cap: usize = parts.iter().map(|p| if let Value::Str(s) = &**p { s.len() } else { 20 }).sum();
+    let mut buf = crate::value::PStr::with_capacity(cap);
     for p in parts {
         if let Err(e) = append_str(it, &mut buf, &**p) {
             *it.pending.borrow_mut() = Some(e);
             return 1;
         }
     }
-    put(dst, Value::bytes(buf));
+    put(dst, Value::Str(buf));
     0
 }
 
@@ -1022,8 +1018,21 @@ pub unsafe extern "C" fn rt_call(
         return status(it, r, |v| put(dst, v));
     }
     if let Some(fun) = (*site).builtin.get() {
-        let mut vals: Vec<Value> = (0..n as usize).map(|i| take(args.add(i)).into_deref()).collect();
-        return status(it, crate::builtins::guarded(it, "built-in", || fun(it, f, &mut vals)), |v| put(dst, v));
+        // The generated code laid the arguments out contiguously: lend them
+        // to the built-in in place, then drop them (leaving null slots).
+        let vals = std::slice::from_raw_parts_mut(args, n as usize);
+        for v in vals.iter_mut() {
+            if let Value::Ref(_) = v {
+                *v = std::mem::take(v).into_deref();
+            }
+        }
+        let r = crate::builtins::guarded(it, "built-in", || fun(it, f, vals));
+        for v in vals.iter_mut() {
+            if !matches!(v, Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) {
+                drop(std::mem::take(v));
+            }
+        }
+        return status(it, r, |v| put(dst, v));
     }
     if let Some((entry, u)) = (*site).cached.get() {
         let u = &*u;
