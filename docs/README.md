@@ -47,3 +47,4 @@ Output is required to be byte-identical to PHP 8.5.
 - "to verify" marks statements that have not been confirmed against code or
   a test.
 - [Memory, leaks and security: known issues](security-and-memory.md)
+- [Configuration (php.ini, -d, phpx.json)](configuration.md)
