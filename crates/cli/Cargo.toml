@@ -1,0 +1,19 @@
+[package]
+name = "phpx-cli"
+description = "phpx command line: check, ast"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# In-process sampling profiler: PHPX_PROFILE=1 phpx run file.php
+profile = ["dep:pprof"]
+
+[[bin]]
+name = "phpx"
+path = "src/main.rs"
+
+[dependencies]
+phpx-syntax = { path = "../syntax" }
+phpx-interp = { path = "../interp" }
+pprof = { version = "0.14", optional = true }
