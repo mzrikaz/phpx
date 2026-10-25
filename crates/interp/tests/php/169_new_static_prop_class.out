@@ -1,0 +1,16 @@
+object(B)#2 (1) {
+  ["q"]=>
+  int(1)
+}
+object(C)#3 (1) {
+  ["q"]=>
+  int(2)
+}
+object(C)#4 (1) {
+  ["q"]=>
+  NULL
+}
+object(B)#1 (1) {
+  ["q"]=>
+  NULL
+}

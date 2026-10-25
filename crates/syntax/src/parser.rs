@@ -1437,14 +1437,23 @@ impl Parser {
     /// and index fetches (no calls), or a parenthesized expression.
     fn class_ref(&mut self, for_new: bool) -> PResult<ClassRef> {
         match self.peek().clone() {
-            Tok::Name(n) => {
+            Tok::Name(n) if !(self.at_p_at(1, "::") && matches!(self.peek_at(2), Tok::Var(_))) => {
                 self.bump();
                 Ok(ClassRef::Name(n))
             }
-            Tok::Var(_) => {
+            Tok::Name(_) | Tok::Var(_) => {
                 let start = self.span();
-                let v = self.var_ident()?;
-                let mut e = Expr::new(ExprKind::Var(v.name), v.span);
+                let mut e = if let Tok::Name(n) = self.peek().clone() {
+                    // `new static::$builder`: the class named by a static property.
+                    self.bump();
+                    self.bump();
+                    let v = self.var_ident()?;
+                    let name = Ident { name: v.name, span: v.span };
+                    Expr::new(ExprKind::StaticProp { class: ClassRef::Name(n), name }, self.since(start))
+                } else {
+                    let v = self.var_ident()?;
+                    Expr::new(ExprKind::Var(v.name), v.span)
+                };
                 loop {
                     if self.at_p("->") || self.at_p("?->") {
                         let nullsafe = self.bump().tok == Tok::Punct("?->");
