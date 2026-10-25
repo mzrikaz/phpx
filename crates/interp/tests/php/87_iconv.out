@@ -1,0 +1,41 @@
+string(8) "636166e9"
+string(5) "café"
+string(8) "004120ac"
+bool(false)
+int(5)
+int(4)
+string(5) "éllo"
+string(3) "llo"
+string(0) ""
+string(4) "éll"
+int(2)
+int(8)
+int(8)
+bool(false)
+string(26) "Subject: Prüfung Prüfung"
+string(36) "André Pirard <PIRARD@vm1.ulg.ac.be>"
+string(10) "ab plain c"
+array(3) {
+  ["Subject"]=>
+  string(8) "Prüfung"
+  ["To"]=>
+  string(19) "example@example.com"
+  ["X-A"]=>
+  array(2) {
+    [0]=>
+    string(3) "one"
+    [1]=>
+    string(4) "twö"
+  }
+}
+string(45) "Subject: =?UTF-8?B?UHLDvGZ1bmcgUHLDvGZ1bmc=?="
+string(26) "Subject: =?UTF-8?Q?plain?="
+string(5) "UTF-8"
+array(3) {
+  ["input_encoding"]=>
+  string(5) "UTF-8"
+  ["output_encoding"]=>
+  string(5) "UTF-8"
+  ["internal_encoding"]=>
+  string(5) "UTF-8"
+}
