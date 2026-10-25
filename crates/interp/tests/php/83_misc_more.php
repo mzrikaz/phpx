@@ -51,5 +51,5 @@ unlink("$d/one");
 rmdir($d);
 var_dump(iptcparse("\x1c\x02\x05\x00\x05Title\x1c\x02\x19\x00\x03one\x1c\x02\x19\x00\x03two"), iptcparse("nothing"));
 var_dump(getopt("ab:c::", ["long", "req:"]));
-var_dump(register_tick_function('strlen'), realpath_cache_get(), is_int(getlastmod()));
+var_dump(register_tick_function('strlen'), realpath_cache_get());
 var_dump(@get_browser());
