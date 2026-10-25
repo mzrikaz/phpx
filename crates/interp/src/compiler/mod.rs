@@ -138,6 +138,8 @@ pub struct Layout {
     /// `Cx::frame`, and `Frame::class` within the frame.
     pub cx_frame: i32,
     pub frame_class: i32,
+    /// `Frame::this` (an `Option<Rc<Obj>>`: the Rc's inner pointer or 0).
+    pub frame_this: i32,
 }
 
 pub fn layout() -> Option<Layout> {
@@ -167,7 +169,23 @@ fn probe_layout() -> Option<Layout> {
     // RefCell<Props>: where the value sits inside the cell.
     let cell = std::cell::RefCell::new(crate::props::Props::default());
     let in_cell = cell.as_ptr() as usize - &cell as *const _ as usize;
-    if size_of::<Option<std::rc::Rc<crate::class::Class>>>() != 8 {
+    if size_of::<Option<std::rc::Rc<crate::class::Class>>>() != 8 || size_of::<Option<std::rc::Rc<crate::value::Obj>>>() != 8 {
+        return None;
+    }
+    // `Frame::this` holds the same word an object Value's payload does.
+    // (Probed with an array: Rc's layout doesn't depend on T, and creating
+    // an object here would use up an object handle.)
+    let v = Value::array(crate::value::PhpArray::new());
+    let Value::Array(o) = &v else { return None };
+    let this = Some(o.clone());
+    let same = unsafe {
+        let a = *(&this as *const _ as *const usize);
+        let b = *((&v as *const Value as *const u8).add(tag::PAYLOAD as usize) as *const usize);
+        a == b
+    };
+    drop(this);
+    let none: Option<std::rc::Rc<crate::value::Obj>> = None;
+    if !same || unsafe { *(&none as *const _ as *const usize) } != 0 {
         return None;
     }
     Some(Layout {
@@ -175,6 +193,7 @@ fn probe_layout() -> Option<Layout> {
         none_tag,
         cx_frame: offset_of!(rt::Cx, frame) as i32,
         frame_class: offset_of!(crate::interp::Frame, class) as i32,
+        frame_this: offset_of!(crate::interp::Frame, this) as i32,
     })
 }
 
@@ -414,13 +433,30 @@ impl Native {
             l.b.ins().jump(bound, &[st.into()]);
             l.b.switch_to_block(from_args);
             let nparams = t.params.len();
-            if simple && this_slot.is_none() {
+            let lay = layout().filter(|_| inline_rc());
+            if simple && (this_slot.is_none() || lay.is_some()) {
                 // Exact arg count: move args into the parameter slots inline.
                 let (inline_b, helper_b) = (l.b.create_block(), l.b.create_block());
                 let exact = l.b.ins().icmp_imm_s(IntCC::Equal, nargsv, nparams as i64);
                 l.b.ins().brif(exact, inline_b, &[], helper_b, &[]);
                 l.b.switch_to_block(inline_b);
                 let flags = cranelift_codegen::ir::MemFlagsData::trusted();
+                if let (Some(ts), Some(lay)) = (this_slot, lay) {
+                    // `$this` from the frame (decline without one), with its
+                    // reference count bumped inline.
+                    let frame = l.b.ins().load(types::I64, flags, cxv, lay.cx_frame);
+                    let raw = l.b.ins().load(types::I64, flags, frame, lay.frame_this);
+                    let have = l.b.create_block();
+                    l.b.ins().brif(raw, have, &[], decline, &[]);
+                    l.b.switch_to_block(have);
+                    let rc = l.b.ins().load(types::I64, flags, raw, 0);
+                    let rc = l.b.ins().iadd_imm_s(rc, 1);
+                    l.b.ins().store(flags, rc, raw, 0);
+                    let dst = l.b.ins().stack_addr(types::I64, locals_slot, (ts * 16) as i32);
+                    let t = l.b.ins().iconst(types::I8, tag::OBJECT as i64);
+                    l.b.ins().store(flags, t, dst, 0);
+                    l.b.ins().store(flags, raw, dst, tag::PAYLOAD);
+                }
                 let null = l.b.ins().iconst(types::I8, tag::NULL as i64);
                 for i in 0..nparams {
                     let src = l.b.ins().iadd_imm_s(argsv, (i * 16) as i64);
