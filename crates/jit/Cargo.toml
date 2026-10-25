@@ -12,3 +12,4 @@ cranelift-jit = "0.137.0"
 cranelift-module = "0.137.0"
 cranelift-native = "0.137.0"
 phpx-syntax = { path = "../syntax" }
+rustc-hash = "2"

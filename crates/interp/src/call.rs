@@ -677,8 +677,11 @@ impl Interp {
         if pos.len() != u.decl.params.len() || jit.rejected(u.decl) {
             return None;
         }
-        let mut args = Vec::with_capacity(pos.len());
-        for (v, p) in pos.iter().zip(&u.decl.params) {
+        if pos.len() > 28 {
+            return None;
+        }
+        let mut buf = [JitVal::Int(0); 28];
+        for (i, (v, p)) in pos.iter().zip(&u.decl.params).enumerate() {
             let jv = match v.deref() {
                 Value::Int(n) => JitVal::Int(n),
                 Value::Float(f) => JitVal::Float(f),
@@ -690,10 +693,10 @@ impl Interp {
                 (Some(Type::Named(n)), JitVal::Int(i)) if n.eq_ignore_ascii_case("float") => JitVal::Float(i as f64),
                 _ => jv,
             };
-            args.push(jv);
+            buf[i] = jv;
         }
         let resolver = JitResolver(self);
-        match jit.call(u.decl, &args, &resolver) {
+        match jit.call(u.decl, &buf[..pos.len()], &resolver) {
             Outcome::Done(v) => Some(match v {
                 JitVal::Int(n) => Value::Int(n),
                 JitVal::Float(f) => Value::Float(f),

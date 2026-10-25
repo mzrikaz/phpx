@@ -10,7 +10,7 @@
 
 mod infer;
 
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet};
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{types, AbiParam, Block, InstBuilder, MemFlagsData, Value as CValue};
@@ -45,7 +45,7 @@ impl JitVal {
         }
     }
 
-    fn bits(self) -> i64 {
+    pub fn bits(self) -> i64 {
         match self {
             JitVal::Int(n) => n,
             JitVal::Float(f) => f.to_bits() as i64,
@@ -68,7 +68,9 @@ pub trait Resolver {
     fn resolve(&self, from: &'static Function, name: &str) -> Option<&'static Function>;
 }
 
-type Entry = unsafe extern "C" fn(*const i64, *mut i64) -> i64;
+/// Compiled entry: reads one slot per argument (`JitVal::bits`), writes the
+/// result slot. Status 0 = done, 2 = interrupted, other = deoptimized.
+pub type Entry = unsafe extern "C" fn(*const i64, *mut i64) -> i64;
 
 enum Spec {
     InProgress { ret: T, id: Option<FuncId> },
@@ -92,7 +94,7 @@ pub struct Jit {
     /// Unique suffix for internal symbol names (one per specialization).
     next_sym: u32,
     /// Functions that failed to compile: skipped from then on, cheaply.
-    rejected: std::collections::HashSet<usize>,
+    rejected: FxHashSet<usize>,
     /// Why functions were rejected (for `PHPX_JIT_LOG`).
     log: bool,
     /// Address of a byte flag the host sets to interrupt running code
@@ -132,9 +134,9 @@ impl Jit {
         let module = JITModule::new(JITBuilder::with_isa(isa, default_libcall_names()));
         Some(Jit {
             module,
-            specs: HashMap::new(),
-            hot: HashMap::new(),
-            deopts: HashMap::new(),
+            specs: HashMap::default(),
+            hot: HashMap::default(),
+            deopts: HashMap::default(),
             rejected: Default::default(),
             next_sym: 0,
             log: std::env::var("PHPX_JIT_LOG").is_ok(),
@@ -154,6 +156,15 @@ impl Jit {
         self.rejected.contains(&(f as *const Function as usize))
     }
 
+    /// The ready entry for `f` with these argument types, for callers that
+    /// cache it (a deopt must go back through `call`, which counts it).
+    pub fn ready_entry(&self, f: &'static Function, tys: &[Ty]) -> Option<(Entry, Ty)> {
+        match self.specs.get(&key(f, tys)) {
+            Some(Spec::Ready { entry: Some(e), ret, .. }) => Some((*e, *ret)),
+            _ => None,
+        }
+    }
+
     /// Run `f(args)` natively if possible.
     pub fn call(&mut self, f: &'static Function, args: &[JitVal], r: &dyn Resolver) -> Outcome {
         if args.len() > 28 {
@@ -167,7 +178,16 @@ impl Jit {
         let k = key(f, &tys);
         let (entry, ret) = match self.specs.get(&k) {
             Some(Spec::Ready { entry: Some(e), ret, .. }) => (*e, *ret),
-            Some(Spec::Failed) | Some(Spec::InProgress { .. }) => return Outcome::Skip,
+            Some(Spec::InProgress { .. }) => return Outcome::Skip,
+            Some(Spec::Failed) => {
+                // Failed as a callee of another function, or deoptimized too
+                // often: unless another specialization works, tell callers to
+                // stop asking (they cache their own fast path instead).
+                if !self.specs.iter().any(|(sk, s)| sk.0 == k.0 && matches!(s, Spec::Ready { .. })) {
+                    self.rejected.insert(k.0);
+                }
+                return Outcome::Skip;
+            }
             Some(Spec::Ready { entry: None, id, ret }) => {
                 // Compiled as a callee; build its entry wrapper now.
                 let (id, ret) = (*id, *ret);
@@ -306,7 +326,7 @@ impl Jit {
         } else if f.ret.is_some() {
             return Err("declared return type");
         }
-        let mut var_tys = HashMap::new();
+        let mut var_tys = HashMap::default();
         for (n, t) in vars {
             match t {
                 T::Ty(t) => {
@@ -332,7 +352,7 @@ impl Jit {
             let b = FunctionBuilder::new(&mut ctx.func, &mut fctx);
             let mut g = Gen {
                 b,
-                vars: HashMap::new(),
+                vars: HashMap::default(),
                 ret,
                 deopt: None,
                 interrupt: None,

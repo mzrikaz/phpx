@@ -838,6 +838,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "phpx-syntax",
+ "rustc-hash",
 ]
 
 [[package]]
