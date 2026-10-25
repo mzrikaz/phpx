@@ -25,8 +25,18 @@ fn timed_out() -> Error {
 /// from this module.
 pub fn select(fds: &[(BorrowedFd<'_>, bool, bool)], deadline: Option<Instant>) -> Result<Vec<(bool, bool)>> {
     if scheduler::current_task().is_some() {
+        // Ready already (or a zero timeout): answer without parking.
+        let now = poll_fds(fds, Some(Instant::now()))?;
+        if now.iter().any(|&(r, w)| r || w) || deadline.is_some_and(|d| Instant::now() >= d) {
+            return Ok(now);
+        }
         return scheduler::wait_fds(fds, deadline);
     }
+    poll_fds(fds, deadline)
+}
+
+/// poll(2) until `deadline` (None: forever).
+fn poll_fds(fds: &[(BorrowedFd<'_>, bool, bool)], deadline: Option<Instant>) -> Result<Vec<(bool, bool)>> {
     let mut p: Vec<libc::pollfd> = fds
         .iter()
         .map(|&(fd, r, w)| libc::pollfd {
