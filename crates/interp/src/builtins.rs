@@ -203,7 +203,6 @@ pub fn constants() -> HashMap<String, Value> {
         ("PHP_ROUND_HALF_ODD", 4),
         ("LC_ALL", 6),
         ("COUNT_NORMAL", 0),
-        ("COUNT_RECURSIVE", 1),
         ("MB_CASE_UPPER", 0),
         ("MB_CASE_LOWER", 1),
         ("MB_CASE_TITLE", 2),
@@ -211,6 +210,15 @@ pub fn constants() -> HashMap<String, Value> {
         add(k, Value::Int(v));
     }
     c
+}
+
+/// memory_limit crossed while building a large result: PHP's fatal error
+/// now, rather than returning a truncated result.
+fn mem_check(it: &Interp) -> R<()> {
+    match crate::alloc::take_over() {
+        Some((limit, tried)) => Err(it.memory_fatal(limit, tried)),
+        None => Ok(()),
+    }
 }
 
 /// `__debugInfo()` entries for var_dump / print_r.
@@ -229,6 +237,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         for v in a.iter() {
             let mut o = Out(vec![]);
             value::var_dump(v, 0, &mut o, &mut vec![], &|o| debug_info(it, o));
+            mem_check(it)?;
             it.echo(&o.0);
         }
         Ok(Value::Null)
@@ -236,6 +245,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("print_r", |it, _, a| {
         let mut o = Out(vec![]);
         value::print_r(&arg(a, 0), 0, &mut o, &mut vec![], &|o| debug_info(it, o));
+        mem_check(it)?;
         if arg(a, 1).truthy() {
             return Ok(Value::bytes(o.0));
         }
@@ -250,7 +260,10 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("var_export", |it, _, a| {
         let mut o = Out(vec![]);
-        value::var_export(&arg(a, 0), 0, &mut o);
+        if value::var_export_checked(&arg(a, 0), 0, &mut o) {
+            it.warn("var_export does not handle circular references");
+        }
+        mem_check(it)?;
         if arg(a, 1).truthy() {
             return Ok(Value::bytes(o.0));
         }

@@ -1,0 +1,41 @@
+array (
+  0 => 
+  \P::__set_state(array(
+     'a' => 
+    array (
+      0 => 1,
+      1 => 
+      array (
+        0 => 2,
+      ),
+    ),
+     'o' => 
+    (object) array(
+       'z' => 
+      array (
+        0 => 3,
+      ),
+    ),
+     'e' => 
+    \Suit::Hearts,
+  )),
+  1 => 
+  \Suit::Hearts,
+  2 => 
+  array (
+    0 => 
+    array (
+    ),
+  ),
+  3 => 
+  (object) array(
+  ),
+  4 => 1.0,
+  5 => 'a\'b',
+  6 => NULL,
+  7 => false,
+)
+(object) array(
+)
+array (
+)

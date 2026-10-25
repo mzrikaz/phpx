@@ -1,0 +1,91 @@
+array(2) {
+  [0]=>
+  *RECURSION*
+  ["x"]=>
+  int(1)
+}
+Array
+(
+    [0] => Array
+ *RECURSION*
+    [x] => 1
+)
+
+2
+array (
+  0 => NULL,
+  'x' => 1,
+)
+bool(false)
+int(6)
+string(18) "Recursion detected"
+bool(true)
+bool(true)
+2
+Error: Recursion detected
+Error: Recursion detected
+object(stdClass)#2 (2) {
+  ["me"]=>
+  *RECURSION*
+  ["list"]=>
+  array(1) {
+    [0]=>
+    *RECURSION*
+  }
+}
+stdClass Object
+(
+    [me] => stdClass Object
+ *RECURSION*
+    [list] => Array
+        (
+            [0] => stdClass Object
+ *RECURSION*
+        )
+
+)
+
+(object) array(
+   'me' => NULL,
+   'list' => 
+  array (
+    0 => NULL,
+  ),
+)
+bool(false)
+string(18) "Recursion detected"
+string(25) "[[1,[2,[3]]],[1,[2,[3]]]]"
+int(12)
+Array
+(
+    [0] => Array
+        (
+            [0] => 1
+            [1] => Array
+                (
+                    [0] => 2
+                    [1] => Array
+                        (
+                            [0] => 3
+                        )
+
+                )
+
+        )
+
+    [1] => Array
+        (
+            [0] => 1
+            [1] => Array
+                (
+                    [0] => 2
+                    [1] => Array
+                        (
+                            [0] => 3
+                        )
+
+                )
+
+        )
+
+)

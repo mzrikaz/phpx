@@ -26,6 +26,8 @@ thread_local! {
 pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("json_encode", |it, _, a| {
         let flags = int(it, a, 1)?;
+        let max = if crate::builtins::has(a, 2) { int(it, a, 2)? } else { 512 };
+        MAX_DEPTH.set(max.max(0) as usize);
         let mut out = String::new();
         match encode(it, &arg(a, 0), flags, 0, &mut out) {
             Ok(()) => {
@@ -104,11 +106,43 @@ fn nl(out: &mut String, flags: i64, depth: usize) {
     }
 }
 
+thread_local! {
+    /// json_encode()'s `$depth`: the most arrays/objects nested.
+    static MAX_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(512) };
+    /// Arrays and objects being encoded (outer to inner), to report a
+    /// structure that contains itself the way PHP does.
+    static PATH: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Pops the path entry when an array/object is done.
+struct OnPath;
+
+impl Drop for OnPath {
+    fn drop(&mut self) {
+        PATH.with(|p| p.borrow_mut().pop());
+    }
+}
+
 fn encode(it: &Interp, v: &Value, flags: i64, depth: usize, out: &mut String) -> Result<(), EncErr> {
+    let container = match v {
+        Value::Array(a) => Some(Rc::as_ptr(a) as usize),
+        Value::Object(o) => Some(Rc::as_ptr(o) as usize),
+        _ => None,
+    };
+    let _on_path = match container {
+        Some(p) => {
+            if PATH.with(|path| path.borrow().contains(&p)) {
+                return Err(EncErr::Json(6, "Recursion detected"));
+            }
+            PATH.with(|path| path.borrow_mut().push(p));
+            Some(OnPath)
+        }
+        None => None,
+    };
     if it.stack_low() {
         return Err(EncErr::Json(1, "Maximum stack depth exceeded"));
     }
-    if depth > 512 {
+    if container.is_some() && depth + 1 > MAX_DEPTH.get() {
         return Err(EncErr::Json(1, "Maximum stack depth exceeded"));
     }
     match v {

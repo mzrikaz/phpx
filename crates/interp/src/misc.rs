@@ -1017,44 +1017,56 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     }));
 
     t.insert("array_replace_recursive", |it, _, a| {
-        fn merge(base: &PhpArray, over: &PhpArray) -> PhpArray {
+        fn merge(it: &Interp, base: &PhpArray, over: &PhpArray, path: &mut Vec<usize>) -> R<PhpArray> {
             let mut out = base.clone();
             for (k, v) in over.iter() {
                 match (out.get(&k), &v) {
                     (Some(Value::Array(b)), Value::Array(o)) => {
-                        let m = merge(&b, o);
+                        let p = std::rc::Rc::as_ptr(o) as usize;
+                        if path.contains(&p) || crate::value::stack_low() {
+                            return Err(it.error("Error", "Recursion detected"));
+                        }
+                        path.push(p);
+                        let m = merge(it, &b, o, path)?;
+                        path.pop();
                         out.insert(k, Value::array(m));
                     }
                     _ => out.insert(k, v),
                 }
             }
-            out
+            Ok(out)
         }
         let mut acc = (*crate::builtins::arr(it, a, 0, "array_replace_recursive")?).clone();
         for i in 1..a.len() {
             let o = crate::builtins::arr(it, a, i, "array_replace_recursive")?;
-            acc = merge(&acc, &o);
+            acc = merge(it, &acc, &o, &mut vec![])?;
         }
         Ok(Value::array(acc))
     });
     t.insert("array_walk_recursive", |it, f, a| {
         let c = callable(it, f, a, 1)?;
         let extra = if has(a, 2) { vec![arg(a, 2)] } else { vec![] };
-        fn walk(it: &Interp, c: &crate::interp::Callable, v: &Value, extra: &[Value]) -> R<()> {
+        fn walk(it: &Interp, c: &crate::interp::Callable, v: &Value, extra: &[Value], path: &mut Vec<usize>) -> R<()> {
             if let Value::Array(x) = v {
+                let p = std::rc::Rc::as_ptr(x) as usize;
+                if path.contains(&p) || crate::value::stack_low() {
+                    return Err(it.error("Error", "Recursion detected"));
+                }
+                path.push(p);
                 for (k, v) in x.iter() {
                     if matches!(v, Value::Array(_)) {
-                        walk(it, c, &v, extra)?;
+                        walk(it, c, &v, extra, path)?;
                     } else {
                         let mut args = vec![v, k.to_value()];
                         args.extend(extra.iter().cloned());
                         it.call_callable(c, args, vec![])?;
                     }
                 }
+                path.pop();
             }
             Ok(())
         }
-        walk(it, &c, &arg(a, 0), &extra)?;
+        walk(it, &c, &arg(a, 0), &extra, &mut vec![])?;
         Ok(Value::Bool(true))
     });
 

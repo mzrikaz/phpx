@@ -633,13 +633,8 @@ fn count(it: &Interp, v: &Value, recursive: bool) -> R<Value> {
         Value::Array(x) => {
             let mut n = x.len() as i64;
             if recursive {
-                for v in x.values() {
-                    if let Value::Array(_) = v {
-                        if let Value::Int(m) = count(it, &v, true)? {
-                            n += m;
-                        }
-                    }
-                }
+                let mut path = vec![std::rc::Rc::as_ptr(x) as usize];
+                n += count_nested(it, x, &mut path);
             }
             Ok(Value::Int(n))
         }
@@ -652,6 +647,25 @@ fn count(it: &Interp, v: &Value, recursive: bool) -> R<Value> {
             &format!("count(): Argument #1 ($value) must be of type Countable|array, {} given", other.debug_type()),
         )),
     }
+}
+
+/// Elements of nested arrays for COUNT_RECURSIVE; an array met again on
+/// its own path (a reference to itself) is a warning, like PHP.
+fn count_nested(it: &Interp, x: &PhpArray, path: &mut Vec<usize>) -> i64 {
+    let mut n = 0;
+    for v in x.values() {
+        if let Value::Array(inner) = v {
+            let p = std::rc::Rc::as_ptr(&inner) as usize;
+            if path.contains(&p) || crate::value::stack_low() {
+                it.warn("count(): Recursion detected");
+                continue;
+            }
+            path.push(p);
+            n += inner.len() as i64 + count_nested(it, &inner, path);
+            path.pop();
+        }
+    }
+    n
 }
 
 fn key_exists(it: &Interp, a: &[Value]) -> R<Value> {

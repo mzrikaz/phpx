@@ -1002,6 +1002,12 @@ pub fn identical(a: &Value, b: &Value) -> bool {
 }
 
 /// `==`
+/// Less than 256 KiB of task stack left: recursive walks over values stop
+/// (recursive structures built with references can be arbitrarily deep).
+pub fn stack_low() -> bool {
+    phpx_runtime::stack_remaining().is_some_and(|r| r < 256 * 1024)
+}
+
 pub fn loose_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Ref(x), _) => loose_eq(&x.borrow(), b),
@@ -1014,7 +1020,10 @@ pub fn loose_eq(a: &Value, b: &Value) -> bool {
                 })
         }
         (Value::Array(x), Value::Array(y)) => {
-            x.len() == y.len() && x.iter().all(|(k, v)| y.get(&k).is_some_and(|w| loose_eq(&v, &w)))
+            // The same array (also how a self-referencing array compares
+            // equal to itself without recursing forever).
+            Rc::ptr_eq(x, y)
+                || (x.len() == y.len() && !stack_low() && x.iter().all(|(k, v)| y.get(&k).is_some_and(|w| loose_eq(&v, &w))))
         }
         _ => compare(a, b) == Some(Ordering::Equal),
     }
@@ -1050,6 +1059,14 @@ pub fn compare(a: &Value, b: &Value) -> Option<Ordering> {
             None => Some((**s).cmp(&*b.scalar_bytes().unwrap())),
         },
         (Array(x), Array(y)) => {
+            if Rc::ptr_eq(x, y) {
+                return Some(Ordering::Equal);
+            }
+            if stack_low() {
+                // Nested beyond what the stack can take (a recursive
+                // structure through references): uncomparable.
+                return None;
+            }
             if x.len() != y.len() {
                 return Some(x.len().cmp(&y.len()));
             }
@@ -1095,14 +1112,20 @@ fn bytes_lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
 pub struct Out(pub Vec<u8>);
 
 impl Out {
+    // Past memory_limit, stop growing: the fatal error is reported at the
+    // next statement boundary (a dump can be quadratic in nesting depth).
     fn s(&mut self, s: &str) {
-        self.0.extend_from_slice(s.as_bytes());
+        self.b(s.as_bytes());
     }
     fn b(&mut self, b: &[u8]) {
-        self.0.extend_from_slice(b);
+        if !crate::alloc::over() {
+            self.0.extend_from_slice(b);
+        }
     }
     fn pad(&mut self, n: usize) {
-        self.0.extend(std::iter::repeat_n(b' ', n));
+        if !crate::alloc::over() {
+            self.0.extend(std::iter::repeat_n(b' ', n));
+        }
     }
 }
 
@@ -1142,7 +1165,7 @@ fn debug_label(k: &Key) -> DebugLabel {
     }
 }
 
-pub fn var_dump(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>, dbg: DebugInfo) {
+pub fn var_dump(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<usize>, dbg: DebugInfo) {
     var_dump_item(&v.deref(), false, indent, out, seen, dbg)
 }
 
@@ -1152,8 +1175,10 @@ fn is_shared_ref(raw: &Value) -> bool {
     matches!(raw, Value::Ref(s) if Rc::strong_count(s) > 1)
 }
 
-fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>, dbg: DebugInfo) {
+fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut Vec<usize>, dbg: DebugInfo) {
     out.pad(indent);
+    // A reference back to an array on the path prints as plain *RECURSION*.
+    let amp = amp && !matches!(v, Value::Array(a) if seen.contains(&(Rc::as_ptr(a) as usize)));
     if amp {
         out.0.push(b'&');
     }
@@ -1171,6 +1196,14 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
             out.s("\"\n");
         }
         Value::Array(a) => {
+            // An array on the current path again (through a reference):
+            // recursion, as PHP reports it.
+            let ptr = Rc::as_ptr(a) as usize;
+            if seen.contains(&ptr) || stack_low() {
+                out.s("*RECURSION*\n");
+                return;
+            }
+            seen.push(ptr);
             out.s(&format!("array({}) {{\n", a.len()));
             for (k, raw) in a.iter_raw() {
                 let (amp, v) = (is_shared_ref(raw), raw.deref());
@@ -1185,6 +1218,7 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
                 }
                 var_dump_item(&v, amp, indent + 2, out, seen, dbg);
             }
+            seen.pop();
             out.pad(indent);
             out.s("}\n");
         }
@@ -1194,7 +1228,7 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
                 out.s(&format!("enum({}::{})\n", o.class.name, bytes_lossy(&case)));
                 return;
             }
-            let ptr = Rc::as_ptr(o);
+            let ptr = Rc::as_ptr(o) as usize;
             if seen.contains(&ptr) {
                 out.s("*RECURSION*\n");
                 return;
@@ -1238,18 +1272,24 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
     }
 }
 
-pub fn print_r(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>, dbg: DebugInfo) {
+pub fn print_r(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<usize>, dbg: DebugInfo) {
     match v {
         Value::Ref(s) => print_r(&s.borrow().clone(), indent, out, seen, dbg),
         Value::Array(a) => {
             out.s("Array\n");
+            let ptr = Rc::as_ptr(a) as usize;
+            if seen.contains(&ptr) || stack_low() {
+                out.s(" *RECURSION*");
+                return;
+            }
+            seen.push(ptr);
             print_r_body(a.iter().map(|(k, v)| (key_label(&k), v)).collect(), indent, out, seen, dbg);
+            seen.pop();
         }
         Value::Object(o) if !o.class.is_enum() => {
-            let ptr = Rc::as_ptr(o);
+            let ptr = Rc::as_ptr(o) as usize;
             out.s(&format!("{} Object\n", o.class.name));
             if seen.contains(&ptr) {
-                out.pad(indent + 4);
                 out.s(" *RECURSION*");
                 return;
             }
@@ -1302,7 +1342,7 @@ fn key_label(k: &Key) -> Vec<u8> {
     }
 }
 
-fn print_r_body(items: Vec<(Vec<u8>, Value)>, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>, dbg: DebugInfo) {
+fn print_r_body(items: Vec<(Vec<u8>, Value)>, indent: usize, out: &mut Out, seen: &mut Vec<usize>, dbg: DebugInfo) {
     out.pad(indent);
     out.s("(\n");
     for (k, v) in items {
@@ -1318,8 +1358,21 @@ fn print_r_body(items: Vec<(Vec<u8>, Value)>, indent: usize, out: &mut Out, seen
 }
 
 pub fn var_export(v: &Value, indent: usize, out: &mut Out) {
+    var_export_checked(v, indent, out);
+}
+
+/// var_export; true if it met a circular reference (written as NULL; the
+/// caller warns, like PHP).
+pub fn var_export_checked(v: &Value, indent: usize, out: &mut Out) -> bool {
+    let mut circular = false;
+    export(v, indent, out, &mut vec![], &mut circular);
+    circular
+}
+
+fn export(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<usize>, circular: &mut bool) {
+    let var_export = |v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<usize>, circular: &mut bool| export(v, indent, out, seen, circular);
     match v {
-        Value::Ref(s) => var_export(&s.borrow().clone(), indent, out),
+        Value::Ref(s) => var_export(&s.borrow().clone(), indent, out, seen, circular),
         Value::Null | Value::Resource(_) => out.s("NULL"),
         Value::Bool(b) => out.s(if *b { "true" } else { "false" }),
         Value::Int(n) => out.s(&n.to_string()),
@@ -1336,38 +1389,70 @@ pub fn var_export(v: &Value, indent: usize, out: &mut Out) {
             out.s("'");
         }
         Value::Array(a) => {
+            let ptr = Rc::as_ptr(a) as usize;
+            if seen.contains(&ptr) || stack_low() {
+                *circular = true;
+                out.s("NULL");
+                return;
+            }
+            seen.push(ptr);
+            // Nested: on its own line (after the recursion check, which
+            // writes a plain NULL), as PHP lays it out.
+            if indent > 0 {
+                out.s("\n");
+                out.pad(indent);
+            }
             out.s("array (\n");
             for (k, v) in a.iter() {
                 out.pad(indent + 2);
                 match k {
                     Key::Int(n) => out.s(&n.to_string()),
-                    Key::Str(s) => var_export(&Value::Str(s.clone()), 0, out),
+                    Key::Str(s) => var_export(&Value::Str(s.clone()), 0, out, seen, circular),
                 }
                 out.s(" => ");
-                if matches!(v, Value::Array(_) | Value::Object(_)) {
-                    out.s("\n");
-                    out.pad(indent + 2);
-                }
-                var_export(&v, indent + 2, out);
+                var_export(&v, indent + 2, out, seen, circular);
                 out.s(",\n");
             }
+            seen.pop();
             out.pad(indent);
             out.s(")");
         }
         Value::Object(o) if o.class.is_enum() => {
+            if indent > 0 {
+                out.s("\n");
+                out.pad(indent);
+            }
             let case = o.get_prop("name").and_then(|v| v.scalar_bytes()).unwrap_or_else(|| pstr(""));
             out.s(&format!("\\{}::{}", o.class.name, bytes_lossy(&case)));
         }
         Value::Object(o) => {
-            out.s(&format!("\\{}::__set_state(array(\n", o.class.name));
+            let ptr = Rc::as_ptr(o) as usize;
+            if seen.contains(&ptr) || stack_low() {
+                *circular = true;
+                out.s("NULL");
+                return;
+            }
+            seen.push(ptr);
+            if indent > 0 {
+                out.s("\n");
+                out.pad(indent);
+            }
+            // stdClass exports as a cast (PHP 7.3+).
+            let std = o.class.lname.as_ref() == "stdclass";
+            if std {
+                out.s("(object) array(\n");
+            } else {
+                out.s(&format!("\\{}::__set_state(array(\n", o.class.name));
+            }
             for (k, v) in o.prop_list() {
                 out.pad(indent + 3);
                 out.s(&format!("'{k}' => "));
-                var_export(&v, indent + 2, out);
+                var_export(&v, indent + 2, out, seen, circular);
                 out.s(",\n");
             }
+            seen.pop();
             out.pad(indent);
-            out.s("))");
+            out.s(if std { ")" } else { "))" });
         }
     }
 }

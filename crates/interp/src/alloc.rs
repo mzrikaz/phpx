@@ -197,6 +197,12 @@ unsafe impl GlobalAlloc for Counting {
     }
 }
 
+/// The limit was crossed and not yet reported (code that produces a lot
+/// of data in one go, like var_dump, stops early).
+pub fn over() -> bool {
+    OVER.load(Relaxed)
+}
+
 /// Bytes charged to the script now.
 fn raw(c: &'static std::thread::LocalKey<std::cell::Cell<isize>>) -> isize {
     c.with(|c| c.get())
