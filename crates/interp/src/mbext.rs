@@ -9,6 +9,13 @@ use crate::builtins::{arg, has, int, s};
 use crate::interp::{BuiltinFn, Interp, R};
 use crate::value::{pstr, Key, PhpArray, Value};
 
+/// mbstring settings of one request (server workers).
+pub fn reset() {
+    SUBST.with(|s| *s.borrow_mut() = Value::Int(63));
+    LANG.with(|l| *l.borrow_mut() = "neutral".into());
+    SEARCH.with(|s| *s.borrow_mut() = Default::default());
+}
+
 fn text(it: &Interp, a: &[Value], i: usize) -> R<String> {
     Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
 }

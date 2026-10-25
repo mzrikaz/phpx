@@ -243,6 +243,12 @@ thread_local! {
     static ERRORS: RefCell<Vec<(u8, i64, String, String, u32)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// libxml state of one request (server workers).
+pub fn reset() {
+    USE_INTERNAL.with(|u| u.set(false));
+    ERRORS.with(|e| e.borrow_mut().clear());
+}
+
 const LIBXML_NOERROR: i64 = 32;
 const LIBXML_NOWARNING: i64 = 64;
 

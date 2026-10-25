@@ -82,6 +82,12 @@ thread_local! {
     static ATTRS: RefCell<(Vec<AttrReg>, HashMap<usize, usize>)> = RefCell::new((vec![], HashMap::new()));
 }
 
+/// Registries hold one interpreter's contexts (server workers).
+pub fn reset() {
+    FNS.with(|r| *r.borrow_mut() = (vec![], HashMap::new()));
+    ATTRS.with(|r| *r.borrow_mut() = (vec![], HashMap::new()));
+}
+
 fn fn_id(src: Src, ctx: &Rc<NsCtx>, class: Option<Rc<str>>) -> i64 {
     FNS.with(|r| {
         let mut r = r.borrow_mut();

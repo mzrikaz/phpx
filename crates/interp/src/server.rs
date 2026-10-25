@@ -690,11 +690,31 @@ pub fn serve(addr: &str, docroot: Option<&Path>, router: Option<&Path>) -> i32 {
         }
     };
     let cfg = Arc::new(Config { docroot, router, addr: addr.to_string() });
+    // Worker threads run requests one at a time each (PHP's server has one
+    // unless PHP_CLI_SERVER_WORKERS says more); a worker keeps parsed
+    // files between requests, while each request gets a fresh interpreter.
+    let workers = std::env::var("PHP_CLI_SERVER_WORKERS").ok().and_then(|v| v.parse::<usize>().ok()).filter(|&n| n > 1).unwrap_or(1);
+    let (tx, rx) = std::sync::mpsc::channel::<TcpStream>();
+    let rx = Arc::new(std::sync::Mutex::new(rx));
+    for _ in 0..workers {
+        let (rx, cfg) = (rx.clone(), cfg.clone());
+        let spawned = std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(move || loop {
+            let next = rx.lock().ok().and_then(|r| r.recv().ok());
+            let Some(stream) = next else { return };
+            handle(stream, cfg.clone());
+            crate::reset_request_state();
+        });
+        if spawned.is_err() {
+            eprintln!("phpx: could not start a server worker thread");
+            return 1;
+        }
+    }
     log(&format!("PHP 8.5.10 Development Server (http://{addr}) started"));
     for conn in listener.incoming() {
         let Ok(stream) = conn else { continue };
-        let cfg = cfg.clone();
-        let _ = std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(move || handle(stream, cfg));
+        if tx.send(stream).is_err() {
+            return 1;
+        }
     }
     0
 }

@@ -111,6 +111,9 @@ pub enum Callable {
 
 thread_local! {
     static EMPTY_NAME: Rc<str> = Rc::from("");
+    /// Parsed files by path (syntax trees are immutable, so they outlive
+    /// any one interpreter on this thread).
+    static PARSED: RefCell<HashMap<PathBuf, (&'static str, &'static ast::File)>> = RefCell::new(HashMap::new());
 }
 
 /// A function's variables. Keys borrow from the (leaked) AST: phpx has no
@@ -550,6 +553,12 @@ impl Interp {
 
     /// Parse a file and return its AST (leaked: code lives for the process).
     pub fn parse_file(&self, path: &Path, src: String) -> Result<(usize, &'static ast::File), String> {
+        // Same file, same content: reuse its syntax tree (across includes,
+        // and across the requests a server worker thread runs).
+        let cached = PARSED.with(|p| p.borrow().get(path).filter(|(s, _)| **s == *src).copied());
+        if let Some((s, file)) = cached {
+            return Ok((self.add_file(path.to_path_buf(), s), file));
+        }
         // Parsed code lives for the whole run (like opcache): not charged
         // to memory_limit.
         let before = crate::alloc::raw_used();
@@ -570,7 +579,9 @@ impl Interp {
         if !errors.is_empty() {
             return Err(errors.concat());
         }
-        Ok((id, Box::leak(Box::new(file))))
+        let file: &'static ast::File = Box::leak(Box::new(file));
+        PARSED.with(|p| p.borrow_mut().insert(path.to_path_buf(), (src, file)));
+        Ok((id, file))
     }
 
     /// Execute a file's top level in `frame` (shared scope, like `include`).

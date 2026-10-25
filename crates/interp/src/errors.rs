@@ -53,6 +53,16 @@ fn label(level: i64) -> &'static str {
     }
 }
 
+/// Forget one request's handlers and last error (server workers).
+pub fn reset() {
+    ERROR_HANDLERS.with(|h| h.borrow_mut().clear());
+    EXCEPTION_HANDLERS.with(|h| h.borrow_mut().clear());
+    LAST.with(|l| *l.borrow_mut() = None);
+    RAISED.with(|r| *r.borrow_mut() = None);
+    ANY_RAISED.with(|a| a.set(false));
+    IN_HANDLER.with(|h| h.set(false));
+}
+
 /// error_reporting(), as seen from PHP code (masked inside `@`).
 pub fn reporting(it: &Interp) -> i64 {
     let level = it.ini_get("error_reporting").and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(E_ALL);

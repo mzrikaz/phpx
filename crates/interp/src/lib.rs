@@ -138,6 +138,15 @@ pub fn run_source_args(path: &Path, src: String, argv: Vec<String>, out: Box<dyn
     run_main(path, src, out, Box::new(move |_, frame| cli_globals(frame, &script, &argv))).0
 }
 
+/// Clear the thread-local state one request leaves behind, before a
+/// server worker thread runs the next one.
+pub(crate) fn reset_request_state() {
+    errors::reset();
+    dom::reset();
+    mbext::reset();
+    reflect::reset();
+}
+
 /// Sets up a script's globals once its interpreter exists.
 pub(crate) type Setup = Box<dyn FnOnce(&Rc<Interp>, &mut Frame)>;
 
