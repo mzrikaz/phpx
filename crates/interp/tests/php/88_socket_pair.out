@@ -1,0 +1,9 @@
+string(6) "stream"
+int(5)
+string(5) "ping
+"
+string(4) "pong"
+bool(true)
+int(5)
+string(5) "hello"
+bool(false)

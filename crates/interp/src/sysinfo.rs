@@ -428,5 +428,44 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         unsafe { libc::closelog() };
         Ok(Value::Bool(true))
     });
+    t.insert("stream_socket_pair", |it, _, a| {
+        let (domain, ty, proto) = (int(it, a, 0)?, int(it, a, 1)?, int(it, a, 2)?);
+        let mut fds = [0i32; 2];
+        if unsafe { libc::socketpair(domain as i32, ty as i32, proto as i32, fds.as_mut_ptr()) } != 0 {
+            it.warn(&format!("stream_socket_pair(): Failed to create sockets: [{}]: {}", std::io::Error::last_os_error().raw_os_error().unwrap_or(0), std::io::Error::last_os_error()));
+            return Ok(Value::Bool(false));
+        }
+        let mut out = PhpArray::new();
+        for fd in fds {
+            let owned = unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(fd) };
+            match phpx_runtime::net::Pipe::from_fd(owned) {
+                Ok(p) => {
+                    out.push(crate::sockets::pipe_stream(crate::sockets::Sock::pipe(p, None), "r+"));
+                }
+                Err(e) => return Err(crate::native::rt_error(it, e)),
+            }
+        }
+        Ok(Value::array(out))
+    });
+    t.insert("stream_socket_recvfrom", |it, f, a| {
+        let mut args = vec![arg(a, 0), arg(a, 1)];
+        let r = (it.builtins["fread"])(it, f, &mut args)?;
+        if a.len() > 3 {
+            a[3] = Value::str("");
+        }
+        Ok(r)
+    });
+    t.insert("stream_socket_sendto", |it, f, a| {
+        let mut args = vec![arg(a, 0), arg(a, 1)];
+        (it.builtins["fwrite"])(it, f, &mut args)
+    });
+    t.insert("get_headers", |it, _, a| {
+        let url = text(it, a, 0)?;
+        match url.split_once("://") {
+            Some((scheme, _)) => it.warn(&format!("get_headers(): Unable to find the wrapper \"{scheme}\" - did you forget to enable it when you configured PHP?")),
+            None => it.warn(&format!("get_headers({url}): Failed to open stream: No such file or directory")),
+        }
+        Ok(Value::Bool(false))
+    });
     let _ = arg;
 }
