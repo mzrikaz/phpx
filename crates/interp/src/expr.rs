@@ -1704,9 +1704,10 @@ impl Interp {
         match vis {
             Vis::Public => true,
             Vis::Private => scope.is_some_and(|c| c.name.eq_ignore_ascii_case(declaring) || *c.lname == *declaring),
+            // (Anonymous classes declare members under their display name.)
             Vis::Protected => scope.is_some_and(|c| {
                 let d = self.lower.get(declaring);
-                c.is_a(&d) || self.classes.borrow().get(&*d).is_some_and(|dc| dc.is_a(&c.lname))
+                c.name.eq_ignore_ascii_case(declaring) || c.is_a(&d) || self.classes.borrow().get(&*d).is_some_and(|dc| dc.is_a(&c.lname))
             }),
         }
     }
