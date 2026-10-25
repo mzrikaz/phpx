@@ -177,7 +177,7 @@ fn visit_value(v: &Value, f: &mut dyn FnMut(*const Obj)) -> bool {
 /// (borrowed right now), so treat it as externally referenced.
 fn visit_obj(o: &Obj, f: &mut dyn FnMut(*const Obj)) -> bool {
     let Ok(props) = o.props.try_borrow() else { return false };
-    for v in props.values() {
+    for v in props.all_values() {
         if !visit_value(v, f) {
             return false;
         }

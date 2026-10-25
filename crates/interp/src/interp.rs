@@ -44,6 +44,9 @@ pub fn slot(v: Value) -> Slot {
     Rc::new(RefCell::new(v))
 }
 
+/// File id of the prelude (built-in classes written in PHP).
+pub const PRELUDE_FILE: usize = 0;
+
 /// Statement being executed (for error messages). `repr(C)` so native code
 /// can update it with plain stores.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -795,7 +798,11 @@ impl Interp {
         if crate::value::DESTRUCT_PENDING.load(std::sync::atomic::Ordering::Relaxed) {
             self.run_destructors()?;
         }
-        self.pos.set(Pos { file: f.ctx.file as u32, off: s.span.start });
+        // Built-in classes written in PHP (the prelude, file 0) behave like
+        // internal code: diagnostics point at the caller's statement.
+        if f.ctx.file != PRELUDE_FILE {
+            self.pos.set(Pos { file: f.ctx.file as u32, off: s.span.start });
+        }
         match &s.kind {
             StmtKind::Expr(e) => {
                 self.eval(f, e)?;

@@ -304,6 +304,9 @@ impl Interp {
                 Value::Array(_) => v,
                 Value::Null => Value::array(PhpArray::new()),
                 Value::Object(o) if o.class.is_a("closure") => Value::array(PhpArray::from_list([Value::Object(o)])),
+                // Built-in classes whose properties are their storage
+                // (ArrayObject, ArrayIterator).
+                Value::Object(o) if o.class.find_method("__phpx_cast").is_some() => self.call_method(&o, "__phpx_cast", vec![])?,
                 Value::Object(o) => {
                     let mut a = PhpArray::new();
                     // (array) cast: private/protected keys are mangled.

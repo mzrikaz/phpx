@@ -818,7 +818,9 @@ impl Interp {
                 _ => Value::Null,
             },
             Body::Expr(e) => {
-                self.pos.set(crate::interp::Pos { file: inv.ctx.file as u32, off: e.span.start });
+                if inv.ctx.file != crate::interp::PRELUDE_FILE {
+                    self.pos.set(crate::interp::Pos { file: inv.ctx.file as u32, off: e.span.start });
+                }
                 self.eval(&mut f, e)?
             }
         };
@@ -1031,6 +1033,10 @@ impl Interp {
     /// call site.
     pub fn param_type_error(&self, display: &str, i: usize, p: &ast::Param, ty: &Type, v: &Value, file: usize) -> Ctrl {
         let mut msg = format!("{display}(): Argument #{} (${}) must be of type {}, {} given", i + 1, p.name.name, type_str(ty), v.debug_type());
+        if file == crate::interp::PRELUDE_FILE {
+            // A built-in class's method: reported at the call, like PHP.
+            return self.error("TypeError", &msg);
+        }
         let here = self.pos.get();
         if here != self.builtin_pos.get() {
             let (path, line) = self.here();

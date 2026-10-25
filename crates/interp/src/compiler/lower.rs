@@ -512,6 +512,10 @@ impl<'a> Lower<'a> {
     }
 
     pub fn set_pos(&mut self, off: u32) {
+        if self.file as usize == crate::interp::PRELUDE_FILE {
+            // Built-in classes: positions stay at the caller.
+            return;
+        }
         let p = self.iconst(self.pos_addr);
         let file = self.b.ins().iconst(types::I32, self.file as i64);
         let off = self.b.ins().iconst(types::I32, off as i64);

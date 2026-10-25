@@ -202,6 +202,8 @@ pub fn constants() -> HashMap<String, Value> {
         ("PHP_ROUND_HALF_EVEN", 3),
         ("PHP_ROUND_HALF_ODD", 4),
         ("LC_ALL", 6),
+        ("COUNT_NORMAL", 0),
+        ("COUNT_RECURSIVE", 1),
         ("MB_CASE_UPPER", 0),
         ("MB_CASE_LOWER", 1),
         ("MB_CASE_TITLE", 2),
@@ -211,24 +213,40 @@ pub fn constants() -> HashMap<String, Value> {
     c
 }
 
+/// `__debugInfo()` entries for var_dump / print_r.
+fn debug_info(it: &Interp, o: &std::rc::Rc<crate::value::Obj>) -> Option<Vec<(crate::value::Key, Value)>> {
+    o.class.find_method("__debuginfo")?;
+    match it.call_method(o, "__debugInfo", vec![]) {
+        Ok(Value::Array(a)) => Some(a.iter_raw().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        Ok(Value::Null) => Some(vec![]),
+        _ => None,
+    }
+}
+
 fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     // output
     t.insert("var_dump", |it, _, a| {
         for v in a.iter() {
             let mut o = Out(vec![]);
-            value::var_dump(v, 0, &mut o, &mut vec![]);
+            value::var_dump(v, 0, &mut o, &mut vec![], &|o| debug_info(it, o));
             it.echo(&o.0);
         }
         Ok(Value::Null)
     });
     t.insert("print_r", |it, _, a| {
         let mut o = Out(vec![]);
-        value::print_r(&arg(a, 0), 0, &mut o, &mut vec![]);
+        value::print_r(&arg(a, 0), 0, &mut o, &mut vec![], &|o| debug_info(it, o));
         if arg(a, 1).truthy() {
             return Ok(Value::bytes(o.0));
         }
         it.echo(&o.0);
         Ok(Value::Bool(true))
+    });
+    // Built-in classes written in PHP: E_DEPRECATED for their deprecated
+    // methods (PHP's own message).
+    t.insert("__phpx_deprecated", |it, _, a| {
+        it.deprecated(&String::from_utf8_lossy(&s(it, a, 0)?));
+        Ok(Value::Null)
     });
     t.insert("var_export", |it, _, a| {
         let mut o = Out(vec![]);

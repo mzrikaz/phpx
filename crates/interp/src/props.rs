@@ -16,8 +16,16 @@ use rustc_hash::FxHashMap;
 
 use crate::value::Value;
 
+/// Properties named with this prefix hold built-in classes' internal state
+/// (iterator positions, flags, ...): they work like any property but are
+/// left out wherever PHP code can enumerate properties (dumps, casts,
+/// `foreach`, serialization, comparison), like PHP's C-level state.
+pub const HIDDEN_PREFIX: &str = "__phpx_";
+
 pub struct Shape {
     pub names: Vec<Rc<str>>,
+    /// Some name has the hidden prefix (enumeration filters only then).
+    hidden: bool,
     index: FxHashMap<Rc<str>, u32>,
     /// Shared shapes live as long as their root (a class, or the empty
     /// shape) and may be cached by address in generated code. Private
@@ -42,7 +50,8 @@ thread_local! {
 impl Shape {
     pub fn new(names: Vec<Rc<str>>, declared: usize, shared: bool) -> Shape {
         let index = names.iter().enumerate().map(|(i, n)| (n.clone(), i as u32)).collect();
-        Shape { names, index, declared, shared, transitions: RefCell::new(FxHashMap::default()) }
+        let hidden = names.iter().any(|n| n.starts_with(HIDDEN_PREFIX));
+        Shape { names, index, hidden, declared, shared, transitions: RefCell::new(FxHashMap::default()) }
     }
 
     /// Shape for a class's declared properties (lives with the class).
@@ -78,6 +87,7 @@ impl Shape {
     }
 
     fn push_private(&mut self, name: Rc<str>) {
+        self.hidden |= name.starts_with(HIDDEN_PREFIX);
         self.index.insert(name.clone(), self.names.len() as u32);
         self.names.push(name);
     }
@@ -341,20 +351,30 @@ impl Props {
     }
 
     pub fn len(&self) -> usize {
-        self.vals.iter().filter(|v| v.is_some()).count()
+        self.iter().count()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.vals.iter().all(Option::is_none)
+        self.iter().next().is_none()
     }
 
-    /// Present properties in order.
+    /// Present properties in order (without hidden ones).
     pub fn iter(&self) -> impl Iterator<Item = (&Rc<str>, &Value)> + '_ {
-        self.shape.names.iter().zip(self.vals.iter()).filter_map(|(k, v)| v.as_ref().map(|v| (k, v)))
+        let hidden = self.shape.hidden;
+        self.shape
+            .names
+            .iter()
+            .zip(self.vals.iter())
+            .filter_map(move |(k, v)| v.as_ref().filter(|_| !hidden || !k.starts_with(HIDDEN_PREFIX)).map(|v| (k, v)))
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&Rc<str>, &mut Value)> + '_ {
-        self.shape.names.iter().zip(self.vals.iter_mut()).filter_map(|(k, v)| v.as_mut().map(|v| (k, v)))
+        let hidden = self.shape.hidden;
+        self.shape
+            .names
+            .iter()
+            .zip(self.vals.iter_mut())
+            .filter_map(move |(k, v)| v.as_mut().filter(|_| !hidden || !k.starts_with(HIDDEN_PREFIX)).map(|v| (k, v)))
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &Rc<str>> + '_ {
@@ -362,6 +382,11 @@ impl Props {
     }
 
     pub fn values(&self) -> impl Iterator<Item = &Value> + '_ {
+        self.iter().map(|(_, v)| v)
+    }
+
+    /// Every value, hidden ones included (for the cycle collector).
+    pub fn all_values(&self) -> impl Iterator<Item = &Value> + '_ {
         self.vals.iter().flatten()
     }
 }

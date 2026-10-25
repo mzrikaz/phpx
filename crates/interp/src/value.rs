@@ -1114,8 +1114,36 @@ pub fn prop_label(o: &Obj, name: &str) -> (String, crate::class::Vis, Rc<str>) {
     }
 }
 
-pub fn var_dump(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>) {
-    var_dump_item(&v.deref(), false, indent, out, seen)
+/// An object's `__debugInfo()` entries, for var_dump and print_r (None:
+/// dump its properties).
+pub type DebugInfo<'a> = &'a dyn Fn(&Rc<Obj>) -> Option<Vec<(Key, Value)>>;
+
+/// Dump labels for `__debugInfo` keys: mangled names (`\0Class\0p`,
+/// `\0*\0p`) show as private/protected, like properties.
+enum DebugLabel {
+    Int(i64),
+    Public(String),
+    Protected(String),
+    Private(String, String),
+}
+
+fn debug_label(k: &Key) -> DebugLabel {
+    match k {
+        Key::Int(n) => DebugLabel::Int(*n),
+        Key::Str(s) => {
+            let s = bytes_lossy(s);
+            if let Some(rest) = s.strip_prefix('\0') {
+                if let Some((cls, name)) = rest.split_once('\0') {
+                    return if cls == "*" { DebugLabel::Protected(name.to_string()) } else { DebugLabel::Private(name.to_string(), cls.to_string()) };
+                }
+            }
+            DebugLabel::Public(s.into_owned())
+        }
+    }
+}
+
+pub fn var_dump(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>, dbg: DebugInfo) {
+    var_dump_item(&v.deref(), false, indent, out, seen, dbg)
 }
 
 /// True for a reference that something besides this storage still holds;
@@ -1124,7 +1152,7 @@ fn is_shared_ref(raw: &Value) -> bool {
     matches!(raw, Value::Ref(s) if Rc::strong_count(s) > 1)
 }
 
-fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>) {
+fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>, dbg: DebugInfo) {
     out.pad(indent);
     if amp {
         out.0.push(b'&');
@@ -1155,7 +1183,7 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
                         out.s("\"]=>\n");
                     }
                 }
-                var_dump_item(&v, amp, indent + 2, out, seen);
+                var_dump_item(&v, amp, indent + 2, out, seen, dbg);
             }
             out.pad(indent);
             out.s("}\n");
@@ -1171,6 +1199,24 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
                 out.s("*RECURSION*\n");
                 return;
             }
+            if let Some(items) = dbg(o) {
+                out.s(&format!("object({})#{} ({}) {{\n", o.class.name, o.id, items.len()));
+                seen.push(ptr);
+                for (k, raw) in &items {
+                    out.pad(indent + 2);
+                    match debug_label(k) {
+                        DebugLabel::Int(n) => out.s(&format!("[{n}]=>\n")),
+                        DebugLabel::Public(n) => out.s(&format!("[\"{n}\"]=>\n")),
+                        DebugLabel::Protected(n) => out.s(&format!("[\"{n}\":protected]=>\n")),
+                        DebugLabel::Private(n, c) => out.s(&format!("[\"{n}\":\"{c}\":private]=>\n")),
+                    }
+                    var_dump_item(&raw.deref(), is_shared_ref(raw), indent + 2, out, seen, dbg);
+                }
+                seen.pop();
+                out.pad(indent);
+                out.s("}\n");
+                return;
+            }
             let props: Vec<(Rc<str>, bool, Value)> =
                 o.props.borrow().iter().map(|(k, v)| (k.clone(), is_shared_ref(v), v.deref())).collect();
             out.s(&format!("object({})#{} ({}) {{\n", o.class.name, o.id, props.len()));
@@ -1183,7 +1229,7 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
                     crate::class::Vis::Protected => out.s(&format!("[\"{n}\":protected]=>\n")),
                     crate::class::Vis::Private => out.s(&format!("[\"{n}\":\"{decl}\":private]=>\n")),
                 }
-                var_dump_item(v, *amp, indent + 2, out, seen);
+                var_dump_item(v, *amp, indent + 2, out, seen, dbg);
             }
             seen.pop();
             out.pad(indent);
@@ -1192,12 +1238,12 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
     }
 }
 
-pub fn print_r(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>) {
+pub fn print_r(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>, dbg: DebugInfo) {
     match v {
-        Value::Ref(s) => print_r(&s.borrow().clone(), indent, out, seen),
+        Value::Ref(s) => print_r(&s.borrow().clone(), indent, out, seen, dbg),
         Value::Array(a) => {
             out.s("Array\n");
-            print_r_body(a.iter().map(|(k, v)| (key_label(&k), v)).collect(), indent, out, seen);
+            print_r_body(a.iter().map(|(k, v)| (key_label(&k), v)).collect(), indent, out, seen, dbg);
         }
         Value::Object(o) if !o.class.is_enum() => {
             let ptr = Rc::as_ptr(o);
@@ -1208,6 +1254,23 @@ pub fn print_r(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<*const Ob
                 return;
             }
             seen.push(ptr);
+            if let Some(items) = dbg(o) {
+                let items = items
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let label = match debug_label(&k) {
+                            DebugLabel::Int(n) => n.to_string(),
+                            DebugLabel::Public(n) => n,
+                            DebugLabel::Protected(n) => format!("{n}:protected"),
+                            DebugLabel::Private(n, c) => format!("{n}:{c}:private"),
+                        };
+                        (label.into_bytes(), v.deref())
+                    })
+                    .collect();
+                print_r_body(items, indent, out, seen, dbg);
+                seen.pop();
+                return;
+            }
             let props = o.prop_list();
             let items = props
                 .iter()
@@ -1221,7 +1284,7 @@ pub fn print_r(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<*const Ob
                     (label.into_bytes(), v.clone())
                 })
                 .collect();
-            print_r_body(items, indent, out, seen);
+            print_r_body(items, indent, out, seen, dbg);
             seen.pop();
         }
         Value::Object(o) => {
@@ -1239,7 +1302,7 @@ fn key_label(k: &Key) -> Vec<u8> {
     }
 }
 
-fn print_r_body(items: Vec<(Vec<u8>, Value)>, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>) {
+fn print_r_body(items: Vec<(Vec<u8>, Value)>, indent: usize, out: &mut Out, seen: &mut Vec<*const Obj>, dbg: DebugInfo) {
     out.pad(indent);
     out.s("(\n");
     for (k, v) in items {
@@ -1247,7 +1310,7 @@ fn print_r_body(items: Vec<(Vec<u8>, Value)>, indent: usize, out: &mut Out, seen
         out.s("[");
         out.b(&k);
         out.s("] => ");
-        print_r(&v, indent + 8, out, seen);
+        print_r(&v, indent + 8, out, seen, dbg);
         out.s("\n");
     }
     out.pad(indent);

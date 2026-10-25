@@ -160,6 +160,21 @@ fn encode(it: &Interp, v: &Value, flags: i64, depth: usize, out: &mut String) ->
                 let inner = it.call_method(o, "jsonSerialize", vec![])?;
                 return encode(it, &inner, flags, depth, out);
             }
+            if o.class.find_method("__phpx_cast").is_some() {
+                // ArrayObject / ArrayIterator: their storage, always as an object.
+                let Value::Array(a) = it.call_method(o, "__phpx_cast", vec![])? else { unreachable!("__phpx_cast returns an array") };
+                let pairs: Vec<(Vec<u8>, Value)> = a
+                    .iter()
+                    .map(|(k, v)| {
+                        let k = match k {
+                            Key::Int(n) => n.to_string().into_bytes(),
+                            Key::Str(s) => s.to_vec(),
+                        };
+                        (k, v.clone())
+                    })
+                    .collect();
+                return encode_object(it, &pairs, flags, depth, out);
+            }
             if o.class.is_enum() {
                 return match o.get_prop("value") {
                     Some(v) => encode(it, &v, flags, depth, out),
