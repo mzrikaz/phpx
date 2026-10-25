@@ -1393,15 +1393,20 @@ fn export(v: &Value, indent: usize, out: &mut Out, seen: &mut Vec<usize>, circul
         Value::Ref(s) => var_export(&s.borrow().clone(), indent, out, seen, circular),
         Value::Null | Value::Resource(_) => out.s("NULL"),
         Value::Bool(b) => out.s(if *b { "true" } else { "false" }),
+        // PHP_INT_MIN has no literal: PHP writes it as an expression.
+        Value::Int(i64::MIN) => out.s("-9223372036854775807-1"),
         Value::Int(n) => out.s(&n.to_string()),
         Value::Float(f) => out.s(&fmt_float_repr(*f)),
         Value::Str(s) => {
+            // NUL bytes can't appear in a single-quoted literal: PHP splits
+            // the string around them ('' . "\0" . '').
             out.s("'");
             for &c in s.iter() {
                 match c {
                     b'\'' => out.s("\\'"),
                     b'\\' => out.s("\\\\"),
-                    _ => out.0.push(c),
+                    0 => out.s("' . \"\\0\" . '"),
+                    _ => out.b(&[c]),
                 }
             }
             out.s("'");

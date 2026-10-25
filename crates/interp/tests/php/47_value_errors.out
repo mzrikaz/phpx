@@ -1,0 +1,13 @@
+array_rand(): Argument #1 ($array) must not be empty
+substr_count(): Argument #2 ($needle) must not be empty
+explode(): Argument #1 ($separator) must not be empty
+str_split(): Argument #2 ($length) must be greater than 0
+range(): Argument #3 ($step) cannot be 0
+array_fill(): Argument #2 ($count) must be greater than or equal to 0
+str_pad(): Argument #3 ($pad_string) must not be empty
+1 1 | 1.0 1.0 | 1 1 | 1.0 1.0 | '10' '10' | '1e1' '1e1' | 'a' 'a' | 0 'a' | 0 'a' | array (
+  0 => 1,
+) array (
+  0 => 1,
+) | NULL NULL | false false | 1 1 | true true | 
+1 1.0

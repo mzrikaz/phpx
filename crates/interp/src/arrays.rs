@@ -538,7 +538,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("array_rand", |it, _, a| {
         let x = arr(it, a, 0, "array_rand")?;
         if x.is_empty() {
-            return Err(it.error("ValueError", "array_rand(): Argument #1 ($array) cannot be empty"));
+            return Err(it.error("ValueError", "array_rand(): Argument #1 ($array) must not be empty"));
         }
         let i = (random_u64() % x.len() as u64) as usize;
         Ok(x.get_index(i).unwrap().0.to_value())

@@ -205,7 +205,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let pad = if has(a, 2) { s(it, a, 2)?.to_vec() } else { b" ".to_vec() };
         let ty = if has(a, 3) { int(it, a, 3)? } else { 1 };
         if pad.is_empty() {
-            return Err(it.error("ValueError", "str_pad(): Argument #3 ($pad_string) must be a non-empty string"));
+            return Err(it.error("ValueError", "str_pad(): Argument #3 ($pad_string) must not be empty"));
         }
         if len <= st.len() {
             return b(st.to_vec());
@@ -267,7 +267,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("substr_count", |it, _, a| {
         let (h, n) = (s(it, a, 0)?, s(it, a, 1)?);
         if n.is_empty() {
-            return Err(it.error("ValueError", "substr_count(): Argument #2 ($needle) cannot be empty"));
+            return Err(it.error("ValueError", "substr_count(): Argument #2 ($needle) must not be empty"));
         }
         Ok(Value::Int(replace_all(&h, &n, b"", false).1))
     });
@@ -287,7 +287,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let sep = s(it, a, 0)?;
         let st = s(it, a, 1)?;
         if sep.is_empty() {
-            return Err(it.error("ValueError", "explode(): Argument #1 ($separator) cannot be empty"));
+            return Err(it.error("ValueError", "explode(): Argument #1 ($separator) must not be empty"));
         }
         let limit = if has(a, 2) { int(it, a, 2)? } else { i64::MAX };
         let mut parts: Vec<Vec<u8>> = vec![];
@@ -323,7 +323,13 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("strnatcmp", |it, _, a| Ok(Value::Int(ord(natcmp(&s(it, a, 0)?, &s(it, a, 1)?, false)))));
     t.insert("strnatcasecmp", |it, _, a| Ok(Value::Int(ord(natcmp(&s(it, a, 0)?, &s(it, a, 1)?, true)))));
     t.insert("chr", |it, _, a| Ok(Value::Str(one_byte(int(it, a, 0)?.rem_euclid(256) as u8))));
-    t.insert("ord", |it, _, a| Ok(Value::Int(s(it, a, 0)?.first().copied().unwrap_or(0) as i64)));
+    t.insert("ord", |it, _, a| {
+        let st = s(it, a, 0)?;
+        if st.len() != 1 {
+            it.deprecated("ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead");
+        }
+        Ok(Value::Int(st.first().copied().unwrap_or(0) as i64))
+    });
     t.insert("nl2br", |it, _, a| b(replace_all(&s(it, a, 0)?, b"\n", b"<br />\n", false).0));
     t.insert("htmlspecialchars", |it, _, a| {
         let st = s(it, a, 0)?;
