@@ -67,9 +67,12 @@ pub fn is_ident_char(c: u8) -> bool {
 }
 
 impl<'a> Lexer<'a> {
-    /// Lex a whole file, starting in inline-HTML mode.
+    /// Lex a whole file, starting in inline-HTML mode. A `#!` first line
+    /// is skipped, as the CLI does (Composer's bin proxies include such
+    /// files too).
     pub fn new(src: &'a str) -> Self {
-        Lexer { src, b: src.as_bytes(), pos: 0, base: 0, in_php: false, diags: vec![] }
+        let pos = if src.starts_with("#!") { src.find('\n').map_or(src.len(), |i| i + 1) } else { 0 };
+        Lexer { src, b: src.as_bytes(), pos, base: 0, in_php: false, diags: vec![] }
     }
 
     /// Lex a code fragment (already inside `<?php`) whose first byte is at `base`.
