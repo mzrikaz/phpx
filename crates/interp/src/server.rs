@@ -66,9 +66,17 @@ fn log_time() -> String {
     )
 }
 
+/// With several workers PHP prefixes each log line with the worker's
+/// pid (Laravel's `serve` parses that format).
+static PID_PREFIX: OnceLock<bool> = OnceLock::new();
+
 fn log(msg: &str) {
     let mut e = std::io::stderr().lock();
-    let _ = writeln!(e, "[{}] {msg}", log_time());
+    if PID_PREFIX.get().copied().unwrap_or(false) {
+        let _ = writeln!(e, "[{}] [{}] {msg}", std::process::id(), log_time());
+    } else {
+        let _ = writeln!(e, "[{}] {msg}", log_time());
+    }
 }
 
 fn http_date() -> String {
@@ -694,6 +702,7 @@ pub fn serve(addr: &str, docroot: Option<&Path>, router: Option<&Path>) -> i32 {
     // unless PHP_CLI_SERVER_WORKERS says more); a worker keeps parsed
     // files between requests, while each request gets a fresh interpreter.
     let workers = std::env::var("PHP_CLI_SERVER_WORKERS").ok().and_then(|v| v.parse::<usize>().ok()).filter(|&n| n > 1).unwrap_or(1);
+    let _ = PID_PREFIX.set(workers > 1);
     let (tx, rx) = std::sync::mpsc::channel::<TcpStream>();
     let rx = Arc::new(std::sync::Mutex::new(rx));
     for _ in 0..workers {
