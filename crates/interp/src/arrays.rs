@@ -400,6 +400,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         if n < 0 {
             return Err(it.error("ValueError", "array_fill(): Argument #2 ($count) must be greater than or equal to 0"));
         }
+        crate::builtins::reserve(it, (n as usize).saturating_mul(16))?;
         let mut out = PhpArray::new();
         for i in 0..n {
             out.insert(Key::Int(start + i), arg(a, 2));

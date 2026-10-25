@@ -44,6 +44,15 @@ pub fn callable(it: &Interp, f: &Frame, a: &[Value], i: usize) -> R<Callable> {
     it.to_callable(f, &arg(a, i))
 }
 
+/// Fail with PHP's "Allowed memory size exhausted" fatal error if
+/// allocating `bytes` would exceed memory_limit.
+pub fn reserve(it: &Interp, bytes: usize) -> R<()> {
+    match crate::alloc::would_exceed(bytes) {
+        Some(limit) => Err(it.memory_fatal(limit, bytes)),
+        None => Ok(()),
+    }
+}
+
 /// Run a built-in, turning a Rust panic (a phpx bug) into a PHP `Error`
 /// instead of aborting the process. Unwinding must not cross generated code.
 pub fn guarded(it: &Interp, name: &str, f: impl FnOnce() -> R<Value>) -> R<Value> {
@@ -75,6 +84,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::streams::register(&mut t);
     crate::ext::register(&mut t);
     crate::misc::register(&mut t);
+    crate::ini::register(&mut t);
     t
 }
 
@@ -111,7 +121,7 @@ pub fn constants() -> HashMap<String, Value> {
     add("M_PI", Value::Float(std::f64::consts::PI));
     add("M_E", Value::Float(std::f64::consts::E));
     add("M_SQRT2", Value::Float(std::f64::consts::SQRT_2));
-    add("E_ALL", Value::Int(32767));
+    add("E_ALL", Value::Int(30719));
     crate::streams::std_constants(&mut add);
     crate::ext::constants(&mut add);
     for k in ["PASSWORD_DEFAULT", "PASSWORD_BCRYPT"] {
@@ -607,15 +617,8 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("__phpx_stack_remaining", |_, _, _| Ok(Value::Int(phpx_runtime::stack_remaining().unwrap_or(0) as i64)));
     t.insert("php_sapi_name", |_, _, _| Ok(Value::str("cli")));
     t.insert("phpversion", |_, _, _| Ok(Value::str("8.5.10")));
-    t.insert("error_reporting", |_, _, _| Ok(Value::Int(32767)));
-    t.insert("ini_set", |_, _, _| Ok(Value::Bool(false)));
-    t.insert("ini_get", |_, _, _| Ok(Value::Bool(false)));
     t.insert("set_error_handler", |_, _, _| Ok(Value::Null));
     t.insert("set_exception_handler", |_, _, _| Ok(Value::Null));
-    t.insert("date_default_timezone_set", |_, _, _| Ok(Value::Bool(true)));
-    t.insert("date_default_timezone_get", |_, _, _| Ok(Value::str("UTC")));
-    t.insert("memory_get_usage", |_, _, _| Ok(Value::Int(2 * 1024 * 1024)));
-    t.insert("memory_get_peak_usage", |_, _, _| Ok(Value::Int(2 * 1024 * 1024)));
     t.insert("gc_collect_cycles", |it, _, _| {
         // Destructors of cyclic garbage run, then the cycles are freed.
         let mut n = crate::gc::collect();

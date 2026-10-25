@@ -1,0 +1,29 @@
+14 -1 0
+bool(false)
+bool(false)
+1 0
+1
+30719 30719 30711
+bool(true)
+string(10) "Asia/Tokyo"
+Array
+(
+    [db] => Array
+        (
+            [host] => localhost
+            [port] => 3306
+            [debug] => 1
+            [list] => Array
+                (
+                    [0] => a
+                    [1] => b
+                )
+
+            [name] => x y
+        )
+
+)
+bool(true)
+string(2) "30"
+bool(true)
+bool(true)

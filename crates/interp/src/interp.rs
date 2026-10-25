@@ -276,6 +276,7 @@ pub struct Interp {
     output_start: RefCell<Option<(String, usize)>>,
     /// Classes resolved from source names, keyed by the AST name's address.
     pub class_cache: RefCell<FxHashMap<usize, Rc<Class>>>,
+    pub ini: RefCell<crate::ini::Ini>,
     /// eval() sources already parsed, by call site + code.
     pub eval_cache: RefCell<HashMap<String, (usize, &'static ast::File)>>,
     /// `@` nesting depth: warnings are suppressed while nonzero.
@@ -324,6 +325,7 @@ impl Interp {
             globals: Cell::new(std::ptr::null_mut()),
             silence: Cell::new(0),
             eval_cache: RefCell::new(HashMap::new()),
+            ini: RefCell::new(crate::ini::Ini::new()),
             class_cache: RefCell::new(FxHashMap::default()),
             response: RefCell::new(Default::default()),
             include_path: RefCell::new(".:/usr/share/php".into()),
@@ -449,6 +451,15 @@ impl Interp {
         eprintln!("PHP Warning:  {msg} in {file} on line {line}");
     }
 
+    /// PHP's fatal "Allowed memory size ... exhausted" (not catchable).
+    pub fn memory_fatal(&self, limit: usize, tried: usize) -> Ctrl {
+        crate::alloc::set_limit(None);
+        self.flush();
+        let (file, line) = self.here();
+        eprintln!("PHP Fatal error:  Allowed memory size of {limit} bytes exhausted (tried to allocate {tried} bytes) in {file} on line {line}");
+        Ctrl::Exit(255)
+    }
+
     pub fn notice(&self, msg: &str) {
         if self.silence.get() > 0 {
             return;
@@ -469,8 +480,12 @@ impl Interp {
 
     /// Parse a file and return its AST (leaked: code lives for the process).
     pub fn parse_file(&self, path: &Path, src: String) -> Result<(usize, &'static ast::File), String> {
+        // Parsed code lives for the whole run (like opcache): not charged
+        // to memory_limit.
+        let before = crate::alloc::raw_used();
         let src: &'static str = Box::leak(src.into_boxed_str());
         let (file, diags) = phpx_syntax::check(src);
+        crate::alloc::exclude(crate::alloc::raw_used().saturating_sub(before));
         let id = self.add_file(path.to_path_buf(), src);
         let errors: Vec<String> = diags
             .iter()
@@ -646,6 +661,9 @@ impl Interp {
     pub fn run_destructors(&self) -> R<()> {
         use crate::value::{DESTRUCT_PENDING, DESTRUCT_QUEUE};
         while DESTRUCT_PENDING.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            if let Some((limit, tried)) = crate::alloc::take_over() {
+                return Err(self.memory_fatal(limit, tried));
+            }
             if crate::gc::take_due() {
                 crate::gc::collect();
             }

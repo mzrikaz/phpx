@@ -880,9 +880,6 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             m => Err(it.error("AssertionError", &it.to_string_lossy(&m)?)),
         }
     });
-    for name in ["set_time_limit", "ignore_user_abort_bool"] {
-        t.insert(name, |_, _, _| Ok(Value::Bool(true)));
-    }
     t.insert("ignore_user_abort", |_, _, _| Ok(Value::Int(0)));
     t.insert("connection_status", |_, _, _| Ok(Value::Int(0)));
     t.insert("connection_aborted", |_, _, _| Ok(Value::Int(0)));
@@ -956,7 +953,6 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             Err(_) => Value::Bool(false),
         })
     });
-    t.insert("ini_get_all", |_, _, _| Ok(Value::array(PhpArray::new())));
     t.insert("setlocale", |it, _, a| {
         let l = if has(a, 1) {
             match arg(a, 1) {
@@ -1381,7 +1377,9 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("get_include_path", |it, _, _| Ok(Value::str(&it.include_path.borrow())));
     t.insert("set_include_path", |it, _, a| {
         let old = it.include_path.borrow().clone();
-        *it.include_path.borrow_mut() = bstr(it, a, 0)?;
+        let p = bstr(it, a, 0)?;
+        it.ini.borrow_mut().set("include_path", &p);
+        *it.include_path.borrow_mut() = p;
         Ok(Value::str(&old))
     });
     t.insert("stream_resolve_include_path", |it, _, a| {

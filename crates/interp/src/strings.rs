@@ -186,11 +186,14 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         if n < 0 {
             return Err(it.error("ValueError", "str_repeat(): Argument #2 ($times) must be greater than or equal to 0"));
         }
-        b(s(it, a, 0)?.repeat(n as usize))
+        let st = s(it, a, 0)?;
+        crate::builtins::reserve(it, st.len().saturating_mul(n as usize))?;
+        b(st.repeat(n as usize))
     });
     t.insert("str_pad", |it, _, a| {
         let st = s(it, a, 0)?;
         let len = int(it, a, 1)?.max(0) as usize;
+        crate::builtins::reserve(it, len)?;
         let pad = if has(a, 2) { s(it, a, 2)?.to_vec() } else { b" ".to_vec() };
         let ty = if has(a, 3) { int(it, a, 3)? } else { 1 };
         if pad.is_empty() {

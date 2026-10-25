@@ -4,6 +4,7 @@
 //! fast dev mode, and the semantic reference the compiler will be tested
 //! against: every behavior here is checked against real PHP output.
 
+mod alloc;
 mod arrays;
 mod builtins;
 mod call;
@@ -15,6 +16,7 @@ mod ext;
 mod fs;
 mod gc;
 mod generator;
+mod ini;
 pub mod interp;
 mod json;
 mod misc;
@@ -64,6 +66,13 @@ pub fn run_source(path: &Path, src: String, out: Box<dyn Write>) -> i32 {
 
 /// CLI superglobals: `$_SERVER` (environment + script info), `$argv`,
 /// `$argc`, empty request arrays.
+/// php.ini options from the command line: `-n` (no files) and `-d k=v`.
+static INI_OPTS: std::sync::OnceLock<(bool, Vec<(String, String)>)> = std::sync::OnceLock::new();
+
+pub fn set_ini_options(no_files: bool, overrides: Vec<(String, String)>) {
+    let _ = INI_OPTS.set((no_files, overrides));
+}
+
 fn cli_globals(frame: &mut Frame, path: &Path, argv: &[String]) {
     use value::{pstr, Key, PhpArray, Value};
     let list = Value::array(PhpArray::from_list(argv.iter().map(|a| Value::str(a.as_str())).collect::<Vec<_>>()));
@@ -97,6 +106,11 @@ fn cli_globals(frame: &mut Frame, path: &Path, argv: &[String]) {
 pub fn run_source_args(path: &Path, src: String, argv: Vec<String>, out: Box<dyn Write>) -> i32 {
     phpx_runtime::set_stack_size(MAIN_STACK);
     let it = Interp::new(out);
+    {
+        let (no_files, overrides) = INI_OPTS.get().cloned().unwrap_or_default();
+        it.ini.borrow_mut().load(path, no_files, &overrides);
+        it.ini_apply_all();
+    }
     let (id, file) = match it.parse_file(path, src) {
         Ok(x) => x,
         Err(msg) => {
