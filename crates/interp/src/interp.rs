@@ -434,7 +434,7 @@ impl Interp {
 
     fn load_prelude(&self) {
         assert_eq!(self.files.borrow().len(), PRELUDE_FILE, "the prelude must be the first file");
-        let src = concat!(include_str!("prelude.php"), include_str!("prelude_spl.php"), include_str!("prelude_reflection.php"), include_str!("prelude_date.php"), include_str!("prelude_splfs.php"), include_str!("prelude_tokenizer.php"), include_str!("prelude_dom.php"), include_str!("prelude_redis.php"), include_str!("prelude_pdo.php"));
+        let src = concat!(include_str!("prelude.php"), include_str!("prelude_spl.php"), include_str!("prelude_reflection.php"), include_str!("prelude_date.php"), include_str!("prelude_splfs.php"), include_str!("prelude_tokenizer.php"), include_str!("prelude_dom.php"), include_str!("prelude_redis.php"), include_str!("prelude_pdo.php"), include_str!("prelude_random.php"));
         let (file, diags) = phpx_syntax::check(src);
         assert!(!diags.iter().any(|d| d.is_error()), "prelude has errors: {diags:?}");
         let file: &'static ast::File = Box::leak(Box::new(file));

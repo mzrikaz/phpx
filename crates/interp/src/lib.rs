@@ -56,6 +56,7 @@ mod xml_ext;
 mod redis;
 mod hash_algos;
 mod openssl;
+mod random;
 mod db;
 mod pdo;
 mod process;
@@ -163,6 +164,7 @@ pub(crate) fn reset_request_state() {
     dom::reset();
     mbext::reset();
     reflect::reset();
+    random::reset();
 }
 
 /// Sets up a script's globals once its interpreter exists.

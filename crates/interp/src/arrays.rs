@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::builtins::{arg, arr, callable, has, int, random_u64};
+use crate::builtins::{arg, arr, callable, has, int};
 use crate::interp::{BuiltinFn, Ctrl, Frame, Interp, R};
 use crate::value::{compare, identical, loose_eq, Key, PStr, PhpArray, Value};
 
@@ -592,20 +592,10 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
         Ok(Value::Bool(true))
     });
-    t.insert("array_rand", |it, _, a| {
-        let x = arr(it, a, 0, "array_rand")?;
-        if x.is_empty() {
-            return Err(it.error("ValueError", "array_rand(): Argument #1 ($array) must not be empty"));
-        }
-        let i = (random_u64() % x.len() as u64) as usize;
-        Ok(x.get_index(i).unwrap().0.to_value())
-    });
     t.insert("shuffle", |it, _, a| {
         let x = by_ref_array(it, a, "shuffle")?;
         let mut vals: Vec<Value> = x.into_pairs().into_iter().map(|e| e.1).collect();
-        for i in (1..vals.len()).rev() {
-            vals.swap(i, (random_u64() % (i as u64 + 1)) as usize);
-        }
+        crate::random::shuffle_values(it, &mut vals)?;
         a[0] = Value::array(PhpArray::from_list(vals));
         Ok(Value::Bool(true))
     });

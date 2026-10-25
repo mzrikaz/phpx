@@ -38,7 +38,8 @@ pub fn table() -> HashMap<(&'static str, &'static str), NativeMethod> {
     for (name, f) in crate::generator::natives() {
         t.insert(("generator", name), f);
     }
-    for (class, name, f) in crate::date::natives().into_iter().chain(crate::weak::natives()).chain(crate::pdo::natives()).chain(crate::fiber::natives()).chain(crate::dom::natives()).chain(crate::xmlwriter::natives()).chain(crate::redis::natives()) {
+    for (class, name, f) in crate::date::natives().into_iter().chain(crate::weak::natives()).chain(crate::pdo::natives()).chain(crate::fiber::natives()).chain(crate::dom::natives()).chain(crate::xmlwriter::natives()).chain(crate::redis::natives())
+        .chain(crate::random::natives()) {
         t.insert((class, name), f);
     }
     t.insert(("concurrency", "static run"), concurrency_run);

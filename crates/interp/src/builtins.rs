@@ -126,6 +126,7 @@ pub fn table() -> HashMap<&'static str, BuiltinFn> {
     crate::ext_more::register(&mut t);
     crate::zlib_more::register(&mut t);
     crate::openssl::register(&mut t);
+    crate::random::register(&mut t);
     crate::session::register(&mut t);
     crate::errors::register(&mut t);
     t
@@ -471,8 +472,6 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("is_finite", |it, _, a| Ok(Value::Bool(float(it, a, 0)?.is_finite())));
     t.insert("max", |it, _, a| min_max(it, a, std::cmp::Ordering::Greater, "max"));
     t.insert("min", |it, _, a| min_max(it, a, std::cmp::Ordering::Less, "min"));
-    t.insert("rand", |it, _, a| rand_between(it, a));
-    t.insert("mt_rand", |it, _, a| rand_between(it, a));
     t.insert("random_int", |it, _, a| {
         let (lo, hi) = (int(it, a, 0)?, int(it, a, 1)?);
         if hi < lo {
@@ -480,10 +479,8 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
         Ok(Value::Int(secure_range(lo, hi)))
     });
-    t.insert("mt_srand", |_, _, _| Ok(Value::Null));
     t.insert("mt_getrandmax", |_, _, _| Ok(Value::Int(2147483647)));
     t.insert("getrandmax", |_, _, _| Ok(Value::Int(2147483647)));
-    t.insert("lcg_value", |_, _, _| Ok(Value::Float((random_u64() >> 11) as f64 / (1u64 << 53) as f64)));
     t.insert("base_convert", |it, _, a| {
         let txt = String::from_utf8_lossy(&s(it, a, 0)?).to_ascii_lowercase();
         let (from, to) = (int(it, a, 1)?, int(it, a, 2)?);
@@ -984,15 +981,6 @@ pub fn secure_range(lo: i64, hi: i64) -> i64 {
             return (lo as i128 + (r % span) as i128) as i64;
         }
     }
-}
-
-fn rand_between(it: &Interp, a: &[Value]) -> R<Value> {
-    let (lo, hi) = if has(a, 1) { (int(it, a, 0)?, int(it, a, 1)?) } else { (0, 2147483647) };
-    if hi < lo {
-        return Err(it.error("ValueError", "Argument #1 ($min) must be less than or equal to argument #2 ($max)"));
-    }
-    let span = (hi as i128 - lo as i128 + 1) as u128;
-    Ok(Value::Int((lo as i128 + (random_u64() as u128 % span) as i128) as i64))
 }
 
 fn to_radix(mut n: u64, radix: u32) -> String {

@@ -467,16 +467,6 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                 .collect(),
         ))
     });
-    t.insert("str_shuffle", |it, _, a| {
-        let mut b = s(it, a, 0)?.to_vec();
-        let mut n = b.len();
-        while n > 1 {
-            n -= 1;
-            let j = (crate::builtins::random_u64() % (n as u64 + 1)) as usize;
-            b.swap(n, j);
-        }
-        Ok(Value::bytes(b))
-    });
     t.insert("str_increment", |it, _, a| str_increment(it, a));
     t.insert("str_decrement", |it, _, a| str_decrement(it, a));
     t.insert("metaphone", |it, _, a| {
