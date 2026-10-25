@@ -490,7 +490,6 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
         Ok(Value::array(PhpArray::from_list(words.map(|w| Value::bytes(w.to_vec())))))
     });
-    t.insert("lcg", |_, _, _| Ok(Value::Null));
     t.insert("md5", |it, _, a| Ok(Value::str(&crate::strings::md5_hex(&s(it, a, 0)?))));
     t.insert("crc32", |it, _, a| Ok(Value::Int(crc32(&s(it, a, 0)?) as i64)));
     t.insert("base64_encode", |it, _, a| Ok(Value::str(&base64_encode(&s(it, a, 0)?))));

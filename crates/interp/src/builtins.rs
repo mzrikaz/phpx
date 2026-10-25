@@ -401,7 +401,6 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::Float(if has(a, 1) { x.ln() / float(it, a, 1)?.ln() } else { x.ln() }))
     });
     t.insert("log10", |it, _, a| Ok(Value::Float(float(it, a, 0)?.log10())));
-    t.insert("log2", |it, _, a| Ok(Value::Float(float(it, a, 0)?.log2())));
     t.insert("sin", |it, _, a| Ok(Value::Float(float(it, a, 0)?.sin())));
     t.insert("cos", |it, _, a| Ok(Value::Float(float(it, a, 0)?.cos())));
     t.insert("tan", |it, _, a| Ok(Value::Float(float(it, a, 0)?.tan())));
@@ -506,6 +505,10 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("enum_exists", |it, _, a| class_kind_exists(it, a, phpx_syntax::ast::ClassKind::Enum));
     t.insert("function_exists", |it, f, a| {
         let n = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        // phpx's internal helpers for the prelude aren't PHP functions.
+        if n.trim_start_matches('\\').to_ascii_lowercase().starts_with("__phpx") {
+            return Ok(Value::Bool(false));
+        }
         Ok(Value::Bool(it.find_function(&f.ctx, &format!("\\{}", n.trim_start_matches('\\'))).is_some()))
     });
     t.insert("is_a", |it, _, a| {
@@ -674,7 +677,6 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::array(PhpArray::from_list(EXTENSIONS.iter().map(|e| Value::str(e)).collect::<Vec<_>>())))
     });
     // Diagnostic: native stack bytes left in this green thread.
-    t.insert("__phpx_stack_remaining", |_, _, _| Ok(Value::Int(phpx_runtime::stack_remaining().unwrap_or(0) as i64)));
     t.insert("php_sapi_name", |_, _, _| Ok(Value::str("cli")));
     t.insert("phpversion", |_, _, _| Ok(Value::str("8.5.10")));
     t.insert("set_error_handler", |_, _, _| Ok(Value::Null));
