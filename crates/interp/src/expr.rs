@@ -23,13 +23,48 @@ pub enum Root {
 pub struct Place {
     pub root: Root,
     /// `None` = append (`$a[]`).
-    pub path: Vec<Option<Key>>,
+    pub path: Vec<Option<Off>>,
+}
+
+/// An offset in a write path: an array key, or an object/array offset kept
+/// as is for an ArrayAccess container (`$storage[$obj] = ...`); on an
+/// array such an offset is a TypeError.
+#[derive(Clone)]
+pub enum Off {
+    Key(Key),
+    Raw(Value),
+}
+
+impl Off {
+    pub fn to_value(&self) -> Value {
+        match self {
+            Off::Key(k) => k.to_value(),
+            Off::Raw(v) => v.clone(),
+        }
+    }
+
+    /// The array key (a TypeError for a raw offset).
+    pub fn key(&self, it: &Interp) -> R<Key> {
+        match self {
+            Off::Key(k) => Ok(k.clone()),
+            Off::Raw(v) => it.to_key(v),
+        }
+    }
+
+    /// The array key where an error can't be reported (unset): raw offsets
+    /// match nothing.
+    pub fn key_opt(&self) -> Option<&Key> {
+        match self {
+            Off::Key(k) => Some(k),
+            Off::Raw(_) => None,
+        }
+    }
 }
 
 /// A write that reached an object (ArrayAccess) and must finish outside any borrow.
 pub(crate) struct Pending {
     obj: Rc<Obj>,
-    path: Vec<Option<Key>>,
+    path: Vec<Option<Off>>,
     value: Value,
 }
 
@@ -1049,8 +1084,11 @@ impl Interp {
     }
 
     /// Array keys used for writes: same as reads.
-    fn to_key_for_write(&self, v: &Value) -> R<Key> {
-        self.to_key(v)
+    pub(crate) fn to_key_for_write(&self, v: &Value) -> R<Off> {
+        match v {
+            Value::Object(_) | Value::Array(_) => Ok(Off::Raw(v.clone())),
+            v => Ok(Off::Key(self.to_key(v)?)),
+        }
     }
 
     pub fn place_get(&self, f: &mut Frame, p: &Place) -> R<Option<Value>> {
@@ -1072,7 +1110,7 @@ impl Interp {
         for k in &p.path {
             let Some(k) = k else { return Ok(None) };
             cur = match &cur {
-                Value::Array(a) => match a.get(k) {
+                Value::Array(a) => match a.get(&k.key(self)?) {
                     Some(v) => v.clone(),
                     None => return Ok(None),
                 },
@@ -1147,13 +1185,13 @@ impl Interp {
         Ok(())
     }
 
-    pub(crate) fn write_path(&self, cur: &mut Value, path: &[Option<Key>], v: Value) -> R<Option<Pending>> {
+    pub(crate) fn write_path(&self, cur: &mut Value, path: &[Option<Off>], v: Value) -> R<Option<Pending>> {
         self.write_path_mode(cur, path, v, false)
     }
 
     /// `rebind`: replace a reference stored at the target instead of writing
     /// through it (for `$a[0] = &$x`).
-    fn write_path_mode(&self, cur: &mut Value, path: &[Option<Key>], v: Value, rebind: bool) -> R<Option<Pending>> {
+    fn write_path_mode(&self, cur: &mut Value, path: &[Option<Off>], v: Value, rebind: bool) -> R<Option<Pending>> {
         let (first, rest) = path.split_first().expect("non-empty path");
         if let Value::Ref(s) = cur {
             let s = s.clone();
@@ -1169,13 +1207,17 @@ impl Interp {
         }
         match cur {
             Value::Array(a) => {
+                let key = match first {
+                    Some(k) => Some(k.key(self)?),
+                    None => None,
+                };
                 let a = Rc::make_mut(a);
-                let slot = match first {
+                let slot = match key {
                     None => {
                         let k = a.push(Value::Null);
                         a.get_mut(&k).unwrap()
                     }
-                    Some(k) => a.entry(k.clone()),
+                    Some(k) => a.entry(k),
                 };
                 if !rest.is_empty() {
                     return self.write_path_mode(slot, rest, v, rebind);
@@ -1189,7 +1231,8 @@ impl Interp {
             Value::Object(o) => Ok(Some(Pending { obj: o.clone(), path: path.to_vec(), value: v })),
             Value::Str(s) if rest.is_empty() => {
                 let Some(k) = first else { return Err(self.error("Error", "[] operator not supported for strings")) };
-                let Key::Int(i) = k else {
+                let k = k.key(self)?;
+                let Key::Int(i) = &k else {
                     return Err(self.error("TypeError", "Cannot access offset of type string on string"));
                 };
                 let mut bytes = s.to_vec();
@@ -1270,7 +1313,7 @@ impl Interp {
         }
     }
 
-    fn ref_path(&self, cur: &mut Value, path: &[Option<Key>]) -> R<Slot> {
+    fn ref_path(&self, cur: &mut Value, path: &[Option<Off>]) -> R<Slot> {
         if let Value::Ref(s) = cur {
             let s = s.clone();
             return self.ref_path(&mut s.borrow_mut(), path);
@@ -1281,13 +1324,17 @@ impl Interp {
         let (first, rest) = path.split_first().expect("non-empty path");
         match cur {
             Value::Array(a) => {
+                let key = match first {
+                    Some(k) => Some(k.key(self)?),
+                    None => None,
+                };
                 let a = Rc::make_mut(a);
-                let slot = match first {
+                let slot = match key {
                     None => {
                         let k = a.push(Value::Null);
                         a.get_mut(&k).unwrap()
                     }
-                    Some(k) => a.entry(k.clone()),
+                    Some(k) => a.entry(k),
                 };
                 if rest.is_empty() { Ok(cell_of(slot)) } else { self.ref_path(slot, rest) }
             }
@@ -1361,7 +1408,7 @@ impl Interp {
         if !o.class.is_a("arrayaccess") {
             return Err(self.error("Error", &format!("Cannot use object of type {} as array", o.class.name)));
         }
-        let key = p.path[0].as_ref().map(Key::to_value).unwrap_or(Value::Null);
+        let key = p.path[0].as_ref().map(Off::to_value).unwrap_or(Value::Null);
         if p.path.len() == 1 {
             self.call_method(&o, "offsetSet", vec![key, p.value])?;
             return Ok(());
@@ -1455,7 +1502,7 @@ impl Interp {
                 }
                 let key = self.to_key(&kv)?;
                 let p = self.place(f, base)?;
-                fn remove_at(cur: &mut Value, path: &[Option<Key>], key: &Key) {
+                fn remove_at(cur: &mut Value, path: &[Option<Off>], key: &Key) {
                     match cur {
                         Value::Ref(s) => {
                             let s = s.clone();
@@ -1466,7 +1513,7 @@ impl Interp {
                                 Rc::make_mut(a).remove(key);
                             }
                             Some((Some(k), rest)) => {
-                                if let Some(next) = Rc::make_mut(a).get_mut(k) {
+                                if let Some(next) = k.key_opt().and_then(|k| Rc::make_mut(a).get_mut(k)) {
                                     remove_at(next, rest, key);
                                 }
                             }

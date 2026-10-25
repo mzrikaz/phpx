@@ -1185,7 +1185,7 @@ impl Interp {
                 _ => break,
             };
             let mut elem = place.clone();
-            elem.path.push(Some(k.clone()));
+            elem.path.push(Some(crate::expr::Off::Key(k.clone())));
             let cell = self.place_ref(&elem)?;
             self.bind_ref(f, value, cell)?;
             if let Some(ke) = key {

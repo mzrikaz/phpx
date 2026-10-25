@@ -629,10 +629,10 @@ pub unsafe extern "C" fn rt_instanceof(c: *mut Cx, v: *const Value, cref: *const
 // ---- writes -----------------------------------------------------------------------
 
 /// Where a write goes: a native local, or a property of an object.
-unsafe fn keys_of(it: &Interp, keys: *const Value, n: u64, append: u64) -> R<Vec<Option<Key>>> {
+unsafe fn keys_of(it: &Interp, keys: *const Value, n: u64, append: u64) -> R<Vec<Option<crate::expr::Off>>> {
     let mut path = Vec::with_capacity(n as usize + 1);
     for i in 0..n as usize {
-        path.push(Some(it.to_key(&*keys.add(i))?));
+        path.push(Some(it.to_key_for_write(&*keys.add(i))?));
     }
     if append != 0 {
         path.push(None);
@@ -826,7 +826,7 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
     status(it, r, |_| put(dst, v))
 }
 
-fn place_for(it: &Interp, f: &Frame, root_obj: Option<Rc<Obj>>, name: &'static str, path: Vec<Option<Key>>) -> crate::expr::Place {
+fn place_for(it: &Interp, f: &Frame, root_obj: Option<Rc<Obj>>, name: &'static str, path: Vec<Option<crate::expr::Off>>) -> crate::expr::Place {
     let o = root_obj.unwrap();
     let key = it.prop_key_rc(f, &o, Rc::from(name));
     crate::expr::Place { root: crate::expr::Root::Prop(o, key), path }
@@ -863,7 +863,7 @@ pub unsafe extern "C" fn rt_place_update(
                     let mut cur = (*root).clone();
                     for k in &path {
                         cur = match &cur {
-                            Value::Array(a) => match a.get(k.as_ref().unwrap()) {
+                            Value::Array(a) => match a.get(&k.as_ref().unwrap().key(it)?) {
                                 Some(v) => v,
                                 None => return Ok(None),
                             },
@@ -957,12 +957,12 @@ pub unsafe extern "C" fn rt_unset_place(c: *mut Cx, root: *mut Value, name: *con
     status(it, r, |_| {})
 }
 
-fn remove_path(it: &Interp, cur: &mut Value, path: &[Option<Key>]) -> R<()> {
+fn remove_path(it: &Interp, cur: &mut Value, path: &[Option<crate::expr::Off>]) -> R<()> {
     let Some((last, rest)) = path.split_last() else { return Ok(()) };
     let mut c = cur;
     for k in rest {
         match c {
-            Value::Array(a) => match Rc::make_mut(a).get_mut(k.as_ref().unwrap()) {
+            Value::Array(a) => match k.as_ref().and_then(|k| k.key_opt()).and_then(|k| Rc::make_mut(a).get_mut(k)) {
                 Some(next) => c = next,
                 None => return Ok(()),
             },
@@ -975,7 +975,8 @@ fn remove_path(it: &Interp, cur: &mut Value, path: &[Option<Key>]) -> R<()> {
     }
     match c {
         Value::Array(a) => {
-            Rc::make_mut(a).remove(last.as_ref().unwrap());
+            let k = last.as_ref().unwrap().key(it)?;
+            Rc::make_mut(a).remove(&k);
         }
         Value::Object(o) if o.class.is_a("arrayaccess") => {
             it.call_method(o, "offsetUnset", vec![last.as_ref().unwrap().to_value()])?;
