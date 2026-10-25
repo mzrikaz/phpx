@@ -68,6 +68,11 @@ impl PStr {
         unsafe { (self.ptr.as_ptr() as *mut u8).add(HDR) }
     }
 
+    /// Bytes allocated for the content (at least `len()`).
+    pub fn capacity(&self) -> usize {
+        self.hdr().cap
+    }
+
     pub fn strong_count(s: &PStr) -> usize {
         s.hdr().strong
     }

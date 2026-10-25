@@ -114,10 +114,14 @@ impl Key {
 
     /// Like `from_bytes` for a string value: shares it instead of copying
     /// (an array lookup with a string key then allocates nothing).
+    /// (A string with spare capacity, e.g. built by interpolation or `.=`,
+    /// is copied to its exact size instead: a key lives as long as its
+    /// array.)
     #[inline]
     pub fn from_pstr(s: &PStr) -> Key {
         match canonical_int(s) {
             Some(n) => Key::Int(n),
+            None if s.capacity() > s.len() => Key::Str(pbytes(s)),
             None => Key::Str(s.clone()),
         }
     }
