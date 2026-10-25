@@ -1,0 +1,8 @@
+[package]
+name = "phpx-syntax"
+description = "Lexer, parser and AST for the phpx subset of PHP 8.x"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
