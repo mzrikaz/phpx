@@ -8,10 +8,18 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 
 pub struct Counting;
 
-static USED: AtomicUsize = AtomicUsize::new(0);
-static PEAK: AtomicUsize = AtomicUsize::new(0);
-/// Bytes not charged to the script (parsed code).
-static EXCLUDED: AtomicUsize = AtomicUsize::new(0);
+// Per-thread counters (no atomic read-modify-write on every allocation):
+// the limit applies to the interpreter's thread, like PHP's per-request
+// accounting. Const-initialized cells have no destructor, so they're safe
+// to touch from the allocator at any point of a thread's life.
+// Signed: a thread can free memory another thread allocated (it then goes
+// negative, which counts as zero).
+thread_local! {
+    static USED_C: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+    static PEAK_C: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+    /// Bytes not charged to the script (parsed code).
+    static EXCLUDED_C: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+}
 static LIMIT: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// memory_limit as configured (for messages).
 static CONFIGURED: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -24,10 +32,14 @@ static GLOBAL: Counting = Counting;
 
 #[inline]
 fn charge(size: usize) {
-    let u = USED.fetch_add(size, Relaxed) + size;
-    if u > PEAK.load(Relaxed) {
-        PEAK.store(u, Relaxed);
-        let charged = u.saturating_sub(EXCLUDED.load(Relaxed));
+    let u = USED_C.with(|c| {
+        let u = c.get() + size as isize;
+        c.set(u);
+        u
+    });
+    if u > PEAK_C.with(|p| p.get()) {
+        PEAK_C.with(|p| p.set(u));
+        let charged = (u - EXCLUDED_C.with(|e| e.get())).max(0) as usize;
         if charged > LIMIT.load(Relaxed) && !OVER.load(Relaxed) {
             OVER.store(true, Relaxed);
             TRIED.store(size, Relaxed);
@@ -59,7 +71,7 @@ unsafe impl GlobalAlloc for Counting {
     #[inline]
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         System.dealloc(p, l);
-        USED.fetch_sub(l.size(), Relaxed);
+        USED_C.with(|c| c.set(c.get() - l.size() as isize));
     }
 
     #[inline]
@@ -69,7 +81,7 @@ unsafe impl GlobalAlloc for Counting {
             if new >= l.size() {
                 charge(new - l.size());
             } else {
-                USED.fetch_sub(l.size() - new, Relaxed);
+                USED_C.with(|c| c.set(c.get() - (l.size() - new) as isize));
             }
         }
         q
@@ -77,21 +89,25 @@ unsafe impl GlobalAlloc for Counting {
 }
 
 /// Bytes charged to the script now.
+fn raw(c: &'static std::thread::LocalKey<std::cell::Cell<isize>>) -> isize {
+    c.with(|c| c.get())
+}
+
 pub fn used() -> usize {
-    USED.load(Relaxed).saturating_sub(EXCLUDED.load(Relaxed))
+    (raw(&USED_C) - raw(&EXCLUDED_C)).max(0) as usize
 }
 
 pub fn peak() -> usize {
-    PEAK.load(Relaxed).saturating_sub(EXCLUDED.load(Relaxed))
+    (raw(&PEAK_C) - raw(&EXCLUDED_C)).max(0) as usize
 }
 
-/// Raw allocator total (for measuring what to exclude).
+/// Raw allocator total on this thread (for measuring what to exclude).
 pub fn raw_used() -> usize {
-    USED.load(Relaxed)
+    raw(&USED_C).max(0) as usize
 }
 
 pub fn exclude(bytes: usize) {
-    EXCLUDED.fetch_add(bytes, Relaxed);
+    EXCLUDED_C.with(|e| e.set(e.get() + bytes as isize));
 }
 
 /// (configured, enforced); None = unlimited.
