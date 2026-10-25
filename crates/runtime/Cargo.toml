@@ -7,4 +7,8 @@ license.workspace = true
 [dependencies]
 corosensei = "0.3.4"
 polling = "3"
-socket2 = "0.5"
+socket2 = { version = "0.5", features = ["all"] }
+libc = "0.2"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pki-types = { version = "1", features = ["std"] }

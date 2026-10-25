@@ -6,6 +6,7 @@
 
 mod error;
 pub mod net;
+pub mod tls;
 mod promise;
 mod scheduler;
 

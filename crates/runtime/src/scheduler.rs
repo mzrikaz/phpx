@@ -62,6 +62,8 @@ struct Scheduler {
     deferred: Vec<Box<dyn FnOnce()>>,
     /// fd -> task parked until that fd is ready. Removed when the event fires.
     io_waiters: HashMap<usize, TaskId>,
+    /// fd -> (readable, writable) of the event that woke its waiter.
+    io_fired: HashMap<usize, (bool, bool)>,
     stack_pool: Vec<DefaultStack>,
 }
 
@@ -261,29 +263,52 @@ pub(crate) fn deregister_io(fd: BorrowedFd<'_>) {
     let _ = POLLER.with(|p| p.delete(fd));
 }
 
-/// Park the current task until `fd` is readable (or writable). One waiter per fd.
-pub(crate) fn wait_io(fd: BorrowedFd<'_>, readable: bool) -> Result<()> {
-    let key = fd.as_raw_fd() as usize;
+/// Park until one of `fds` (each with its read / write interest) is ready
+/// or `deadline` passes. Returns (readable, writable) per fd; all false on
+/// timeout. Every fd must be registered (`register_io`). One waiter per fd.
+pub(crate) fn wait_fds(fds: &[(BorrowedFd<'_>, bool, bool)], deadline: Option<Instant>) -> Result<Vec<(bool, bool)>> {
     let me = expect_current();
-    let ev = if readable { Event::readable(key) } else { Event::writable(key) };
-    POLLER.with(|p| p.modify(fd, ev))?;
-    with(|s| {
-        let prev = s.io_waiters.insert(key, me);
-        assert!(prev.is_none_or(|t| t == me), "two tasks waiting on fd {key}");
-    });
+    for &(fd, r, w) in fds {
+        let key = fd.as_raw_fd() as usize;
+        let ev = Event::new(key, r, w);
+        POLLER.with(|p| p.modify(fd, ev))?;
+        with(|s| {
+            let prev = s.io_waiters.insert(key, me);
+            assert!(prev.is_none_or(|t| t == me), "two tasks waiting on fd {key}");
+        });
+    }
 
-    // On cancel, stop listening so a late event doesn't wake a stranger.
-    struct Guard(usize);
-    impl Drop for Guard {
+    // Disarm whatever didn't fire, also on cancel, so a late event doesn't
+    // wake a stranger.
+    struct Guard<'a, 'b>(&'a [(BorrowedFd<'b>, bool, bool)], Option<TimerId>);
+    impl Drop for Guard<'_, '_> {
         fn drop(&mut self) {
-            with(|s| s.io_waiters.remove(&self.0));
+            for &(fd, ..) in self.0 {
+                let key = fd.as_raw_fd() as usize;
+                if with(|s| s.io_waiters.remove(&key)).is_some() {
+                    let _ = POLLER.with(|p| p.modify(fd, Event::none(key)));
+                }
+                with(|s| s.io_fired.remove(&key));
+            }
+            if let Some(t) = self.1 {
+                remove_timer(t);
+            }
         }
     }
-    let _guard = Guard(key);
-    while with(|s| s.io_waiters.contains_key(&key)) {
+    let _guard = Guard(fds, deadline.map(|at| add_timer(at, me)));
+    let keys: Vec<usize> = fds.iter().map(|(fd, ..)| fd.as_raw_fd() as usize).collect();
+    loop {
+        let fired: Option<Vec<(bool, bool)>> = with(|s| {
+            keys.iter().any(|k| s.io_fired.contains_key(k)).then(|| keys.iter().map(|k| s.io_fired.get(k).copied().unwrap_or_default()).collect())
+        });
+        if let Some(f) = fired {
+            return Ok(f);
+        }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            return Ok(vec![(false, false); keys.len()]);
+        }
         park()?;
     }
-    Ok(())
 }
 
 /// Block the OS thread until an fd is ready or `deadline` passes, then wake
@@ -296,8 +321,16 @@ fn poll_io(events: &mut Events, deadline: Option<Instant>) {
         Err(e) if e.kind() == io::ErrorKind::Interrupted => return,
         Err(e) => panic!("poller failed: {e}"),
     }
-    let woken: Vec<TaskId> =
-        with(|s| events.iter().filter_map(|ev| s.io_waiters.remove(&ev.key)).collect());
+    let woken: Vec<TaskId> = with(|s| {
+        events
+            .iter()
+            .filter_map(|ev| {
+                let t = s.io_waiters.remove(&ev.key)?;
+                s.io_fired.insert(ev.key, (ev.readable, ev.writable));
+                Some(t)
+            })
+            .collect()
+    });
     woken.into_iter().for_each(wake);
 }
 
