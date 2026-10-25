@@ -1,0 +1,4 @@
+16384: Constant A::X is deprecated since 1.2, use B
+116384: Constant A::X is deprecated since 1.2, use B
+116384: Constant A::Y is deprecated
+23

@@ -82,29 +82,53 @@ class PDO
     const FETCH_ORI_REL = 5;
     const CURSOR_FWDONLY = 0;
     const CURSOR_SCROLL = 1;
+    #[\Deprecated(message: "use Pdo\\Sqlite::DETERMINISTIC instead", since: "8.5")]
     const SQLITE_DETERMINISTIC = 2048;
+    #[\Deprecated(message: "use Pdo\\Sqlite::ATTR_OPEN_FLAGS instead", since: "8.5")]
     const SQLITE_ATTR_OPEN_FLAGS = 1000;
+    #[\Deprecated(message: "use Pdo\\Sqlite::OPEN_READONLY instead", since: "8.5")]
     const SQLITE_OPEN_READONLY = 1;
+    #[\Deprecated(message: "use Pdo\\Sqlite::OPEN_READWRITE instead", since: "8.5")]
     const SQLITE_OPEN_READWRITE = 2;
+    #[\Deprecated(message: "use Pdo\\Sqlite::OPEN_CREATE instead", since: "8.5")]
     const SQLITE_OPEN_CREATE = 4;
+    #[\Deprecated(message: "use Pdo\\Sqlite::ATTR_READONLY_STATEMENT instead", since: "8.5")]
     const SQLITE_ATTR_READONLY_STATEMENT = 1001;
+    #[\Deprecated(message: "use Pdo\\Sqlite::ATTR_EXTENDED_RESULT_CODES instead", since: "8.5")]
     const SQLITE_ATTR_EXTENDED_RESULT_CODES = 1002;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_USE_BUFFERED_QUERY instead", since: "8.5")]
     const MYSQL_ATTR_USE_BUFFERED_QUERY = 1000;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_LOCAL_INFILE instead", since: "8.5")]
     const MYSQL_ATTR_LOCAL_INFILE = 1001;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_INIT_COMMAND instead", since: "8.5")]
     const MYSQL_ATTR_INIT_COMMAND = 1002;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_COMPRESS instead", since: "8.5")]
     const MYSQL_ATTR_COMPRESS = 1003;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_DIRECT_QUERY instead", since: "8.5")]
     const MYSQL_ATTR_DIRECT_QUERY = 20;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_FOUND_ROWS instead", since: "8.5")]
     const MYSQL_ATTR_FOUND_ROWS = 1004;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_IGNORE_SPACE instead", since: "8.5")]
     const MYSQL_ATTR_IGNORE_SPACE = 1005;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_SSL_KEY instead", since: "8.5")]
     const MYSQL_ATTR_SSL_KEY = 1006;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_SSL_CERT instead", since: "8.5")]
     const MYSQL_ATTR_SSL_CERT = 1007;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_SSL_CA instead", since: "8.5")]
     const MYSQL_ATTR_SSL_CA = 1008;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_SSL_CAPATH instead", since: "8.5")]
     const MYSQL_ATTR_SSL_CAPATH = 1009;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_SSL_CIPHER instead", since: "8.5")]
     const MYSQL_ATTR_SSL_CIPHER = 1010;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_SERVER_PUBLIC_KEY instead", since: "8.5")]
     const MYSQL_ATTR_SERVER_PUBLIC_KEY = 1011;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_MULTI_STATEMENTS instead", since: "8.5")]
     const MYSQL_ATTR_MULTI_STATEMENTS = 1012;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_SSL_VERIFY_SERVER_CERT instead", since: "8.5")]
     const MYSQL_ATTR_SSL_VERIFY_SERVER_CERT = 1013;
+    #[\Deprecated(message: "use Pdo\\Mysql::ATTR_LOCAL_INFILE_DIRECTORY instead", since: "8.5")]
     const MYSQL_ATTR_LOCAL_INFILE_DIRECTORY = 1014;
+    #[\Deprecated(message: "use Pdo\\Pgsql::ATTR_DISABLE_PREPARES instead", since: "8.5")]
     const PGSQL_ATTR_DISABLE_PREPARES = 1000;
     const PGSQL_TRANSACTION_IDLE = 0;
     const PGSQL_TRANSACTION_ACTIVE = 1;

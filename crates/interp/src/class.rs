@@ -95,6 +95,9 @@ pub struct Class {
     pub ancestors: Vec<Rc<str>>,
     pub is_abstract: bool,
     pub consts: RefCell<IndexMap<Rc<str>, ConstSlot>>,
+    /// Constants marked `#[\Deprecated]`: name -> (declaring class name,
+    /// the attribute, its namespace context).
+    pub deprecated_consts: Vec<(Rc<str>, Rc<str>, &'static ast::Attribute, Rc<NsCtx>)>,
     /// Shared with the parent unless redeclared (PHP semantics).
     pub static_props: IndexMap<Rc<str>, Rc<StaticProp>>,
     pub props: Vec<PropDecl>,

@@ -1258,7 +1258,38 @@ impl Interp {
             return Ok(Value::str(&cls.name));
         }
         let cls = self.class_ref(f, cref)?;
-        self.get_class_const(&cls, name)
+        let v = self.get_class_const(&cls, name)?;
+        if !cls.deprecated_consts.is_empty() {
+            self.const_deprecation(&cls, name)?;
+        }
+        Ok(v)
+    }
+
+    /// "Constant C::X is deprecated since 8.5, use ... instead".
+    #[inline(never)]
+    fn const_deprecation(&self, cls: &Rc<Class>, name: &str) -> R<()> {
+        let Some((_, owner, attr, ctx)) = cls.deprecated_consts.iter().find(|d| *d.0 == *name).cloned() else { return Ok(()) };
+        // Built-in classes raise E_DEPRECATED, user code E_USER_DEPRECATED.
+        let internal = ctx.file == crate::interp::PRELUDE_FILE;
+        let mut fr = Frame::new(ctx, 0);
+        let (mut message, mut since) = (None, None);
+        for (i, a) in attr.args.iter().enumerate() {
+            let v = self.to_string_lossy(&self.eval(&mut fr, &a.value)?)?;
+            match (a.name.as_ref().map(|n| n.name.as_str()), i) {
+                (Some("message"), _) | (None, 0) => message = Some(v),
+                (Some("since"), _) | (None, 1) => since = Some(v),
+                _ => {}
+            }
+        }
+        let mut msg = format!("Constant {owner}::{name} is deprecated");
+        if let Some(s) = since.filter(|s| !s.is_empty()) {
+            msg.push_str(&format!(" since {s}"));
+        }
+        if let Some(m) = message.filter(|m| !m.is_empty()) {
+            msg.push_str(&format!(", {m}"));
+        }
+        crate::errors::raise(self, if internal { crate::errors::E_DEPRECATED } else { crate::errors::E_USER_DEPRECATED }, &msg);
+        Ok(())
     }
 
     pub fn get_class_const(&self, cls: &Rc<Class>, name: &str) -> R<Value> {
@@ -1499,6 +1530,7 @@ impl Interp {
         let mut trait_keys: Vec<Rc<str>> = vec![];
         let mut props: Vec<PropDecl> = vec![];
         let mut static_props: IndexMap<Rc<str>, Rc<StaticProp>> = IndexMap::new();
+        let mut deprecated_consts = parent.as_ref().map(|p| p.deprecated_consts.clone()).unwrap_or_default();
         if let Some(p) = &parent {
             ancestors.extend(p.ancestors.iter().cloned());
             consts.extend(p.consts.borrow().iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -1607,9 +1639,14 @@ impl Interp {
                         }
                     }
                 }
-                Member::Const { items, .. } => {
+                Member::Const { items, attrs, .. } => {
+                    let deprecated = attrs.iter().find(|a| self.resolve_class_name(ctx, &a.name).eq_ignore_ascii_case("Deprecated"));
                     for (n, e) in items {
                         consts.insert(Rc::from(&*n.name), ConstSlot::Pending { expr: e, declaring: lname.clone(), ctx: ctx.clone() });
+                        deprecated_consts.retain(|d| *d.0 != *n.name);
+                        if let Some(a) = deprecated {
+                            deprecated_consts.push((Rc::from(&*n.name), display.clone(), a, ctx.clone()));
+                        }
                     }
                 }
                 Member::Property { modifiers, ty, items, .. } => {
@@ -1757,6 +1794,7 @@ impl Interp {
             ancestors,
             is_abstract,
             consts: std::cell::RefCell::new(consts),
+            deprecated_consts,
             static_props,
             props,
             has_destruct: methods.contains_key("__destruct"),
