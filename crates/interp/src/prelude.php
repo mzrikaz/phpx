@@ -41,6 +41,10 @@ final class Promise {}
 
 final class Concurrency {}
 
+final class Fiber {}
+
+final class FiberError extends Error {}
+
 final class WeakReference
 {
     private function __construct() {}

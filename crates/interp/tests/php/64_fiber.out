@@ -1,0 +1,20 @@
+bool(false)
+NULL
+start a
+string(2) "s1"
+bool(true)
+bool(false)
+got b
+string(2) "s2"
+caught boom
+string(2) "s3"
+NULL
+bool(true)
+string(5) "ret c"
+FiberError: Cannot resume a fiber that is not suspended
+Cannot suspend outside of a fiber
+in fiber
+propagated: inside
+int(11)
+NULL
+int(2)

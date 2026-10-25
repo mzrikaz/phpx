@@ -31,6 +31,7 @@ mod pstr;
 mod consts;
 mod consts_table;
 mod date;
+mod fiber;
 mod glob;
 mod mbext;
 mod db;
