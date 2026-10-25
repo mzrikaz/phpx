@@ -1,0 +1,33 @@
+string(4) "b.md"
+string(2) "md"
+string(1) "b"
+bool(true)
+int(3)
+bool(true)
+bool(false)
+string(4) "file"
+bool(true)
+a.txt ab.dat data.csv dot:../ dot:./ sub/
+a.txt=SplFileInfo:a.txt ab.dat=SplFileInfo:ab.dat data.csv=SplFileInfo:data.csv sub=SplFileInfo:sub
+a.txt@0 ab.dat@0 data.csv@0 sub/@0 sub/b.md@1 sub/deep/@1 sub/deep/c.txt@2
+a.txt
+0:["x","y"] 1:["1","2"] 3:["3","4"] 
+0="x,y\n" 1="1,2\n" 2="\n" 3="3,4\n" 4="" 
+hi|there|
+UnexpectedValueException: DirectoryIterator::__construct(B/nope): Failed to open directory: No such file or directory
+SplFileInfo::getSize(): stat failed for B/nope
+banana
+[1,"a"][2,"b"]
+string(2) "a
+"
+bool(false)
+string(2) "b
+"
+bool(false)
+bool(false)
+bool(true)
+0="a\n" 1="b\n" 2="" 
+0="a" 1="b" 2="" 
+0="a\n" 1="b\n" 2="" 
+0="a\n" 1="b\n" 2=false 
+0="a" 1="b" 2=false 
