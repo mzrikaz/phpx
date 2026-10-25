@@ -360,6 +360,14 @@ impl Analysis {
                 self.args(args)
             }
             MethodCall { object, name, args, .. } => {
+                // Binders that keep a reference to the variable after the
+                // call returns: compiled code passes locals by reference as
+                // copy-in/copy-out, so later writes wouldn't reach them.
+                if let ast::MemberName::Ident(m) = name {
+                    if matches!(m.name.to_ascii_lowercase().as_str(), "bindparam" | "bindcolumn" | "bind_param" | "bind_result") {
+                        return Err("reference-keeping binder call");
+                    }
+                }
                 self.expr(object)?;
                 self.member(name)?;
                 self.args(args)
