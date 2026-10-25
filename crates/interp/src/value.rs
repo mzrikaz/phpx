@@ -415,6 +415,14 @@ impl PhpArray {
     }
 
     /// Raw storage, references included (for var_dump's `&` marker).
+    /// Stored values (references not dereferenced), for the cycle collector.
+    pub fn raw_values(&self) -> Either<std::slice::Iter<'_, Value>, indexmap::map::Values<'_, Key, Value>> {
+        match &self.store {
+            Store::Packed(v) => Either::L(v.iter()),
+            Store::Hash(m) => Either::R(m.values()),
+        }
+    }
+
     pub fn iter_raw(&self) -> impl DoubleEndedIterator<Item = (Key, &Value)> + ExactSizeIterator + '_ {
         match &self.store {
             Store::Packed(v) => Either::L(v.iter().enumerate().map(|(i, x)| (Key::Int(i as i64), x))),
@@ -481,17 +489,22 @@ pub struct Obj {
     pub internal: RefCell<Internal>,
     /// `__destruct` already ran (or was queued).
     pub destructed: Cell<bool>,
+    /// Slot in the cycle collector's registry (u32::MAX: not registered).
+    pub gc_index: Cell<u32>,
 }
 
 impl Obj {
     pub fn new(class: Rc<Class>, internal: Internal) -> Rc<Obj> {
-        Rc::new(Obj {
+        let o = Rc::new(Obj {
             id: alloc_id(),
             class,
             props: RefCell::new(FxIndexMap::default()),
             internal: RefCell::new(internal),
             destructed: Cell::new(false),
-        })
+            gc_index: Cell::new(u32::MAX),
+        });
+        crate::gc::register(&o);
+        o
     }
 
     pub fn get_prop(&self, name: &str) -> Option<Value> {
@@ -529,6 +542,7 @@ impl Obj {
 
 impl Drop for Obj {
     fn drop(&mut self) {
+        crate::gc::unregister(self);
         if self.class.has_destruct && !self.destructed.get() {
             // Resurrect the state into a fresh Rc (same handle) for the
             // destructor; it frees the handle when it dies in turn.
@@ -538,7 +552,9 @@ impl Drop for Obj {
                 props: RefCell::new(std::mem::take(self.props.get_mut())),
                 internal: RefCell::new(std::mem::take(self.internal.get_mut())),
                 destructed: Cell::new(true),
+                gc_index: Cell::new(u32::MAX),
             });
+            crate::gc::register(&o);
             if DESTRUCT_QUEUE.try_with(|q| q.borrow_mut().push(o)).is_ok() {
                 DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
                 return;

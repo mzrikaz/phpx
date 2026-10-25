@@ -274,6 +274,8 @@ pub struct Interp {
     pub include_path: RefCell<String>,
     /// Where output first reached the client (headers_sent()).
     output_start: RefCell<Option<(String, usize)>>,
+    /// Classes resolved from source names, keyed by the AST name's address.
+    pub class_cache: RefCell<FxHashMap<usize, Rc<Class>>>,
     /// `@` nesting depth: warnings are suppressed while nonzero.
     pub silence: Cell<u32>,
     /// Variable names created at run time (`$$x`, extract()).
@@ -319,6 +321,7 @@ impl Interp {
             pos: Cell::new(Pos { file: 0, off: 0 }),
             globals: Cell::new(std::ptr::null_mut()),
             silence: Cell::new(0),
+            class_cache: RefCell::new(FxHashMap::default()),
             response: RefCell::new(Default::default()),
             include_path: RefCell::new(".:/usr/share/php".into()),
             output_start: RefCell::new(None),
@@ -640,6 +643,9 @@ impl Interp {
     pub fn run_destructors(&self) -> R<()> {
         use crate::value::{DESTRUCT_PENDING, DESTRUCT_QUEUE};
         while DESTRUCT_PENDING.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            if crate::gc::take_due() {
+                crate::gc::collect();
+            }
             let q = DESTRUCT_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
             let saved = self.pos.get();
             let mut r = Ok(());

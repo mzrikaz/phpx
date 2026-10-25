@@ -600,7 +600,31 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("date_default_timezone_get", |_, _, _| Ok(Value::str("UTC")));
     t.insert("memory_get_usage", |_, _, _| Ok(Value::Int(2 * 1024 * 1024)));
     t.insert("memory_get_peak_usage", |_, _, _| Ok(Value::Int(2 * 1024 * 1024)));
-    t.insert("gc_collect_cycles", |_, _, _| Ok(Value::Int(0)));
+    t.insert("gc_collect_cycles", |it, _, _| {
+        // Destructors of cyclic garbage run, then the cycles are freed.
+        let mut n = crate::gc::collect();
+        it.run_destructors()?;
+        n += crate::gc::collect();
+        Ok(Value::Int(n as i64))
+    });
+    t.insert("gc_enable", |_, _, _| {
+        crate::gc::set_enabled(true);
+        Ok(Value::Null)
+    });
+    t.insert("gc_disable", |_, _, _| {
+        crate::gc::set_enabled(false);
+        Ok(Value::Null)
+    });
+    t.insert("gc_enabled", |_, _, _| Ok(Value::Bool(crate::gc::enabled())));
+    t.insert("gc_mem_caches", |_, _, _| Ok(Value::Int(0)));
+    t.insert("gc_status", |_, _, _| {
+        let (runs, collected, threshold, roots) = crate::gc::status();
+        let mut m = PhpArray::new();
+        for (k, v) in [("runs", runs as i64), ("collected", collected as i64), ("threshold", threshold as i64), ("roots", roots as i64)] {
+            m.insert(Key::Str(value::pstr(k)), Value::Int(v));
+        }
+        Ok(Value::array(m))
+    });
     t.insert("getenv", |it, _, a| {
         if !has(a, 0) {
             let mut out = PhpArray::new();

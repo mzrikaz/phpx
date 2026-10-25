@@ -13,6 +13,7 @@ mod composer;
 mod expr;
 mod ext;
 mod fs;
+mod gc;
 mod generator;
 pub mod interp;
 mod json;
