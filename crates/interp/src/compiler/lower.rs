@@ -2472,6 +2472,7 @@ impl<'a> Lower<'a> {
                 let v = self.materialize(v);
                 let va = self.addr(v).unwrap();
                 let mut pos = 0i64;
+                let mut first = true;
                 for it in items {
                     let Some(it) = it else {
                         pos += 1;
@@ -2486,7 +2487,9 @@ impl<'a> Lower<'a> {
                     };
                     let key = self.materialize(key);
                     let ka = self.addr(key).unwrap();
-                    let r = self.helper_value("rt_index_get", |l| vec![l.cx, va, ka])?;
+                    let fl = self.iconst(first as i64);
+                    first = false;
+                    let r = self.helper_value("rt_list_get", |l| vec![l.cx, va, ka, fl])?;
                     self.release(key);
                     let ExprKind::Var(n) = &it.value.kind else { return Err("list target") };
                     let i = self.locals.index[n.as_str()];

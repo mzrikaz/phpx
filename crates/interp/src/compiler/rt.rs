@@ -507,6 +507,19 @@ pub unsafe extern "C" fn rt_index_get(c: *mut Cx, base: *const Value, key: *cons
     status(it, it.read_index(&*base, &*key), |v| put(dst, v))
 }
 
+/// One element of a list() assignment (`first`: the first target).
+pub unsafe extern "C" fn rt_list_get(c: *mut Cx, base: *const Value, key: *const Value, first: u64, dst: *mut Value) -> u64 {
+    let (it, _) = cx(c);
+    if let (Value::Array(a), Value::Int(n)) = (&*base, &*key) {
+        if let Some(v) = a.get(&Key::Int(*n)) {
+            put(dst, v);
+            return 0;
+        }
+    }
+    let r = it.to_key(&*key).and_then(|k| it.list_elem(&*base, &k, first != 0));
+    status(it, r, |v| put(dst, v))
+}
+
 /// Quiet `$base[$key]` for isset/??/empty: 1 = found (written to dst),
 /// 0 = missing, 2 = error.
 pub unsafe extern "C" fn rt_quiet_index(c: *mut Cx, base: *const Value, key: *const Value, dst: *mut Value) -> u64 {

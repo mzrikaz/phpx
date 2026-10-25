@@ -121,6 +121,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_incdec: 4 => true,
     rt_cast: 4 => true,
     rt_index_get: 4 => true,
+    rt_list_get: 5 => true,
     rt_quiet_index: 4 => true,
     rt_prop_get: 5 => true,
     rt_prop_read: 4 => true,

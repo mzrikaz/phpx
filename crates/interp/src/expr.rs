@@ -1472,20 +1472,35 @@ impl Interp {
                     Key::Int(pos - 1)
                 }
             };
-            let elem = match &v {
-                Value::Array(a) => match a.get(&key) {
-                    Some(x) => x.clone(),
-                    None => {
-                        self.warn(&format!("Undefined array key {}", key_repr(&key)));
-                        Value::Null
-                    }
-                },
-                Value::Object(o) if o.class.is_a("arrayaccess") => self.call_method(o, "offsetGet", vec![key.to_value()])?,
-                _ => Value::Null,
-            };
+            let first = std::ptr::eq(it, items.iter().flatten().next().unwrap());
+            let elem = self.list_elem(&v, &key, first)?;
             self.assign_to(f, &it.value, elem)?;
         }
         Ok(())
+    }
+
+    /// One element of `[$a, ...] = $v`: arrays warn on missing keys,
+    /// ArrayAccess objects are asked, null gives nulls silently, other
+    /// scalars (strings too) warn once and give nulls.
+    pub fn list_elem(&self, v: &Value, key: &Key, first: bool) -> R<Value> {
+        Ok(match v.deref() {
+            Value::Array(a) => match a.get(key) {
+                Some(x) => x,
+                None => {
+                    self.warn(&format!("Undefined array key {}", key_repr(key)));
+                    Value::Null
+                }
+            },
+            Value::Object(o) if o.class.is_a("arrayaccess") => self.call_method(&o, "offsetGet", vec![key.to_value()])?,
+            Value::Object(o) => return Err(self.error("Error", &format!("Cannot use object of type {} as array", o.class.name))),
+            Value::Null => Value::Null,
+            other => {
+                if first {
+                    self.warn(&format!("Cannot use {} as array", other.type_name()));
+                }
+                Value::Null
+            }
+        })
     }
 
     pub fn unset(&self, f: &mut Frame, e: &'static Expr) -> R<()> {
