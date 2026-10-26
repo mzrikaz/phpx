@@ -879,6 +879,11 @@ impl Interp {
     pub fn try_native(&self, fn_id: usize, mk: impl FnOnce() -> Target, f: &mut crate::interp::Frame) -> Option<R<Value>> {
         // The native borrow ends here: native code may call back into PHP code.
         let entry = self.native_entry(fn_id, mk)?;
+        self.run_native_entry(entry, f)
+    }
+
+    /// Run a compiled entry whose parameters are already bound in `f`.
+    pub fn run_native_entry(&self, entry: Entry, f: &mut crate::interp::Frame) -> Option<R<Value>> {
         let mut cx = Cx { it: self as *const Interp, frame: f as *mut _ };
         let mut out = Value::Null;
         // SAFETY: entry follows the Entry ABI; cx and out outlive the call.

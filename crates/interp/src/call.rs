@@ -1065,6 +1065,15 @@ impl Interp {
         if ret_ref {
             self.want_ref.set(None);
         }
+        let entry = if inv.is_generator || ret_ref { None } else { self.native_entry_of(&inv) };
+        let mut pos = pos;
+        if let Some(entry) = entry.filter(|_| named.is_empty() && inv.captured.is_empty()) {
+            // Compiled: bind straight from the arguments, like calls
+            // between compiled functions (declines leave them untouched).
+            if let Some(r) = self.native_call_args(&inv, entry, &mut pos) {
+                return r;
+            }
+        }
         let mut f = self.bind_args(&inv, pos, named, saved_pos)?;
         if inv.is_generator {
             return Ok(self.start_generator(f, inv.body, saved_pos));
@@ -1072,7 +1081,7 @@ impl Interp {
         if ret_ref {
             return self.invoke_ref(&inv, f, saved_pos);
         }
-        if let Some(r) = self.native_call(&inv, &mut f) {
+        if let Some(r) = entry.and_then(|e| self.run_native_entry(e, &mut f)) {
             // (Compiled code checked the declared return type.)
             self.pos.set(saved_pos);
             return r;
@@ -1126,8 +1135,24 @@ impl Interp {
         Ok(result)
     }
 
+    /// Call a compiled entry with the arguments as they are. None = it
+    /// declined to bind them (they are untouched).
     #[inline(never)]
-    fn native_call(&self, inv: &Invoke, f: &mut Frame) -> Option<R<Value>> {
+    fn native_call_args(&self, inv: &Invoke, entry: crate::compiler::Entry, pos: &mut Vec<Value>) -> Option<R<Value>> {
+        let mut f = Frame::for_call(inv.ctx.clone(), inv.func.clone(), inv.fn_id);
+        f.this = inv.this.clone();
+        f.class = inv.class.clone();
+        f.static_class = inv.static_class.clone();
+        let mut out = Value::Null;
+        let st = unsafe { crate::compiler::rt::enter(self, entry, &mut f, pos.as_mut_ptr(), pos.len() as u64, &mut out) }?;
+        Some(match st {
+            0 => Ok(out),
+            _ => Err(self.pending.borrow_mut().take().expect("native error without pending exception")),
+        })
+    }
+
+    #[inline(never)]
+    fn native_entry_of(&self, inv: &Invoke) -> Option<crate::compiler::Entry> {
         if self.native.try_borrow().map(|n| n.is_none()).unwrap_or(true) {
             return None;
         }
@@ -1144,7 +1169,7 @@ impl Interp {
             class: inv.class.clone(),
             ret: inv.ret,
         };
-        self.try_native(inv.fn_id, mk, f)
+        self.native_entry(inv.fn_id, mk)
     }
 
     /// Recursive built-ins (serialize, json, ...) check this before going
