@@ -1,6 +1,6 @@
 //! Calls, name resolution, classes and type coercion.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::rc::Rc;
 
 use phpx_syntax::ast::{self, ClassKind, Member, Stmt, Type};
@@ -2430,9 +2430,9 @@ impl Interp {
             "callable" => {
                 let f = Frame::new(Rc::new(NsCtx {
                     ns: ctx.ns.clone(),
-                    uses: HashMap::new(),
-                    use_fns: HashMap::new(),
-                    use_consts: HashMap::new(),
+                    uses: HashMap::default(),
+                    use_fns: HashMap::default(),
+                    use_consts: HashMap::default(),
                     file: ctx.file,
                     strict: ctx.strict,
                 }), 0);

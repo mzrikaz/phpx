@@ -1,13 +1,16 @@
 //! Interpreter state, frames, and statement execution.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use phpx_syntax::ast::{self, Stmt, StmtKind};
 use rustc_hash::FxHashMap;
+
+// Fast hashing for the interpreter's tables (paths, names, ids).
+type HashMap<K, V> = FxHashMap<K, V>;
 
 use crate::class::{Class, StaticProp};
 use crate::value::{Lower, Obj, Value};
@@ -134,13 +137,13 @@ thread_local! {
     /// Every file this thread's interpreters ran, by id: ids stay the same
     /// from one request's interpreter to the next, so code compiled for
     /// one still points at the right file in the next.
-    static FILE_REG: RefCell<(Vec<(PathBuf, &'static str)>, HashMap<PathBuf, usize>)> = RefCell::new((vec![], HashMap::new()));
+    static FILE_REG: RefCell<(Vec<(PathBuf, &'static str)>, HashMap<PathBuf, usize>)> = RefCell::new((vec![], HashMap::default()));
     static PRELUDE: std::cell::OnceCell<(&'static str, &'static ast::File)> = const { std::cell::OnceCell::new() };
     static EMPTY_NAME: Rc<str> = Rc::from("");
     /// Parsed files by path (syntax trees are immutable, so they outlive
     /// any one interpreter on this thread).
     /// The stamp (see `file_stamp`) is what an include last saw on disk.
-    static PARSED: RefCell<HashMap<PathBuf, (Option<FileStamp>, &'static str, &'static ast::File)>> = RefCell::new(HashMap::new());
+    static PARSED: RefCell<HashMap<PathBuf, (Option<FileStamp>, &'static str, &'static ast::File)>> = RefCell::new(HashMap::default());
 }
 
 /// A file's modification time, size and inode: unchanged means the same
@@ -162,6 +165,15 @@ pub struct Vars {
 }
 
 const VARS_INDEX_AT: usize = 24;
+
+type Segments = Rc<Vec<(&'static [Stmt], Rc<NsCtx>)>>;
+
+thread_local! {
+    /// Namespace segments of a file's top level, by file id. They depend
+    /// only on the (cached) syntax tree, so they last as long as it does:
+    /// a server worker's later requests reuse them.
+    static SEGMENTS: RefCell<FxHashMap<usize, Segments>> = RefCell::new(FxHashMap::default());
+}
 
 thread_local! {
     /// Bumped whenever a variable is unbound or bound to another cell:
@@ -345,8 +357,6 @@ impl Frame {
 
 pub struct Interp {
     pub files: RefCell<Vec<FileInfo>>,
-    /// Namespace segments of a file's top level, by file id.
-    segments: RefCell<FxHashMap<usize, Rc<Vec<(&'static [Stmt], Rc<NsCtx>)>>>>,
     pub functions: RefCell<FxHashMap<Rc<str>, Rc<UserFn>>>,
     pub builtins: FxHashMap<&'static str, BuiltinFn>,
     /// Functions found for string callables ('strlen', 'App\\helper').
@@ -374,7 +384,7 @@ pub struct Interp {
     /// last found for (class, calling scope), visible from there.
     pub method_sites: RefCell<FxHashMap<usize, (usize, usize, Rc<crate::class::Method>)>>,
     /// Files included so far, in inclusion order (the main script first).
-    pub included: RefCell<indexmap::IndexSet<PathBuf>>,
+    pub included: RefCell<indexmap::IndexSet<PathBuf, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>>,
     /// Declared classes per AST node, so hoisted declarations aren't redone.
     pub declared: RefCell<HashSet<usize>>,
     /// (file, byte offset) of the statement running now, for error lines.
@@ -454,28 +464,27 @@ impl Interp {
             files: RefCell::new(FILE_REG.with(|r| r.borrow().0.iter().map(|(path, src)| FileInfo { path: path.clone(), src, lines: Default::default() }).collect())),
             functions: RefCell::new(FxHashMap::default()),
             str_callables: RefCell::new(FxHashMap::default()),
-            segments: RefCell::new(FxHashMap::default()),
             arg_names: RefCell::new(FxHashMap::default()),
             builtins: crate::builtins::table().into_iter().collect(),
-            natives: crate::native::table(),
+            natives: crate::native::table().into_iter().collect(),
             classes: RefCell::new(FxHashMap::default()),
-            constants: RefCell::new(crate::builtins::constants()),
-            statics: RefCell::new(HashMap::new()),
+            constants: RefCell::new(crate::builtins::constants().into_iter().collect()),
+            statics: RefCell::new(HashMap::default()),
             out: RefCell::new(vec![vec![]]),
             writer: RefCell::new(writer),
-            arrow_caps: RefCell::new(HashMap::new()),
+            arrow_caps: RefCell::new(HashMap::default()),
             call_cache: RefCell::new(FxHashMap::default()),
             method_sites: RefCell::new(FxHashMap::default()),
             autoloaders: RefCell::new(vec![]),
             composer: RefCell::new(None),
             generators: RefCell::new(vec![]),
             autoloading: RefCell::new(HashSet::new()),
-            included: RefCell::new(indexmap::IndexSet::new()),
+            included: RefCell::new(indexmap::IndexSet::default()),
             declared: RefCell::new(HashSet::new()),
             pos: Cell::new(Pos { file: 0, off: 0 }),
             globals: Cell::new(std::ptr::null_mut()),
             silence: Cell::new(0),
-            eval_cache: RefCell::new(HashMap::new()),
+            eval_cache: RefCell::new(HashMap::default()),
             ini: RefCell::new(crate::ini::Ini::new()),
             const_arrays: RefCell::new(FxHashMap::default()),
             class_cache: RefCell::new(FxHashMap::default()),
@@ -488,7 +497,7 @@ impl Interp {
             output_start: RefCell::new(None),
             names: RefCell::new(HashSet::new()),
             lower: Lower::default(),
-            anon_classes: RefCell::new(HashMap::new()),
+            anon_classes: RefCell::new(HashMap::default()),
             file_strict: RefCell::new(vec![]),
             me: RefCell::new(std::rc::Weak::new()),
             jit: RefCell::new(if std::env::var("PHPX_NOJIT").is_ok() {
@@ -588,9 +597,9 @@ impl Interp {
     pub fn top_ctx(&self, file: usize, strict: bool) -> Rc<NsCtx> {
         Rc::new(NsCtx {
             ns: String::new(),
-            uses: HashMap::new(),
-            use_fns: HashMap::new(),
-            use_consts: HashMap::new(),
+            uses: HashMap::default(),
+            use_fns: HashMap::default(),
+            use_consts: HashMap::default(),
             file,
             strict,
         })
@@ -806,12 +815,12 @@ impl Interp {
             fs[file] = strict;
         }
         // (The main script's statements are split once per file id too.)
-        let cached = self.segments.borrow().get(&file).filter(|s| s.first().is_none_or(|x| x.0.as_ptr() == stmts.as_ptr())).cloned();
+        let cached = SEGMENTS.with(|m| m.borrow().get(&file).filter(|s| s.first().is_none_or(|x| x.0.as_ptr() == stmts.as_ptr())).cloned());
         let segments = match cached {
             Some(s) => s,
             None => {
                 let s = Rc::new(self.namespace_segments(stmts, file, strict));
-                self.segments.borrow_mut().insert(file, s.clone());
+                SEGMENTS.with(|m| m.borrow_mut().insert(file, s.clone()));
                 s
             }
         };
@@ -836,7 +845,7 @@ impl Interp {
     fn namespace_segments(&self, stmts: &'static [Stmt], file: usize, strict: bool) -> Vec<(&'static [Stmt], Rc<NsCtx>)> {
         let mut out = vec![];
         let mut start = 0;
-        let mut ctx = NsCtx { ns: String::new(), uses: HashMap::new(), use_fns: HashMap::new(), use_consts: HashMap::new(), file, strict };
+        let mut ctx = NsCtx { ns: String::new(), uses: HashMap::default(), use_fns: HashMap::default(), use_consts: HashMap::default(), file, strict };
         let finish = |ctx: &NsCtx| NsCtx {
             ns: ctx.ns.clone(),
             uses: ctx.uses.clone(),
@@ -852,9 +861,9 @@ impl Interp {
                     start = i + 1;
                     ctx = NsCtx {
                         ns: name.clone().unwrap_or_default(),
-                        uses: HashMap::new(),
-                        use_fns: HashMap::new(),
-                        use_consts: HashMap::new(),
+                        uses: HashMap::default(),
+                        use_fns: HashMap::default(),
+                        use_consts: HashMap::default(),
                         file,
                         strict,
                     };
@@ -864,9 +873,9 @@ impl Interp {
                     start = i + 1;
                     let mut inner = NsCtx {
                         ns: name.clone().unwrap_or_default(),
-                        uses: HashMap::new(),
-                        use_fns: HashMap::new(),
-                        use_consts: HashMap::new(),
+                        uses: HashMap::default(),
+                        use_fns: HashMap::default(),
+                        use_consts: HashMap::default(),
                         file,
                         strict,
                     };
