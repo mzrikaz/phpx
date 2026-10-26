@@ -619,8 +619,8 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("ctype_print", |it, _, a| ctype(it, a, |c| (32..127).contains(&c)));
     t.insert("ctype_graph", |it, _, a| ctype(it, a, |c| (33..127).contains(&c)));
     t.insert("mb_strlen", |it, _, a| Ok(Value::Int(utf8(&s(it, a, 0)?).chars().count() as i64)));
-    t.insert("mb_strtoupper", |it, _, a| Ok(Value::str(&utf8(&s(it, a, 0)?).to_uppercase())));
-    t.insert("mb_strtolower", |it, _, a| Ok(Value::str(&utf8(&s(it, a, 0)?).to_lowercase())));
+    t.insert("mb_strtoupper", |it, _, a| Ok(Value::str(&crate::mbcase::convert(&utf8(&s(it, a, 0)?), 0))));
+    t.insert("mb_strtolower", |it, _, a| Ok(Value::str(&crate::mbcase::convert(&utf8(&s(it, a, 0)?), 1))));
     t.insert("mb_substr", |it, _, a| {
         let st = utf8(&s(it, a, 0)?).into_owned();
         let chars: Vec<char> = st.chars().collect();
@@ -658,21 +658,11 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("mb_convert_case", |it, _, a| {
         let st = utf8(&s(it, a, 0)?).into_owned();
-        Ok(Value::str(&match int(it, a, 1)? {
-            0 => st.to_uppercase(),
-            1 => st.to_lowercase(),
-            _ => st
-                .split(' ')
-                .map(|w| {
-                    let mut c = w.chars();
-                    match c.next() {
-                        Some(f) => f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase(),
-                        None => String::new(),
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" "),
-        }))
+        let mode = int(it, a, 1)?;
+        if !(0..=7).contains(&mode) {
+            return Err(it.error("ValueError", "mb_convert_case(): Argument #2 ($mode) must be one of the MB_CASE_* constants"));
+        }
+        Ok(Value::str(&crate::mbcase::convert(&st, mode)))
     });
     t.insert("mb_internal_encoding", |_, _, _| Ok(Value::Bool(true)));
 }
