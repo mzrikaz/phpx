@@ -35,6 +35,15 @@ byte-identical to PHP 8.5; the only differences are random ids.
   PHP's order.
 - **Runtime**: Composer's own autoloader runs by default; sockets dropped
   at thread exit no longer abort the process.
+- **Tests and interactions**: the app's Pest suite (Unit + Feature) gives
+  PHP's results test for test, and Livewire updates (search, sort,
+  pagination, filters, validation) answer like PHP. Needed: grapheme_*
+  functions, `AssertionError`, method closures' reflection, callables
+  answered by `__call`/`__callStatic`, shutdown functions seeing the
+  globals, autoloading names given with a leading backslash.
+- **Speed**: inline caches for method and static calls, call-site caching
+  of built-ins, per-file line indexes for traces: a Filament table page
+  renders 20% faster (still ~2x PHP's time).
 
 ## 2026-10-26 — Laravel serves, tiered compilation
 

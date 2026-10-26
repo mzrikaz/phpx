@@ -80,8 +80,9 @@ Tested against a real Laravel 12 + Filament app (Wit-ERP, MySQL):
 - [x] ext/random (`Random\Randomizer`, all engines, seeded `mt_rand` sequences identical to PHP)
 - [x] ext/intl `NumberFormatter` on ICU's own locale data (906 locales), ext/fileinfo
 - [x] Return by reference (`function &f()`), magic-method recursion guards, PHP's uninitialized-typed-property rules
-- [ ] Livewire interactions (POST `/livewire/update`): login, form saves, table actions
-- [ ] PHPUnit suite of the app
+- [x] Livewire interactions (POST `/livewire/update`): table search, sort, pagination, filters, form validation give PHP's responses
+- [x] The app's Pest/PHPUnit suite (Unit + Feature, 140 tests) gives PHP's results test for test
+- [ ] Performance on these pages: phpx is ~2x slower than PHP 8.5's interpreter on a Filament table render (CPU-bound in call machinery and dispatch)
 - [ ] Undefined-variable warnings in compiled code (compiled locals have no "unset" state yet)
 
 ## 3. HTTP server mode (`phpx serve`)

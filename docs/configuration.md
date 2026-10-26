@@ -40,6 +40,16 @@ returned by `parse_ini_*` with `$process_sections`), quoted values,
 | `error_reporting` | `error_reporting()` value (warning filtering: to do) |
 | `zend.enable_gc` | Turns the cycle collector on/off |
 | `unserialize_max_depth` | default depth of `unserialize()` |
+| `auto_prepend_file`, `auto_append_file` | Files run before / after the main script |
+| `intl.default_locale` | `Locale::getDefault()` and formatters created with `''` |
+
+Debugging switches (environment variables):
+
+| Variable | Effect |
+|---|---|
+| `PHPX_TRACE_THROW=1` | Print every exception as it is raised (class, message, location); `=2` adds the PHP stack. For errors that code catches and hides |
+| `PHPX_NATIVE=off`, `PHPX_NOJIT=1` | Interpret everything (see [native-compiler.md](native-compiler.md)) |
+| `PHPX_NATIVE_COMPOSER=1` | Built-in Composer autoloader instead of Composer's own |
 
 Every other PHP setting is stored and returned by `ini_get()` so code that
 reads it works, but has no effect yet.

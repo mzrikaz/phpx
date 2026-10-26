@@ -168,5 +168,9 @@ inclusive time to stderr. Native-compiled PHP code appears as anonymous
 JIT frames; the `rt_*` helpers it calls show up by name, which is usually
 what you want to optimise.
 
+`PHPX_PROFILE_FOLDED=path` also writes the sampled stacks in folded form
+(one `frame;frame;leaf count` line each), the input of flamegraph tools and
+handy for attributing a leaf (`memcmp`, hashing) to its callers.
+
 `perf` also works on the release binary (`perf record -g ./target/release/phpx run x.php`),
 with the same caveat about anonymous JIT frames.
