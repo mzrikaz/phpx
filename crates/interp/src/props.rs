@@ -279,6 +279,11 @@ impl Props {
     }
 
     #[inline]
+    /// Slot `i` itself (None inside: a never-initialized typed property).
+    pub fn slot_mut(&mut self, i: usize) -> Option<&mut Option<Value>> {
+        self.vals.get_mut(i)
+    }
+
     pub fn get_index_mut(&mut self, i: usize) -> Option<&mut Value> {
         self.vals.get_mut(i)?.as_mut()
     }

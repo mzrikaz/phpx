@@ -1267,14 +1267,23 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
         let fits = Quick::accepts(site.tquick.get(), &v) || matches!((&v, &*site.tclass.borrow()), (Value::Object(x), Some(c)) if Rc::ptr_eq(&x.class, c));
         if site.tshape.get() != 0 && shape_key(o) == Some(site.tshape.get()) && site.tscope.get() == scope_key(f) && fits {
             let mut props = o.props.borrow_mut();
-            if let Some(cur) = props.get_index_mut(site.tslot.get()) {
-                if !matches!(cur, Value::Ref(_)) {
+            match props.slot_mut(site.tslot.get()) {
+                Some(Some(cur)) if !matches!(cur, Value::Ref(_)) => {
                     let old = std::mem::replace(cur, v.clone());
                     drop(props);
                     drop(old);
                     put(dst, v);
                     return 0;
                 }
+                // Never initialized (a shared shape has no unset() marks):
+                // the constructor's first write, like any other.
+                Some(slot @ None) => {
+                    *slot = Some(v.clone());
+                    drop(props);
+                    put(dst, v);
+                    return 0;
+                }
+                _ => {}
             }
         }
     }
