@@ -80,12 +80,27 @@ struct AttrReg {
 thread_local! {
     static FNS: RefCell<(Vec<FnReg>, HashMap<usize, usize>)> = RefCell::new((vec![], HashMap::new()));
     static ATTRS: RefCell<(Vec<AttrReg>, HashMap<usize, usize>)> = RefCell::new((vec![], HashMap::new()));
+    /// Descriptors per class (classes never change once declared): kind
+    /// (class, properties, defaults) -> class -> descriptor.
+    static DESCS: RefCell<[HashMap<usize, (Rc<Class>, Value)>; 3]> = Default::default();
+}
+
+/// `make(cls)`, computed once per class.
+fn cached(kind: usize, cls: &Rc<Class>, make: impl FnOnce() -> R<Value>) -> R<Value> {
+    let key = Rc::as_ptr(cls) as usize;
+    if let Some(v) = DESCS.with(|d| d.borrow()[kind].get(&key).map(|e| e.1.clone())) {
+        return Ok(v);
+    }
+    let v = make()?;
+    DESCS.with(|d| d.borrow_mut()[kind].insert(key, (cls.clone(), v.clone())));
+    Ok(v)
 }
 
 /// Registries hold one interpreter's contexts (server workers).
 pub fn reset() {
     FNS.with(|r| *r.borrow_mut() = (vec![], HashMap::new()));
     ATTRS.with(|r| *r.borrow_mut() = (vec![], HashMap::new()));
+    DESCS.with(|d| *d.borrow_mut() = Default::default());
 }
 
 fn fn_id(src: Src, ctx: &Rc<NsCtx>, class: Option<Rc<str>>) -> i64 {
@@ -519,6 +534,18 @@ pub(crate) fn ordered_props(it: &Interp, cls: &Rc<Class>) -> Vec<(Rc<str>, bool,
     out.into_iter().map(|x| x.1).collect()
 }
 
+fn prop_default_value(it: &Interp, c: &Rc<Class>, name: &str) -> R<Value> {
+    if let Some(p) = c.find_prop(name) {
+        return Ok(it.prop_default(c, p)?.unwrap_or(Value::Null));
+    }
+    if let Some(sp) = c.static_props.get(name) {
+        if let Some(e) = sp.init {
+            return eval_in(it, &sp.ctx, Some(&sp.declaring), e);
+        }
+    }
+    Ok(Value::Null)
+}
+
 fn props_desc(it: &Interp, cls: &Rc<Class>) -> Value {
     let mut out: Vec<Value> = vec![];
     for (name, is_static, declaring, vis) in ordered_props(it, cls) {
@@ -770,7 +797,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     // Class description, or null if there's no such class.
     t.insert("__phpx_refl_class", |it, _, a| Ok(match class_arg(it, &arg(a, 0))? {
-        Some(c) => class_desc(it, &c),
+        Some(c) => cached(0, &c, || Ok(class_desc(it, &c)))?,
         None => Value::Null,
     }));
     t.insert("__phpx_refl_methods", |it, _, a| {
@@ -783,9 +810,30 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(c.find_method(&m).map(|m| method_desc(it, &c, m)).unwrap_or(Value::Null))
     });
     t.insert("__phpx_refl_props", |it, _, a| Ok(match class_arg(it, &arg(a, 0))? {
-        Some(c) => props_desc(it, &c),
+        Some(c) => cached(1, &c, || Ok(props_desc(it, &c)))?,
         None => list(vec![]),
     }));
+    // ReflectionClass::getDefaultProperties().
+    t.insert("__phpx_refl_default_props", |it, _, a| {
+        let Some(c) = class_arg(it, &arg(a, 0))? else { return Ok(Value::array(PhpArray::new())) };
+        cached(2, &c, || {
+            let mut out = PhpArray::new();
+            let Value::Array(props) = cached(1, &c, || Ok(props_desc(it, &c)))? else { return Ok(Value::array(out)) };
+            for (_, p) in props.iter() {
+                let Value::Array(p) = p else { continue };
+                let field = |k: &str| p.get(&Key::Str(pstr(k))).unwrap_or(Value::Null);
+                let has_default = field("has_default").truthy();
+                if !has_default && !field("type").is_null() {
+                    continue;
+                }
+                let name = it.to_str(&field("name"))?;
+                let name = String::from_utf8_lossy(&name).into_owned();
+                let v = if has_default { prop_default_value(it, &c, &name)? } else { Value::Null };
+                out.insert(Key::Str(pstr(&name)), v);
+            }
+            Ok(Value::array(out))
+        })
+    });
     t.insert("__phpx_refl_consts", |it, _, a| Ok(match class_arg(it, &arg(a, 0))? {
         Some(c) => consts_desc(it, &c),
         None => list(vec![]),
@@ -843,16 +891,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("__phpx_refl_prop_default", |it, _, a| {
         let Some(c) = class_arg(it, &arg(a, 0))? else { return Ok(Value::Null) };
-        let name = str_arg(it, a, 1)?;
-        if let Some(p) = c.find_prop(&name) {
-            return Ok(it.prop_default(&c, p)?.unwrap_or(Value::Null));
-        }
-        if let Some(sp) = c.static_props.get(name.as_str()) {
-            if let Some(e) = sp.init {
-                return eval_in(it, &sp.ctx, Some(&sp.declaring), e);
-            }
-        }
-        Ok(Value::Null)
+        prop_default_value(it, &c, &str_arg(it, a, 1)?)
     });
     // Instance property read / write as seen from the declaring class.
     t.insert("__phpx_refl_prop_get", |it, _, a| {

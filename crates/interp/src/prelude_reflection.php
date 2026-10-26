@@ -880,13 +880,7 @@ class ReflectionClass implements Reflector
     }
     public function getDefaultProperties(): array
     {
-        $out = [];
-        foreach (__phpx_refl_props($this->d['name']) as $p) {
-            if ($p['has_default'] || $p['type'] === null) {
-                $out[$p['name']] = $p['has_default'] ? __phpx_refl_prop_default($this->d['name'], $p['name']) : null;
-            }
-        }
-        return $out;
+        return __phpx_refl_default_props($this->d['name']);
     }
     public function getStaticProperties(): array
     {
