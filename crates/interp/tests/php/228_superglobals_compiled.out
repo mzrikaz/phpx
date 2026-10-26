@@ -1,0 +1,61 @@
+int(1498)
+array(4) {
+  [0]=>
+  bool(false)
+  [1]=>
+  bool(true)
+  [2]=>
+  bool(false)
+  [3]=>
+  bool(false)
+}
+array(4) {
+  [0]=>
+  bool(true)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(true)
+  [3]=>
+  bool(true)
+}
+int(3)
+int(3)
+array(1) {
+  ["K1"]=>
+  int(1498)
+}
+array(1) {
+  ["A"]=>
+  int(1)
+}
+array(1) {
+  ["A"]=>
+  int(1)
+}
+array(1) {
+  ["x"]=>
+  int(1)
+}
+int(1500)
+int(3000)
+array(1) {
+  ["a"]=>
+  array(1) {
+    ["c"]=>
+    int(2)
+  }
+}
+handler: Undefined global variable $nope
+handler: Undefined global variable $nope
+NULL
+bool(false)
+array(2) {
+  ["c"]=>
+  int(2)
+  ["a"]=>
+  array(1) {
+    ["b"]=>
+    int(9)
+  }
+}

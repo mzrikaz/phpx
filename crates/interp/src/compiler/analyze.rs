@@ -225,6 +225,7 @@ impl Analysis {
                     self.expr(object)?;
                     self.member(name)
                 }
+                ExprKind::GlobalVar(n) if matches!(n.kind, ExprKind::Str(_)) => Ok(()),
                 _ => Err("unset target"),
             }),
             Try { body, catches, finally } => {
@@ -277,6 +278,7 @@ impl Analysis {
                 self.place_base(base)?;
                 index.as_deref().map_or(Ok(()), |i| self.expr(i))
             }
+            ExprKind::GlobalVar(n) if matches!(n.kind, ExprKind::Str(_)) => Ok(()),
             ExprKind::Prop { object, name, nullsafe: false } => {
                 self.expr(object)?;
                 self.member(name)
@@ -332,6 +334,8 @@ impl Analysis {
                 Ok(())
             }
             Var(n) if n == "GLOBALS" => Err("$GLOBALS"),
+            // Superglobals and `$GLOBALS['name']`: through helpers.
+            GlobalVar(n) if matches!(n.kind, Str(_)) => Ok(()),
             VarVar(_) | GlobalVar(_) => Err("variable variable / $GLOBALS"),
             Var(n) => {
                 self.locals.slot(n);
@@ -373,6 +377,7 @@ impl Analysis {
                         }
                     }
                     StaticProp { .. } => self.place_base(target)?,
+                    GlobalVar(n) if matches!(n.kind, Str(_)) => {}
                     _ => return Err("assignment target"),
                 }
                 self.expr(value)

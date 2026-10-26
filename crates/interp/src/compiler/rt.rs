@@ -1421,6 +1421,50 @@ fn place_for(it: &Interp, f: &Frame, root_obj: Option<Rc<Obj>>, name: &'static s
     crate::expr::Place { root: crate::expr::Root::Prop(o, key), path }
 }
 
+/// `$_SERVER` / `$GLOBALS['name']` read; `quiet` (isset, `??`, empty):
+/// no warning when it's undefined.
+pub unsafe extern "C" fn rt_global_get(c: *mut Cx, name: *const u8, len: u64, quiet: u64, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    let n = name_of(name, len);
+    let v = match it.with_globals(f, |v| v.get(n).map(|s| s.borrow().clone())) {
+        Some(v) => v,
+        None => {
+            if quiet == 0 {
+                it.warn(&format!("Undefined global variable ${n}"));
+            }
+            Value::Null
+        }
+    };
+    status(it, Ok(v), |v| put(dst, v))
+}
+
+/// A reference to a global's slot (created as null), the root of a write.
+pub unsafe extern "C" fn rt_global_ref(c: *mut Cx, name: *const u8, len: u64, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    put(dst, Value::Ref(it.global_slot(f, name_of(name, len))));
+    0
+}
+
+/// `$_SERVER = v` / `$GLOBALS['name'] = v`. `val` is consumed; a copy goes
+/// to `dst`.
+pub unsafe extern "C" fn rt_global_set(c: *mut Cx, name: *const u8, len: u64, val: *mut Value, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    let v = take(val);
+    let s = it.global_slot(f, name_of(name, len));
+    let old = std::mem::replace(&mut *s.borrow_mut(), v.clone());
+    // Dropped outside the borrow: it may run a destructor.
+    drop(old);
+    status(it, Ok(()), |_| put(dst, v))
+}
+
+/// `unset($_SERVER)` / `unset($GLOBALS['name'])`.
+pub unsafe extern "C" fn rt_global_unset(c: *mut Cx, name: *const u8, len: u64) -> u64 {
+    let (it, f) = cx(c);
+    let n = name_of(name, len);
+    it.with_globals(f, |v| v.remove(n));
+    status(it, Ok(()), |_| {})
+}
+
 /// Read-modify-write on a place. mode: 0..=24 = BinOp code (`op=`),
 /// 100 = `++`, 101 = `--` (bit 8 = prefix for inc/dec).
 #[allow(clippy::too_many_arguments)]
@@ -1442,11 +1486,13 @@ pub unsafe extern "C" fn rt_place_update(
         let read = |it: &Interp, f: &mut Frame| -> R<Option<Value>> {
             match &obj {
                 None => {
-                    let mut cur = (*root).clone();
+                    // (References: the root may be a by-reference local or
+                    // a global's slot, elements may be references.)
+                    let mut cur = (*root).deref();
                     for k in &path {
                         cur = match &cur {
                             Value::Array(a) => match a.get(&k.as_ref().unwrap().key(it)?) {
-                                Some(v) => v,
+                                Some(v) => v.into_deref(),
                                 None => return Ok(None),
                             },
                             Value::Object(o) if o.class.is_a("arrayaccess") => {
@@ -1552,20 +1598,25 @@ pub unsafe extern "C" fn rt_unset_place(c: *mut Cx, root: *mut Value, name: *con
 fn remove_path(it: &Interp, cur: &mut Value, path: &[Option<crate::expr::Off>]) -> R<()> {
     let Some((last, rest)) = path.split_last() else { return Ok(()) };
     let mut c = cur;
-    for k in rest {
+    for (i, k) in rest.iter().enumerate() {
         match c {
             Value::Array(a) => match k.as_ref().and_then(|k| k.key_opt()).and_then(|k| Rc::make_mut(a).get_mut(k)) {
                 Some(next) => c = next,
                 None => return Ok(()),
             },
+            // A reference: the rest of the path continues in its cell.
             Value::Ref(s) => {
                 let s = s.clone();
-                return remove_path(it, &mut s.borrow_mut(), path);
+                return remove_path(it, &mut s.borrow_mut(), &path[i..]);
             }
             _ => return Ok(()),
         }
     }
     match c {
+        Value::Ref(s) => {
+            let s = s.clone();
+            return remove_path(it, &mut s.borrow_mut(), std::slice::from_ref(last));
+        }
         Value::Array(a) => {
             let k = last.as_ref().unwrap().key(it)?;
             Rc::make_mut(a).remove(&k);

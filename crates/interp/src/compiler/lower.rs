@@ -903,6 +903,10 @@ impl<'a> Lower<'a> {
                             self.clear(a);
                             self.store_tag(a, tag::NULL);
                         }
+                        ExprKind::GlobalVar(n) => {
+                            let (np, nl) = self.global_name(n)?;
+                            self.call_checked("rt_global_unset", &[self.cx, np, nl]);
+                        }
                         _ => {
                             let (root, name, keys) = self.place(e, true)?;
                             let (np, nl) = name;
@@ -1246,6 +1250,14 @@ impl<'a> Lower<'a> {
         (p, l)
     }
 
+    /// The literal name of `$_SERVER` / `$GLOBALS['name']`, as (ptr, len).
+    fn global_name(&mut self, n: &'static Expr) -> L<(CValue, CValue)> {
+        match &n.kind {
+            ExprKind::Str(s) => Ok(self.name_parts(s)),
+            _ => Err("dynamic $GLOBALS name"),
+        }
+    }
+
     fn member(&self, m: &'static MemberName) -> L<&'static str> {
         match m {
             MemberName::Ident(i) => Ok(&i.name),
@@ -1305,6 +1317,11 @@ impl<'a> Lower<'a> {
                 Op::Ptr(c, None)
             }
             Var(n) => Op::Local(*self.locals.index.get(n.as_str()).ok_or("unknown local")?),
+            GlobalVar(n) => {
+                let (np, nl) = self.global_name(n)?;
+                let quiet = self.iconst(0);
+                self.helper_value("rt_global_get", |l| vec![l.cx, np, nl, quiet])?
+            }
             Interp(parts) => {
                 // Evaluate parts (left to right), then build the string once.
                 let mut ops = vec![];
@@ -2662,6 +2679,15 @@ impl<'a> Lower<'a> {
     /// where a magic property answers differently (see magic_isset).
     fn quiet_mode(&mut self, e: &'static Expr, t: usize, mode: u8) -> L<CValue> {
         match &e.kind {
+            ExprKind::GlobalVar(n) => {
+                let (np, nl) = self.global_name(n)?;
+                let quiet = self.iconst(1);
+                let ta = self.temp_addr(t);
+                self.call_checked("rt_global_get", &[self.cx, np, nl, quiet, ta]);
+                let ta = self.temp_addr(t);
+                let tg = self.load_tag(ta);
+                Ok(self.b.ins().icmp_imm_u(IntCC::NotEqual, tg, tag::NULL as i64))
+            }
             ExprKind::Var(n) => {
                 let i = *self.locals.index.get(n.as_str()).ok_or("unknown local")?;
                 let la = self.local_addr(i);
@@ -2787,6 +2813,15 @@ impl<'a> Lower<'a> {
                 Ok(Op::Local(i))
             }
             ExprKind::Prop { object, name: MemberName::Ident(name), nullsafe: false } => self.prop_write(object, &name.name, value),
+            ExprKind::GlobalVar(n) => {
+                let (np, nl) = self.global_name(n)?;
+                let v = self.expr(value)?;
+                let v = self.own(v);
+                let v = self.materialize(v);
+                let va = self.addr(v).unwrap();
+                self.call_checked("rt_global_set", &[self.cx, np, nl, va, va]);
+                Ok(v)
+            }
             ExprKind::Array(items) => {
                 // [$a, $b] = expr / ['k' => $a] = expr
                 let v = self.expr(value)?;
@@ -2926,6 +2961,16 @@ impl<'a> Lower<'a> {
                 let (np, nl) = self.name_parts(name);
                 let nl = self.b.ins().bor_imm_s(nl, super::rt::STATIC_ROOT as i64);
                 (Root { addr: cr, temp: None }, (np, nl))
+            }
+            // A global: a temp holding a reference to its slot, written
+            // through like a by-reference local.
+            ExprKind::GlobalVar(n) => {
+                let (np, nl) = self.global_name(n)?;
+                let t = self.alloc_temp();
+                let ta = self.temp_addr(t);
+                self.call("rt_global_ref", &[self.cx, np, nl, ta]);
+                let ta = self.temp_addr(t);
+                (Root { addr: ta, temp: Some(Op::Ptr(ta, Some(t))) }, (self.iconst(0), self.iconst(0)))
             }
             _ => return Err("write target"),
         };
