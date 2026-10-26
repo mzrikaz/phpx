@@ -10,6 +10,7 @@ mod interval;
 mod more;
 mod parse;
 mod zone;
+mod zones_table;
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -492,8 +493,27 @@ fn tz_get_transitions(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec
     Ok(Value::array(PhpArray::from_list(out)))
 }
 
-fn tz_list_identifiers(_: &Interp, _: Option<&Rc<Obj>>, _: &Rc<Class>, _: Vec<Value>) -> R<Value> {
-    Ok(Value::array(PhpArray::from_list(zone::list_identifiers().into_iter().map(Value::str))))
+fn tz_list_identifiers(it: &Interp, _: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) -> R<Value> {
+    list_identifiers(it, &a, "DateTimeZone::listIdentifiers")
+}
+
+/// timezone_identifiers_list() / DateTimeZone::listIdentifiers().
+fn list_identifiers(it: &Interp, a: &[Value], func: &str) -> R<Value> {
+    let group = match arg(a, 0) {
+        Value::Null => 2047,
+        v => it.to_int(&v)?,
+    };
+    let country = match arg(a, 1) {
+        Value::Null => String::new(),
+        v => lossy(&it.to_str(&v)?),
+    };
+    if group == 4096 && country.len() != 2 {
+        return Err(it.error(
+            "ValueError",
+            &format!("{func}(): Argument #2 ($countryCode) must be a two-letter ISO 3166-1 compatible country code when argument #1 ($timezoneGroup) is DateTimeZone::PER_COUNTRY"),
+        ));
+    }
+    Ok(Value::array(PhpArray::from_list(zone::list_identifiers(group, &country).into_iter().map(Value::str))))
 }
 
 fn tz_list_abbreviations(_: &Interp, _: Option<&Rc<Obj>>, _: &Rc<Class>, _: Vec<Value>) -> R<Value> {
@@ -721,7 +741,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let text = lossy(&s(it, a, 0)?);
         Ok(date_parse(&text))
     });
-    t.insert("timezone_identifiers_list", |_, _, _| Ok(Value::array(PhpArray::from_list(zone::list_identifiers().into_iter().map(Value::str)))));
+    t.insert("timezone_identifiers_list", |it, _, a| list_identifiers(it, &a, "timezone_identifiers_list"));
 }
 
 fn date_parse(text: &str) -> Value {

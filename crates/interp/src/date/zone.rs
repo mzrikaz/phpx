@@ -211,15 +211,29 @@ fn short_offset(off: i32) -> String {
     }
 }
 
-/// DateTimeZone::listIdentifiers() (canonical region identifiers + UTC).
-pub fn list_identifiers() -> Vec<&'static str> {
-    const REGIONS: &[&str] = &["Africa/", "America/", "Antarctica/", "Arctic/", "Asia/", "Atlantic/", "Australia/", "Europe/", "Indian/", "Pacific/"];
-    let mut v: Vec<&'static str> = chrono_tz::TZ_VARIANTS
-        .iter()
-        .map(|t| t.name())
-        .filter(|n| REGIONS.iter().any(|r| n.starts_with(r)))
-        .collect();
-    v.push("UTC");
-    v.sort_unstable();
-    v
+/// DateTimeZone::listIdentifiers($group, $country): PHP's identifiers in
+/// its order. ALL_WITH_BC (4095) adds the backward-compatible aliases;
+/// PER_COUNTRY (4096) picks a country's canonical zones.
+pub fn list_identifiers(group: i64, country: &str) -> Vec<&'static str> {
+    const GROUPS: &[(i64, &str)] = &[
+        (1, "Africa/"),
+        (2, "America/"),
+        (4, "Antarctica/"),
+        (8, "Arctic/"),
+        (16, "Asia/"),
+        (32, "Atlantic/"),
+        (64, "Australia/"),
+        (128, "Europe/"),
+        (256, "Indian/"),
+        (512, "Pacific/"),
+    ];
+    let zones = super::zones_table::ZONES.iter();
+    match group {
+        4095 => zones.map(|z| z.0).collect(),
+        4096 => zones.filter(|z| z.1 && z.2 == country).map(|z| z.0).collect(),
+        g => zones
+            .filter(|z| z.1 && (GROUPS.iter().any(|(bit, p)| g & bit != 0 && z.0.starts_with(p)) || (g & 1024 != 0 && z.0 == "UTC")))
+            .map(|z| z.0)
+            .collect(),
+    }
 }
