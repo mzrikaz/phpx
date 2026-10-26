@@ -1021,6 +1021,19 @@ pub unsafe extern "C" fn rt_place_assign(
 ) -> u64 {
     let (it, f) = cx(c);
     let v = take(val);
+    // `$obj->prop[k] = v` / `$obj->prop[] = v` on a visible, writable
+    // property holding an array: write the element in place.
+    if !name.is_null() && len & STATIC_ROOT == 0 && n + append == 1 {
+        if let Value::Object(o) = &*root {
+            if let Some(st) = prop_elem_store(it, f, o, name_of(name, len), if append != 0 { None } else { Some(&*keys) }, &v) {
+                return status(it, st, |_| {
+                    if !dst.is_null() {
+                        put(dst, v);
+                    }
+                });
+            }
+        }
+    }
     let r = (|| -> R<()> {
         let path = keys_of(it, keys, n, append)?;
         if name.is_null() {
@@ -1041,6 +1054,52 @@ pub unsafe extern "C" fn rt_place_assign(
             put(dst, v);
         }
     })
+}
+
+/// The fast path of `$o->name[key] = v` (append without a key). None:
+/// not a plain array property (magic, readonly, hidden, a reference,
+/// ArrayAccess, missing...), so the general path runs.
+fn prop_elem_store(it: &Interp, f: &Frame, o: &Obj, name: &str, key: Option<&Value>, v: &Value) -> Option<R<()>> {
+    let pkey = it.prop_key(f, o, name);
+    if let Some(d) = o.class.find_prop(&pkey) {
+        if d.readonly || !it.member_visible(f.class.as_deref(), d.vis, &d.declaring) {
+            return None;
+        }
+    }
+    if !matches!(o.props.borrow().get(&pkey), Some(Value::Array(_))) {
+        return None;
+    }
+    let k = match key {
+        None => None,
+        Some(Value::Int(n)) => Some(Key::Int(*n)),
+        Some(Value::Str(s)) => Some(Key::from_pstr(s)),
+        // Other key types convert with warnings: the general path.
+        Some(_) => return None,
+    };
+    let old = {
+        let mut props = o.props.borrow_mut();
+        let Some(Value::Array(a)) = props.get_mut(&pkey) else { return None };
+        let arr = Rc::make_mut(a);
+        match k {
+            None => {
+                if arr.next_index() == i64::MAX && arr.len() > 0 {
+                    return None;
+                }
+                arr.push(v.clone());
+                None
+            }
+            Some(k) => {
+                let slot = arr.entry(k);
+                match slot {
+                    Value::Ref(r) => Some(std::mem::replace(&mut *r.borrow_mut(), v.clone())),
+                    _ => Some(std::mem::replace(slot, v.clone())),
+                }
+            }
+        }
+    };
+    // Dropped outside the borrow: it may run a destructor.
+    drop(old);
+    Some(Ok(()))
 }
 
 /// `$local[] = val` / `$local[key] = val` (`key` may be null for append).
