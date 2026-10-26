@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 # In-process sampling profiler: PHPX_PROFILE=1 phpx run file.php
-profile = ["dep:pprof"]
+profile = ["dep:pprof", "dep:backtrace", "dep:libc"]
 
 [[bin]]
 name = "phpx"
@@ -17,3 +17,5 @@ path = "src/main.rs"
 phpx-syntax = { path = "../syntax" }
 phpx-interp = { path = "../interp" }
 pprof = { version = "0.14", optional = true, features = ["frame-pointer"] }
+backtrace = { version = "0.3", optional = true }
+libc = { version = "0.2", optional = true }

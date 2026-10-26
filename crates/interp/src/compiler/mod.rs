@@ -790,10 +790,28 @@ impl Native {
     }
 }
 
+/// Address ranges of compiled code (start, end, PHP name), recorded while
+/// the in-process profiler runs (PHPX_PROFILE), which can't symbolize them.
+static JIT_SYMBOLS: std::sync::Mutex<Vec<(usize, usize, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// The PHP function whose compiled code contains `ip`, with the offset.
+pub fn jit_symbol(ip: usize) -> Option<(String, usize)> {
+    let syms = JIT_SYMBOLS.lock().ok()?;
+    syms.iter().find(|(s, e, _)| (*s..*e).contains(&ip)).map(|(s, _, n)| (n.clone(), ip - s))
+}
+
 /// PHPX_PERF_MAP=1: append each compiled function to /tmp/perf-PID.map,
 /// so `perf report` names generated code by its PHP function.
 fn perf_map(ptr: *const u8, size: u32, name: &str) {
     use std::io::Write;
+    thread_local! {
+        static PROFILING: bool = std::env::var("PHPX_PROFILE").is_ok();
+    }
+    if PROFILING.with(|p| *p) {
+        if let Ok(mut syms) = JIT_SYMBOLS.lock() {
+            syms.push((ptr as usize, ptr as usize + size as usize, name.to_string()));
+        }
+    }
     thread_local! {
         static MAP: Option<std::cell::RefCell<std::fs::File>> = std::env::var("PHPX_PERF_MAP").is_ok().then(|| {
             let path = format!("/tmp/perf-{}.map", std::process::id());

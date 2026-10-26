@@ -10,6 +10,8 @@ use std::time::Instant;
 use phpx_syntax::Severity;
 
 mod optrees;
+#[cfg(feature = "profile")]
+mod sampler;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -134,11 +136,11 @@ fn php_cli(args: &[String]) -> ExitCode {
     phpx_interp::set_ini_options(no_ini, overrides);
     if let Some(addr) = server {
         #[cfg(feature = "profile")]
-        let guard = std::env::var("PHPX_PROFILE").ok().map(|_| pprof::ProfilerGuard::new(997).expect("profiler"));
+        let guard = std::env::var("PHPX_PROFILE").ok().map(|_| sampler::start());
         let code = phpx_interp::server::serve(&addr, docroot.as_deref().map(std::path::Path::new), script.as_deref().map(std::path::Path::new));
         #[cfg(feature = "profile")]
-        if let Some(g) = guard {
-            report(g);
+        if guard.is_some() {
+            report(sampler::stop());
         }
         return ExitCode::from(code.clamp(0, 255) as u8);
     }
@@ -201,26 +203,53 @@ fn lint(path: &str) -> ExitCode {
 
 fn run(path: &str, args: &[String]) -> ExitCode {
     #[cfg(feature = "profile")]
-    let guard = std::env::var("PHPX_PROFILE").ok().map(|_| pprof::ProfilerGuard::new(997).expect("profiler"));
+    let guard = std::env::var("PHPX_PROFILE").ok().map(|_| sampler::start());
     let out = Box::new(std::io::BufWriter::new(std::io::stdout()));
     let code = phpx_interp::run_file_args(Path::new(path), args, out);
     #[cfg(feature = "profile")]
-    if let Some(g) = guard {
-        report(g);
+    if guard.is_some() {
+        report(sampler::stop());
     }
     ExitCode::from(code.clamp(0, 255) as u8)
 }
 
 /// Print the hottest functions (self time and inclusive) from the samples.
 #[cfg(feature = "profile")]
-fn report(g: pprof::ProfilerGuard) {
-    let Ok(r) = g.report().build() else { return };
+fn report(samples: Vec<&'static [usize]>) {
+    // Generated code is named `php::function` (leaf frames with their code
+    // offset when PHPX_PROFILE_JIT_OFFSETS is set).
+    let offsets = std::env::var("PHPX_PROFILE_JIT_OFFSETS").is_ok();
+    let mut cache: std::collections::HashMap<usize, Vec<String>> = Default::default();
+    let mut resolve = |ip: usize, leaf: bool| -> Vec<String> {
+        // A caller's address is its return address: look up the call.
+        let at = if leaf { ip } else { ip.saturating_sub(1) };
+        if let Some((name, off)) = phpx_interp::jit_symbol(at) {
+            return vec![if leaf && offsets { format!("php::{name}+{off:#x}") } else { format!("php::{name}") }];
+        }
+        cache
+            .entry(at)
+            .or_insert_with(|| {
+                let mut names = vec![];
+                backtrace::resolve(at as *mut std::ffi::c_void, |sym| names.push(sym.name().map_or_else(|| format!("{at:#x}"), |n| format!("{n:#}"))));
+                if names.is_empty() {
+                    names.push(format!("{at:#x}"));
+                }
+                names
+            })
+            .clone()
+    };
     let mut own: std::collections::HashMap<String, isize> = Default::default();
     let mut incl: std::collections::HashMap<String, isize> = Default::default();
     let mut total = 0;
-    for (frames, count) in &r.data {
+    let mut stacks: Vec<(Vec<String>, isize)> = vec![];
+    let mut counted: std::collections::HashMap<&[usize], isize> = Default::default();
+    for ips in samples {
+        *counted.entry(ips).or_default() += 1;
+    }
+    for (ips, count) in counted {
         total += count;
-        let names: Vec<String> = frames.frames.iter().flat_map(|f| f.iter().map(|s| s.name())).collect();
+        let names: Vec<String> = ips.iter().enumerate().flat_map(|(i, &ip)| resolve(ip, i == 0)).collect();
+        stacks.push((names.clone(), count));
         if let Some(top) = names.first() {
             *own.entry(top.clone()).or_default() += count;
         }
@@ -246,8 +275,8 @@ fn report(g: pprof::ProfilerGuard) {
     // leaf last.
     if let Ok(path) = std::env::var("PHPX_PROFILE_FOLDED") {
         let mut out = String::new();
-        for (frames, count) in &r.data {
-            let names: Vec<String> = frames.frames.iter().rev().flat_map(|f| f.iter().rev().map(|s| s.name())).collect();
+        for (names, count) in &stacks {
+            let names: Vec<&str> = names.iter().rev().map(String::as_str).collect();
             out.push_str(&format!("{} {count}\n", names.join(";")));
         }
         let _ = std::fs::write(path, out);

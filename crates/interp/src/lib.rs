@@ -26,6 +26,7 @@ mod callback;
 mod call;
 mod class;
 mod compiler;
+pub use compiler::jit_symbol;
 mod composer;
 mod expr;
 mod ext;
