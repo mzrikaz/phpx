@@ -202,7 +202,21 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
         setup(&main_it, &mut frame);
         main_it.globals.set(&mut frame);
         let mut returned_false = false;
-        let code = match main_it.run_file_in(&mut frame, file, id) {
+        // auto_prepend_file / auto_append_file run around the script (the
+        // append one only when the script ends normally).
+        let ini_file = |k: &str| main_it.ini_get(k).filter(|v| !v.is_empty());
+        let (prepend, append) = (ini_file("auto_prepend_file"), ini_file("auto_append_file"));
+        let result = (|| {
+            if let Some(p) = &prepend {
+                main_it.include(&mut frame, phpx_syntax::ast::IncludeKind::Require, p)?;
+            }
+            let v = main_it.run_file_in(&mut frame, file, id)?;
+            if let Some(p) = &append {
+                main_it.include(&mut frame, phpx_syntax::ast::IncludeKind::Require, p)?;
+            }
+            Ok(v)
+        })();
+        let code = match result {
             Ok(v) => {
                 returned_false = matches!(v, value::Value::Bool(false));
                 0
