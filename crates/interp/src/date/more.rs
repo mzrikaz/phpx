@@ -44,7 +44,8 @@ fn strftime(it: &Interp, a: &[Value], gmt: bool) -> R<Value> {
     tm.tm_isdst = dst as i32;
     tm.tm_gmtoff = offset as libc::c_long;
     let zone_name = std::ffi::CString::new(if gmt { "GMT".to_string() } else { abbr }).unwrap_or_default();
-    tm.tm_zone = zone_name.as_ptr();
+    // *const on Linux, *mut on macOS; strftime only reads it.
+    tm.tm_zone = zone_name.as_ptr() as _;
     let cfmt = std::ffi::CString::new(fmt.iter().copied().take_while(|&c| c != 0).collect::<Vec<u8>>()).unwrap();
     let mut size = 256usize;
     loop {

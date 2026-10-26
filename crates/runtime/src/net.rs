@@ -11,7 +11,7 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 use std::path::Path;
 use std::time::Instant;
 
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+use socket2::{Protocol, SockAddr, Socket, Type};
 
 use crate::error::{Error, Result};
 use crate::scheduler;
@@ -103,7 +103,8 @@ pub struct Stream {
 impl Stream {
     fn new(sock: Socket) -> Result<Self> {
         sock.set_nonblocking(true)?;
-        if sock.domain().is_ok_and(|d| d != Domain::UNIX) {
+        // Socket::domain() needs SO_DOMAIN, which macOS lacks.
+        if sock.local_addr().is_ok_and(|a| !a.is_unix()) {
             let _ = sock.set_nodelay(true);
         }
         register(&sock)?;

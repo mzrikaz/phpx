@@ -450,7 +450,8 @@ fn rand_u64() -> u64 {
 }
 
 fn getrandom_fill(b: &mut [u8]) -> bool {
-    unsafe { libc::getrandom(b.as_mut_ptr() as *mut libc::c_void, b.len(), 0) == b.len() as isize }
+    // getentropy is capped at 256 bytes per call; callers ask for far less.
+    unsafe { libc::getentropy(b.as_mut_ptr() as *mut libc::c_void, b.len()) == 0 }
 }
 
 /// $_FILES error and size are ints.

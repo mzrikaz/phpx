@@ -63,7 +63,7 @@ fn save_dir(it: &Interp) -> String {
 
 fn new_id() -> String {
     let mut b = [0u8; 16];
-    unsafe { libc::getrandom(b.as_mut_ptr() as *mut libc::c_void, 16, 0) };
+    unsafe { libc::getentropy(b.as_mut_ptr() as *mut libc::c_void, 16) };
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 

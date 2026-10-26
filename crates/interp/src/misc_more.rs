@@ -751,7 +751,10 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("cli_set_process_title", |it, _, a| {
         let title = text(it, a, 0)?;
         if let Ok(c) = std::ffi::CString::new(title.clone()) {
+            #[cfg(target_os = "linux")]
             unsafe { libc::prctl(libc::PR_SET_NAME, c.as_ptr() as libc::c_ulong, 0, 0, 0) };
+            #[cfg(target_vendor = "apple")]
+            unsafe { libc::pthread_setname_np(c.as_ptr()) };
         }
         PROCESS_TITLE.with(|t| *t.borrow_mut() = title);
         Ok(Value::Bool(true))

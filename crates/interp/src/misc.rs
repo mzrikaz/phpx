@@ -1441,9 +1441,9 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             ("ru_nvcsw", ru.ru_nvcsw),
             ("ru_nivcsw", ru.ru_nivcsw),
             ("ru_nswap", ru.ru_nswap),
-            ("ru_utime.tv_usec", ru.ru_utime.tv_usec),
+            ("ru_utime.tv_usec", i64::from(ru.ru_utime.tv_usec)),
             ("ru_utime.tv_sec", ru.ru_utime.tv_sec),
-            ("ru_stime.tv_usec", ru.ru_stime.tv_usec),
+            ("ru_stime.tv_usec", i64::from(ru.ru_stime.tv_usec)),
             ("ru_stime.tv_sec", ru.ru_stime.tv_sec),
         ];
         for (k, v) in fields {
