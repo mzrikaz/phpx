@@ -72,6 +72,11 @@ thread_local! {
 
 #[inline]
 fn class_of(l: &Layout) -> Option<usize> {
+    // AddressSanitizer builds (RUSTFLAGS="--cfg phpx_asan -Zsanitizer=address")
+    // hand every block to the system allocator, which ASan instruments.
+    if cfg!(phpx_asan) {
+        return None;
+    }
     (l.size() <= MAX_SMALL && l.align() <= 16).then(|| (l.size().max(1) + 15) / 16 - 1)
 }
 
