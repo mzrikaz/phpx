@@ -60,6 +60,12 @@ pub const OSR_ITERATIONS: u32 = 500;
 pub struct Native {
     module: JITModule,
     helpers: HashMap<&'static str, FuncId>,
+    /// A second code generator tuned for compile speed (no optimization
+    /// passes, single-pass register allocation) for file-level code: a
+    /// template's body runs a few times per request, so compiling it
+    /// quickly matters more than the last few percent of its speed.
+    /// Swapped into `module` while such code compiles.
+    quick: Option<(JITModule, HashMap<&'static str, FuncId>)>,
     compiled: rustc_hash::FxHashMap<usize, Option<Entry>>,
     /// Calls so far, and whether the function was checked for loops (OSR).
     hot: rustc_hash::FxHashMap<usize, (u32, bool)>,
@@ -388,13 +394,48 @@ impl Native {
     }
 
     fn new(threshold: u32) -> Option<Native> {
+        let opt = std::env::var("PHPX_NATIVE_OPT").unwrap_or_else(|_| "speed".into());
+        let ra = std::env::var("PHPX_NATIVE_RA").unwrap_or_else(|_| "backtracking".into());
+        let (module, helpers) = Native::code_generator(&opt, &ra)?;
+        // PHPX_NATIVE_QUICK=0: file-level code gets the full optimizer too.
+        let quick = match std::env::var("PHPX_NATIVE_QUICK").as_deref() {
+            Ok("0") => None,
+            _ => Native::code_generator("none", "single_pass"),
+        };
+        Some(Native {
+            module,
+            helpers,
+            quick,
+            compiled: Default::default(),
+            hot: Default::default(),
+            threshold,
+            osr_info: HashMap::new(),
+            osr: HashMap::new(),
+            compile_ns: 0,
+            consts: vec![],
+            sites: vec![],
+            msites: vec![],
+            psites: vec![],
+            csites: vec![],
+            specs: vec![],
+            log: std::env::var("PHPX_NATIVE_LOG").is_ok(),
+            max: std::env::var("PHPX_NATIVE_MAX").ok().and_then(|v| v.parse().ok()),
+            skip: std::env::var("PHPX_NATIVE_SKIP").map(|v| v.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect()).unwrap_or_default(),
+            count: 0,
+        })
+    }
+
+    /// A JIT module with the given optimization level and register
+    /// allocator, and the runtime helpers declared in it.
+    fn code_generator(opt: &str, ra: &str) -> Option<(JITModule, HashMap<&'static str, FuncId>)> {
         let mut flags = settings::builder();
         flags.set("use_colocated_libcalls", "false").ok()?;
         flags.set("is_pic", "false").ok()?;
         // The IR verifier roughly doubles compile time; PHPX_NATIVE_VERIFY=1
         // turns it back on when debugging the lowering.
         flags.set("enable_verifier", if std::env::var("PHPX_NATIVE_VERIFY").is_ok() { "true" } else { "false" }).ok()?;
-        flags.set("opt_level", "speed").ok()?;
+        flags.set("opt_level", opt).ok()?;
+        flags.set("regalloc_algorithm", ra).ok()?;
         // The sampling profiler (PHPX_PROFILE) walks frame pointers through
         // compiled code.
         if std::env::var("PHPX_PROFILE").is_ok() {
@@ -418,26 +459,7 @@ impl Native {
             let id = module.declare_function(name, Linkage::Import, &sig).ok()?;
             helpers.insert(*name, id);
         }
-        Some(Native {
-            module,
-            helpers,
-            compiled: Default::default(),
-            hot: Default::default(),
-            threshold,
-            osr_info: HashMap::new(),
-            osr: HashMap::new(),
-            compile_ns: 0,
-            consts: vec![],
-            sites: vec![],
-            msites: vec![],
-            psites: vec![],
-            csites: vec![],
-            specs: vec![],
-            log: std::env::var("PHPX_NATIVE_LOG").is_ok(),
-            max: std::env::var("PHPX_NATIVE_MAX").ok().and_then(|v| v.parse().ok()),
-            skip: std::env::var("PHPX_NATIVE_SKIP").map(|v| v.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect()).unwrap_or_default(),
-            count: 0,
-        })
+        Some((module, helpers))
     }
 
     /// Compiled entry for `fn_id`, compiling it (described by `mk`) when hot.
@@ -494,7 +516,22 @@ impl Native {
     /// come from the interpreter frame).
     fn compile_mode(&mut self, it: &Interp, t: &Target, top_level: bool, osr: Option<usize>) -> Result<Entry, &'static str> {
         // Compiling is the engine's work, not the script's (memory_limit).
-        crate::alloc::uncharged(|| self.compile_mode_inner(it, t, top_level, osr))
+        let quick = top_level && osr.is_none() && self.quick.is_some();
+        if quick {
+            self.swap_quick();
+        }
+        let r = crate::alloc::uncharged(|| self.compile_mode_inner(it, t, top_level, osr));
+        if quick {
+            self.swap_quick();
+        }
+        r
+    }
+
+    fn swap_quick(&mut self) {
+        if let Some((m, h)) = &mut self.quick {
+            std::mem::swap(&mut self.module, m);
+            std::mem::swap(&mut self.helpers, h);
+        }
     }
 
     fn compile_mode_inner(&mut self, _it: &Interp, t: &Target, top_level: bool, osr: Option<usize>) -> Result<Entry, &'static str> {
