@@ -1700,7 +1700,14 @@ pub struct MethodSite {
     /// The method last found here while it isn't compiled: (class, scope,
     /// method), called through the interpreter without looking it up again.
     pub interp: std::cell::RefCell<Option<(usize, usize, Rc<crate::class::Method>)>>,
+    /// Other (class, scope) pairs seen here (up to POLY), with their method
+    /// and compiled entry: a site that sees several classes in turn (an
+    /// iterator wrapper's `$this->inner->current()`) finds them without a
+    /// lookup by name and without replacing the main entry each call.
+    pub poly: std::cell::RefCell<Vec<(usize, usize, Rc<crate::class::Method>, Option<MethodCache>)>>,
 }
+
+const POLY: usize = 4;
 
 impl MethodSite {
     pub fn new(name: &'static str, lname: &'static str) -> MethodSite {
@@ -1713,6 +1720,7 @@ impl MethodSite {
             lname,
             cached: Default::default(),
             interp: Default::default(),
+            poly: Default::default(),
         }
     }
 }
@@ -1999,6 +2007,12 @@ pub unsafe extern "C" fn rt_method_call(
             _ => None,
         };
         let key = (Rc::as_ptr(&o.class) as usize, scope as usize);
+        if hit.is_none() {
+            let seen = site.poly.borrow().iter().find(|e| (e.0, e.1) == key).map(|e| (e.2.clone(), e.3));
+            if let Some((m, mc)) = seen {
+                return poly_call(it, o, &m, mc, args, n, locals, dst);
+            }
+        }
         let hit = hit.or_else(|| {
             // Miss: look the method up (or take the interpreted one found
             // before) and, if it compiles, cache it.
@@ -2014,7 +2028,17 @@ pub unsafe extern "C" fn rt_method_call(
                     m
                 }
             };
-            let (entry, decl_class) = method_entry(it, &m)?;
+            let (entry, decl_class) = match method_entry(it, &m) {
+                Some(e) => e,
+                None => {
+                    // Interpreted for now (the interpreter compiles it once
+                    // hot), or native; abstract ones take the general path.
+                    if matches!(m.body, crate::class::MethodBody::Native(_)) || matches!(m.body, crate::class::MethodBody::User(f) if f.body.is_some()) {
+                        remember_poly(site, key, &m, None);
+                    }
+                    return None;
+                }
+            };
             let mc = MethodCache {
                 class: Rc::as_ptr(&o.class),
                 scope,
@@ -2025,6 +2049,11 @@ pub unsafe extern "C" fn rt_method_call(
                 static_cls: ptr::null(),
                 this_cls: ptr::null(),
             };
+            if site.cached.get().is_some() {
+                // The site already serves another class: keep that one and
+                // remember this one beside it.
+                remember_poly(site, key, &m, Some(mc));
+            }
             site.cached.set(Some(mc));
             site.frame.invalidate();
             // Direct calls from compiled code: instance methods whose
@@ -2067,6 +2096,39 @@ pub unsafe extern "C" fn rt_method_call(
         }
     }
     method_call_general(it, f, obj, name, args, n, locals, ptr::null(), dst)
+}
+
+fn remember_poly(site: &MethodSite, key: (usize, usize), m: &Rc<crate::class::Method>, mc: Option<MethodCache>) {
+    let mut p = site.poly.borrow_mut();
+    if p.iter().any(|e| (e.0, e.1) == key) {
+        return;
+    }
+    if p.len() == POLY {
+        p.remove(0);
+    }
+    p.push((key.0, key.1, m.clone(), mc));
+}
+
+/// A call through a site's polymorphic entries: compiled (in a frame of
+/// its own) or interpreted.
+#[allow(clippy::too_many_arguments)]
+unsafe fn poly_call(it: &Interp, o: &Rc<Obj>, m: &Rc<crate::class::Method>, mc: Option<MethodCache>, args: *mut Value, n: u64, locals: *const *mut Value, dst: *mut Value) -> u64 {
+    if let Some(mc) = mc {
+        let crate::class::MethodBody::User(func) = &m.body else { unreachable!() };
+        let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
+        frame.static_class = Some(o.class.clone());
+        frame.class = rc_from(mc.decl_class);
+        if !m.is_static {
+            frame.this = Some(o.clone());
+        }
+        if let Some(st) = enter(it, mc.entry, &mut frame, args, n, dst) {
+            return st;
+        }
+    }
+    let vals = take_args(args, n);
+    let o = o.clone();
+    let r = with_refs(crate::call::method_params(m), vals, locals, |pos| it.invoke_method(Some(o.clone()), m, o.class.clone(), pos, vec![]));
+    status(it, r, |v| put(dst, v))
 }
 
 /// `$obj->name(...)` without the inline cache (also dynamic names, and
