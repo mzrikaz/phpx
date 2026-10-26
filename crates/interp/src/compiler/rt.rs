@@ -809,6 +809,8 @@ pub struct ClassSite {
     key: std::cell::Cell<[usize; 3]>,
     sp: RefCell<Option<Rc<crate::class::StaticProp>>>,
     cv: RefCell<Option<Value>>,
+    /// `instanceof`: the class last tested (address) and the answer.
+    inst: std::cell::Cell<(usize, bool)>,
 }
 
 impl ClassSite {
@@ -923,10 +925,21 @@ pub unsafe extern "C" fn rt_called_class(c: *mut Cx, dst: *mut Value) -> u64 {
     status(it, r, |v| put(dst, v))
 }
 
-pub unsafe extern "C" fn rt_instanceof(c: *mut Cx, v: *const Value, cref: *const ast::ClassRef) -> u64 {
+pub unsafe extern "C" fn rt_instanceof(c: *mut Cx, v: *const Value, cref: *const ast::ClassRef, site: *const ClassSite) -> u64 {
     let (it, f) = cx(c);
     let Value::Object(o) = &*v else { return 0 };
     let ast::ClassRef::Name(n) = &*cref else { return 0 };
+    // Classes live for the whole request, and `self`/`static`/`parent`
+    // only vary with the frame's classes (part of the key).
+    let site = &*site;
+    let key = ClassSite::key(cref, f);
+    let cls = Rc::as_ptr(&o.class) as usize;
+    if site.key.get() == key {
+        let (c, r) = site.inst.get();
+        if c == cls {
+            return r as u64;
+        }
+    }
     let lname = match &*n.to_ascii_lowercase() {
         "self" | "static" | "parent" => match it.class_ref(f, &*cref) {
             Ok(c) => c.lname.clone(),
@@ -934,7 +947,10 @@ pub unsafe extern "C" fn rt_instanceof(c: *mut Cx, v: *const Value, cref: *const
         },
         _ => it.lower.get(&it.resolve_class_name(&f.ctx, n)),
     };
-    o.class.is_a(&lname) as u64
+    let r = o.class.is_a(&lname);
+    site.key.set(key);
+    site.inst.set((cls, r));
+    r as u64
 }
 
 // ---- writes -----------------------------------------------------------------------
@@ -2860,6 +2876,7 @@ impl ClassSite {
         self.key.set([0; 3]);
         *self.sp.borrow_mut() = None;
         *self.cv.borrow_mut() = None;
+        self.inst.set((0, false));
     }
 }
 

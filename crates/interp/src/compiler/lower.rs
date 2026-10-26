@@ -1633,7 +1633,8 @@ impl<'a> Lower<'a> {
                 let v = self.materialize(v);
                 let va = self.addr(v).unwrap();
                 let cr = self.iconst(class as *const ClassRef as i64);
-                let r = self.call("rt_instanceof", &[self.cx, va, cr]).unwrap();
+                let site = self.class_site();
+                let r = self.call("rt_instanceof", &[self.cx, va, cr, site]).unwrap();
                 self.release(v);
                 Op::Bool(self.b.ins().ireduce(types::I8, r))
             }
