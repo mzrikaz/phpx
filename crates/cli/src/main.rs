@@ -236,6 +236,16 @@ fn report(g: pprof::ProfilerGuard) {
     };
     show("self", &own);
     show("inclusive", &incl);
+    // PHPX_PROFILE_FOLDED=path: the stacks in folded form (flamegraph input),
+    // leaf last.
+    if let Ok(path) = std::env::var("PHPX_PROFILE_FOLDED") {
+        let mut out = String::new();
+        for (frames, count) in &r.data {
+            let names: Vec<String> = frames.frames.iter().rev().flat_map(|f| f.iter().rev().map(|s| s.name())).collect();
+            out.push_str(&format!("{} {count}\n", names.join(";")));
+        }
+        let _ = std::fs::write(path, out);
+    }
 }
 
 fn ast(path: &str) -> ExitCode {
