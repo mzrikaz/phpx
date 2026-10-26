@@ -1775,6 +1775,18 @@ impl Interp {
 
     /// Is the property stored under `key` (already mapped with `prop_key`)
     /// visible from the running scope?
+    /// `#[AllowDynamicProperties]` on the class or an ancestor.
+    fn allows_dynamic_props(&self, class: &Rc<crate::class::Class>) -> bool {
+        let mut c = Some(class);
+        while let Some(cls) = c {
+            if cls.decl.attrs.iter().any(|a| self.resolve_class_name(&cls.decl_ctx, &a.name).eq_ignore_ascii_case("AllowDynamicProperties")) {
+                return true;
+            }
+            c = cls.parent.as_ref();
+        }
+        false
+    }
+
     pub fn prop_visible(&self, f: &Frame, o: &Obj, key: &str) -> bool {
         let Some(d) = o.class.find_prop(key) else { return true };
         self.member_visible(f.class.as_deref(), d.vis, &d.declaring)
@@ -1927,7 +1939,7 @@ impl Interp {
                 } else if self.has_magic(o, MAGIC_SET, name) {
                     self.call_magic(o, MAGIC_SET, name, Some(v))?;
                 } else {
-                    if &*o.class.lname != "stdclass" {
+                    if &*o.class.lname != "stdclass" && !self.allows_dynamic_props(&o.class) {
                         self.deprecated(&format!("Creation of dynamic property {}::${name} is deprecated", o.class.name));
                     }
                     o.set_prop(name, v);

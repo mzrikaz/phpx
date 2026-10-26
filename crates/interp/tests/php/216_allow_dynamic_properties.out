@@ -1,0 +1,8 @@
+App\A 1
+App\B 1
+[8192] Creation of dynamic property App\C::$x is deprecated
+App\C 1
+[8192] Creation of dynamic property App\D::$x is deprecated
+App\D 1
+E 1
+stdClass 1
