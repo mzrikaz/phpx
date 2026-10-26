@@ -943,7 +943,7 @@ impl Interp {
                 let Value::Object(o) = self.eval(f, object)? else {
                     return Err(self.error("Error", "Call to a member function on non-object"));
                 };
-                let m = self.member_name(f, name)?;
+                let m = self.method_name(f, name)?;
                 let class = o.class.clone();
                 self.method_callable(f, Some(o), &class, &m)?
             }

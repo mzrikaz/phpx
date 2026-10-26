@@ -1,0 +1,27 @@
+A::hello A::hello A::hello 
+B::hello B::hello B::hello 
+C::hello C::hello C::hello 
+A::__call(secret) A::secret A::secret
+A::__call(missing)
+Error: Call to undefined method C::missing()
+Call to a member function x() on null
+Method name must be a string
+B::hello A::hello 
+A::hello A::hello A::hello 
+B::hello B::hello B::hello 
+C::hello C::hello C::hello 
+A::__call(secret) A::secret A::secret
+A::__call(missing)
+Error: Call to undefined method C::missing()
+Call to a member function x() on null
+Method name must be a string
+B::hello A::hello 
+A::hello A::hello A::hello 
+B::hello B::hello B::hello 
+C::hello C::hello C::hello 
+A::__call(secret) A::secret A::secret
+A::__call(missing)
+Error: Call to undefined method C::missing()
+Call to a member function x() on null
+Method name must be a string
+B::hello A::hello 

@@ -386,7 +386,7 @@ impl Interp {
                         return self.static_invoke(f, class, cls, &m, pos, named);
                     }
                 }
-                let name = self.member_name(f, name)?;
+                let name = self.method_name(f, name)?;
                 let params = cls.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m));
                 let (pos, named) = self.eval_args_for(f, args, params)?;
                 self.static_call(f, class, cls, &name, pos, named)?
@@ -937,7 +937,7 @@ impl Interp {
                 }
             }
         }
-        let name = self.member_name(f, name)?;
+        let name = self.method_name(f, name)?;
         let params = match &base {
             Value::Object(o) => o.class.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m)),
             _ => None,
@@ -970,6 +970,18 @@ impl Interp {
         let callable = self.to_callable(f, &c)?;
         let (pos, named) = self.eval_args_for(f, args, crate::call::callable_params(&callable))?;
         self.call_callable(&callable, pos, named).map(Some)
+    }
+
+    /// A called method's name: a dynamic one must be a string (no
+    /// conversion, unlike property names).
+    pub fn method_name(&self, f: &mut Frame, n: &'static MemberName) -> R<Rc<str>> {
+        match n {
+            MemberName::Dynamic(e) => match self.eval(f, e)?.into_deref() {
+                Value::Str(b) => Ok(Rc::from(String::from_utf8_lossy(&b).as_ref())),
+                _ => Err(self.error("Error", "Method name must be a string")),
+            },
+            n => self.member_name(f, n),
+        }
     }
 
     pub fn member_name(&self, f: &mut Frame, n: &'static MemberName) -> R<Rc<str>> {

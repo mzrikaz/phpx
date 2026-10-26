@@ -2119,7 +2119,20 @@ pub unsafe extern "C" fn rt_method_call_dyn(
     dst: *mut Value,
 ) -> u64 {
     let (it, f) = cx(c);
-    match it.to_string_lossy(&*name) {
+    let name = &(*name).deref();
+    let Value::Str(s) = name else {
+        drop(take_args(args, n));
+        *it.pending.borrow_mut() = Some(it.error("Error", "Method name must be a string"));
+        return 1;
+    };
+    // A string name gets an inline-cached site of its own, as if written
+    // literally.
+    if meta.is_null() {
+        if let Some(site) = dyn_method_site(s) {
+            return rt_method_call(c, obj, site, args, n, locals, meta, dst);
+        }
+    }
+    match it.to_string_lossy(name) {
         Ok(nm) => method_call_general(it, f, obj, &nm, args, n, locals, meta, dst),
         Err(e) => {
             drop(take_args(args, n));
@@ -2127,6 +2140,35 @@ pub unsafe extern "C" fn rt_method_call_dyn(
             1
         }
     }
+}
+
+thread_local! {
+    /// Call sites for `$obj->$name()` by method name (leaked; bounded).
+    static DYN_MSITES: RefCell<rustc_hash::FxHashMap<Box<[u8]>, &'static MethodSite>> = Default::default();
+}
+
+const DYN_MSITES_MAX: usize = 4096;
+
+fn dyn_method_site(name: &[u8]) -> Option<&'static MethodSite> {
+    DYN_MSITES.with(|m| {
+        if let Some(s) = m.borrow().get(name) {
+            return Some(*s);
+        }
+        let mut m = m.borrow_mut();
+        if m.len() >= DYN_MSITES_MAX {
+            return None;
+        }
+        let name: &'static str = Box::leak(std::str::from_utf8(name).ok()?.into());
+        let lname: &'static str = Box::leak(name.to_ascii_lowercase().into_boxed_str());
+        let site: &'static MethodSite = Box::leak(Box::new(MethodSite::new(name, lname)));
+        m.insert(name.as_bytes().into(), site);
+        Some(site)
+    })
+}
+
+/// Forget what the dynamic-name call sites cached (a new request).
+pub fn reset_dyn_sites() {
+    DYN_MSITES.with(|m| m.borrow().values().for_each(|s| s.reset()));
 }
 
 /// `$obj->$name` read.
