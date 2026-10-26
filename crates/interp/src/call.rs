@@ -190,7 +190,9 @@ impl Interp {
 
     /// Declared class, or one an autoloader declares on demand.
     pub fn find_class(&self, full: &str) -> R<Option<Rc<Class>>> {
-        let l = self.lower.get(full.trim_start_matches('\\'));
+        // Autoloaders see the name without a leading backslash.
+        let full = full.trim_start_matches('\\');
+        let l = self.lower.get(full);
         if let Some(c) = self.classes.borrow().get(&*l) {
             return Ok(Some(c.clone()));
         }

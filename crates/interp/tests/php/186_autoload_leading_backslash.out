@@ -1,0 +1,6 @@
+load [Foo\Bar]
+load [Baz]
+load [I]
+bool(false)
+bool(false)
+bool(false)
