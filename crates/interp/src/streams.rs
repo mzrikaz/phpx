@@ -1181,9 +1181,10 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(std::fs::read_link(&p).map(|t| Value::str(&t.to_string_lossy())).unwrap_or(Value::Bool(false)))
     });
     t.insert("fnmatch", |it, _, a| Ok(Value::Bool(fnmatch(&s(it, a, 0)?, &s(it, a, 1)?))));
-    t.insert("clearstatcache", |_, _, a| {
+    t.insert("clearstatcache", |it, _, a| {
         if a.first().is_some_and(|v| v.truthy()) {
-            crate::fs::clear_realpath_cache();
+            let p = if a.len() > 1 { String::from_utf8_lossy(&it.to_str(&a[1])?).into_owned() } else { String::new() };
+            crate::fs::clear_realpath_cache((!p.is_empty()).then_some(p.as_str()));
         }
         Ok(Value::Null)
     });

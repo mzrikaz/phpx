@@ -43,21 +43,33 @@ pub fn basename(p: &str, suffix: &str) -> String {
 
 thread_local! {
     /// realpath() results (PHP keeps a realpath cache too): resolving a
-    /// path costs a readlink per component.
-    static REALPATH: std::cell::RefCell<rustc_hash::FxHashMap<std::path::PathBuf, std::path::PathBuf>> = Default::default();
+    /// path costs a readlink per component. Keyed by the path's bytes
+    /// (hashing a Path walks its components).
+    static REALPATH: std::cell::RefCell<rustc_hash::FxHashMap<Box<[u8]>, (std::path::PathBuf, std::time::Instant)>> = Default::default();
 }
 
-pub fn clear_realpath_cache() {
-    REALPATH.with(|c| c.borrow_mut().clear());
+/// How long a cached realpath is trusted (PHP's realpath_cache_ttl).
+const REALPATH_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// clearstatcache(true, $path): that path's entry, or (no path) all.
+pub fn clear_realpath_cache(path: Option<&str>) {
+    REALPATH.with(|c| match path {
+        Some(p) => {
+            c.borrow_mut().remove(p.as_bytes());
+        }
+        None => c.borrow_mut().clear(),
+    });
 }
 
 /// Canonical path of an existing file, cached per thread.
 pub fn realpath_cached(p: &Path) -> Option<std::path::PathBuf> {
-    if let Some(r) = REALPATH.with(|c| c.borrow().get(p).cloned()) {
+    use std::os::unix::ffi::OsStrExt;
+    let key = p.as_os_str().as_bytes();
+    if let Some(r) = REALPATH.with(|c| c.borrow().get(key).filter(|e| e.1.elapsed() < REALPATH_TTL).map(|e| e.0.clone())) {
         return Some(r);
     }
     let r = std::fs::canonicalize(p).ok()?;
-    REALPATH.with(|c| c.borrow_mut().insert(p.to_path_buf(), r.clone()));
+    REALPATH.with(|c| c.borrow_mut().insert(key.into(), (r.clone(), std::time::Instant::now())));
     Some(r)
 }
 
@@ -248,14 +260,26 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
         Ok(Value::array(PhpArray::from_list(lines.into_iter().map(Value::bytes))))
     });
-    t.insert("unlink", |it, _, a| Ok(Value::Bool(std::fs::remove_file(path(it, a, 0)?).is_ok())));
+    t.insert("unlink", |it, _, a| {
+        // Like PHP, this drops the whole realpath cache.
+        clear_realpath_cache(None);
+        Ok(Value::Bool(std::fs::remove_file(path(it, a, 0)?).is_ok()))
+    });
     t.insert("mkdir", |it, _, a| {
         let p = path(it, a, 0)?;
         let r = if arg(a, 2).truthy() { std::fs::create_dir_all(&p) } else { std::fs::create_dir(&p) };
         Ok(Value::Bool(r.is_ok()))
     });
-    t.insert("rmdir", |it, _, a| Ok(Value::Bool(std::fs::remove_dir(path(it, a, 0)?).is_ok())));
-    t.insert("rename", |it, _, a| Ok(Value::Bool(std::fs::rename(path(it, a, 0)?, path(it, a, 1)?).is_ok())));
+    t.insert("rmdir", |it, _, a| {
+        // Like PHP, this drops the whole realpath cache.
+        clear_realpath_cache(None);
+        Ok(Value::Bool(std::fs::remove_dir(path(it, a, 0)?).is_ok()))
+    });
+    t.insert("rename", |it, _, a| {
+        // Like PHP, this drops the whole realpath cache.
+        clear_realpath_cache(None);
+        Ok(Value::Bool(std::fs::rename(path(it, a, 0)?, path(it, a, 1)?).is_ok()))
+    });
     t.insert("copy", |it, _, a| Ok(Value::Bool(std::fs::copy(path(it, a, 0)?, path(it, a, 1)?).is_ok())));
     t.insert("touch", |it, _, a| {
         let p = path(it, a, 0)?;
@@ -289,9 +313,10 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::str(&name))
     });
     t.insert("fopen", |it, _, _| Err(it.error("Error", "phpx: stream functions (fopen & co) are not supported yet")));
-    t.insert("clearstatcache", |_, _, a| {
+    t.insert("clearstatcache", |it, _, a| {
         if a.first().is_some_and(|v| v.truthy()) {
-            crate::fs::clear_realpath_cache();
+            let p = if has(a, 1) { path(it, a, 1)? } else { String::new() };
+            crate::fs::clear_realpath_cache((!p.is_empty()).then_some(p.as_str()));
         }
         Ok(Value::Null)
     });
