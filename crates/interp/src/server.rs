@@ -331,13 +331,16 @@ impl Write for HttpOut {
 }
 
 /// Fill $_GET / $_POST / ... by running parse_str() on url-encoded text.
-fn parse_into(it: &Interp, f: &mut Frame, text: &[u8]) -> Value {
-    let mut args = [Value::bytes(text.to_vec()), Value::Null];
-    let _ = (it.builtins["parse_str"])(it, f, &mut args);
-    match std::mem::take(&mut args[1]).into_deref() {
-        v @ Value::Array(_) => v,
-        _ => Value::array(PhpArray::new()),
+/// Over max_input_vars, PHP keeps the first ones and warns; the nesting
+/// limit drops a too-deep name. (Both bound the work a request's input
+/// can cause.)
+fn parse_into(it: &Interp, _f: &mut Frame, text: &[u8]) -> Value {
+    let (max_vars, max_nesting) = crate::ext::input_limits(it);
+    let (vars, cut) = crate::ext::parse_query(text, max_vars, max_nesting);
+    if cut {
+        it.warn(&format!("Unknown: Input variables exceeded {max_vars}. To increase the limit change max_input_vars in php.ini."));
     }
+    Value::array(vars)
 }
 
 fn urlencode(b: &[u8]) -> String {

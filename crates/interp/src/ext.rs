@@ -825,12 +825,27 @@ pub fn urldecode(b: &[u8], plus: bool) -> Vec<u8> {
     out
 }
 
+/// max_input_vars and max_input_nesting_level (defaults 1000, 64).
+pub fn input_limits(it: &Interp) -> (usize, usize) {
+    let ini = it.ini.borrow();
+    let n = |k: &str, d: usize| ini.get(k).and_then(|v| v.trim().parse::<i64>().ok()).map_or(d, |v| v.max(0) as usize);
+    (n("max_input_vars", 1000), n("max_input_nesting_level", 64))
+}
+
 /// parse_str() / $_GET-style query parsing with `a[b][]=` nesting.
-pub fn parse_query(q: &[u8]) -> PhpArray {
+/// Like PHP, at most `max_vars` variables are taken (the bool says the
+/// limit cut the rest off) and a name nested deeper than `max_nesting`
+/// brackets is dropped.
+pub fn parse_query(q: &[u8], max_vars: usize, max_nesting: usize) -> (PhpArray, bool) {
     let mut out = PhpArray::new();
+    let mut count = 0usize;
     for pair in q.split(|&c| c == b'&') {
         if pair.is_empty() {
             continue;
+        }
+        count += 1;
+        if count > max_vars {
+            return (out, true);
         }
         let (k, v) = match pair.iter().position(|&c| c == b'=') {
             Some(i) => (&pair[..i], &pair[i + 1..]),
@@ -856,6 +871,9 @@ pub fn parse_query(q: &[u8]) -> PhpArray {
             }
             _ => (key.clone(), vec![]),
         };
+        if segs.len() > max_nesting {
+            continue;
+        }
         // PHP turns spaces and dots in the base name into underscores.
         let base: Vec<u8> = base.iter().map(|&c| if c == b' ' || c == b'.' { b'_' } else { c }).collect();
         fn to_key(b: &[u8]) -> Key {
@@ -867,38 +885,36 @@ pub fn parse_query(q: &[u8]) -> PhpArray {
                 None => Key::Str(crate::value::PStr::from_bytes(b)),
             }
         }
+        // Nested names fill their arrays in place (copying a child array
+        // per variable made `a[]=1&a[]=2...` quadratic).
         fn put(arr: &mut PhpArray, segs: &[Vec<u8>], val: Value) {
-            match segs.split_first() {
-                None => {}
-                Some((s, rest)) => {
-                    if rest.is_empty() {
-                        if s.is_empty() {
-                            arr.push(val);
-                        } else {
-                            arr.insert(to_key(s), val);
-                        }
-                        return;
-                    }
-                    let k = if s.is_empty() { None } else { Some(to_key(s)) };
-                    let mut child = match k.as_ref().and_then(|k| arr.get(k)) {
-                        Some(Value::Array(a)) => (*a).clone(),
-                        _ => PhpArray::new(),
-                    };
-                    put(&mut child, rest, val);
-                    match k {
-                        Some(k) => arr.insert(k, Value::array(child)),
-                        None => {
-                            arr.push(Value::array(child));
-                        }
-                    }
+            let Some((s, rest)) = segs.split_first() else { return };
+            if rest.is_empty() {
+                if s.is_empty() {
+                    arr.push(val);
+                } else {
+                    arr.insert(to_key(s), val);
                 }
+                return;
+            }
+            let slot = if s.is_empty() {
+                let k = arr.push(Value::Null);
+                arr.entry(k)
+            } else {
+                arr.entry(to_key(s))
+            };
+            if !matches!(slot, Value::Array(_)) {
+                *slot = Value::array(PhpArray::new());
+            }
+            if let Value::Array(child) = slot {
+                put(std::rc::Rc::make_mut(child), rest, val);
             }
         }
         let mut segs_all = vec![base];
         segs_all.extend(segs);
         put(&mut out, &segs_all, val);
     }
-    out
+    (out, false)
 }
 
 // ---- version_compare ------------------------------------------------------------------
@@ -1198,7 +1214,12 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("parse_str", |it, _, a| {
         let q = s(it, a, 0)?;
         if a.len() > 1 {
-            a[1] = Value::array(parse_query(&q));
+            let (max_vars, max_nesting) = input_limits(it);
+            let (vars, cut) = parse_query(&q, max_vars, max_nesting);
+            if cut {
+                it.warn(&format!("parse_str(): Input variables exceeded {max_vars}. To increase the limit change max_input_vars in php.ini."));
+            }
+            a[1] = Value::array(vars);
         }
         Ok(Value::Null)
     });
