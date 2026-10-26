@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::builtins::{arg, has, s};
 use crate::interp::{BuiltinFn, Interp, R};
@@ -16,10 +17,22 @@ use crate::value::{pstr, Key, PhpArray, Value};
 
 #[derive(Default)]
 pub struct Ini {
-    values: HashMap<String, String>,
-    /// Values at startup (after files and -d), for ini_restore().
-    startup: HashMap<String, String>,
+    /// What ini_set() changed this request.
+    changed: HashMap<String, String>,
+    /// Values at startup (after files and -d), for ini_restore(); shared
+    /// by a thread's requests.
+    startup: Rc<HashMap<String, String>>,
     pub loaded_file: Option<PathBuf>,
+}
+
+type Startup = (Rc<HashMap<String, String>>, Option<PathBuf>);
+
+thread_local! {
+    /// The built-in defaults, and what loading files gave per (script
+    /// directory, -n, -d overrides): like PHP, php.ini is read once.
+    static DEFAULTS: Rc<HashMap<String, String>> =
+        Rc::new(crate::phpinfo_data::INI.iter().map(|d| (d.name.to_string(), d.value.unwrap_or("").to_string())).collect());
+    static LOADED: std::cell::RefCell<HashMap<(Option<PathBuf>, bool, Vec<(String, String)>), Startup>> = Default::default();
 }
 
 /// Parse INI text into (section, key, value) triples, PHP style: `;`
@@ -88,30 +101,39 @@ impl Ini {
     /// PHP 8.5's built-in defaults (`php -n`) for every directive of the
     /// modules phpx implements.
     pub fn new() -> Ini {
-        let values: HashMap<String, String> = crate::phpinfo_data::INI.iter().map(|d| (d.name.to_string(), d.value.unwrap_or("").to_string())).collect();
-        Ini { startup: values.clone(), values, loaded_file: None }
+        Ini { changed: HashMap::new(), startup: DEFAULTS.with(|d| d.clone()), loaded_file: None }
     }
 
     /// Load php.ini for `script` (unless `no_files`) and apply overrides.
     pub fn load(&mut self, script: &Path, no_files: bool, overrides: &[(String, String)]) {
+        let key = (script.parent().map(Path::to_path_buf), no_files, overrides.to_vec());
+        if let Some((startup, file)) = LOADED.with(|l| l.borrow().get(&key).cloned()) {
+            self.startup = startup;
+            self.loaded_file = file;
+            self.changed.clear();
+            return;
+        }
+        let mut values = (*self.startup).clone();
         if !no_files {
             if let Some(f) = find_ini(script) {
                 if let Ok(text) = std::fs::read_to_string(&f) {
                     for (_, k, v) in parse(&text) {
-                        self.values.insert(k, v);
+                        values.insert(k, v);
                     }
                     self.loaded_file = Some(f);
                 }
             }
         }
         for (k, v) in overrides {
-            self.values.insert(k.clone(), v.clone());
+            values.insert(k.clone(), v.clone());
         }
-        self.startup = self.values.clone();
+        self.startup = Rc::new(values);
+        self.changed.clear();
+        LOADED.with(|l| l.borrow_mut().insert(key, (self.startup.clone(), self.loaded_file.clone())));
     }
 
     pub fn get(&self, k: &str) -> Option<&str> {
-        self.values.get(k).map(String::as_str)
+        self.changed.get(k).or_else(|| self.startup.get(k)).map(String::as_str)
     }
 
     /// The value at startup (phpinfo()'s "Master Value").
@@ -121,19 +143,17 @@ impl Ini {
 
     /// ini_set(): old value, or None for unknown keys (PHP returns false).
     pub fn set(&mut self, k: &str, v: &str) -> Option<String> {
-        let old = self.values.get(k)?.clone();
-        self.values.insert(k.to_string(), v.to_string());
+        let old = self.get(k)?.to_string();
+        self.changed.insert(k.to_string(), v.to_string());
         Some(old)
     }
 
     pub fn restore(&mut self, k: &str) {
-        if let Some(v) = self.startup.get(k).cloned() {
-            self.values.insert(k.to_string(), v);
-        }
+        self.changed.remove(k);
     }
 
     pub fn all(&self) -> Vec<(String, String)> {
-        let mut v: Vec<_> = self.values.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mut v: Vec<_> = self.startup.iter().filter(|(k, _)| !self.changed.contains_key(*k)).chain(&self.changed).map(|(k, v)| (k.clone(), v.clone())).collect();
         // zend_ini_sort_entries(): case-insensitive.
         v.sort_by_key(|(k, _)| k.to_ascii_lowercase());
         v
