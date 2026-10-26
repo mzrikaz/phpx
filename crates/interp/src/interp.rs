@@ -313,6 +313,8 @@ pub struct Interp {
     pub builtins: FxHashMap<&'static str, BuiltinFn>,
     /// Functions found for string callables ('strlen', 'App\\helper').
     pub str_callables: RefCell<FxHashMap<Box<[u8]>, Callable>>,
+    /// Named-argument names from the source, shared (keyed by address).
+    arg_names: RefCell<FxHashMap<usize, Rc<str>>>,
     pub natives: HashMap<(&'static str, &'static str), NativeMethod>,
     pub classes: RefCell<FxHashMap<Rc<str>, Rc<Class>>>,
     pub constants: RefCell<HashMap<String, Value>>,
@@ -405,6 +407,7 @@ impl Interp {
             files: RefCell::new(vec![]),
             functions: RefCell::new(FxHashMap::default()),
             str_callables: RefCell::new(FxHashMap::default()),
+            arg_names: RefCell::new(FxHashMap::default()),
             builtins: crate::builtins::table().into_iter().collect(),
             natives: crate::native::table(),
             classes: RefCell::new(FxHashMap::default()),
@@ -1372,6 +1375,17 @@ impl Interp {
             Err(_) => format!("{}: {} in {file}:{line}\nStack trace:\n#0 {{main}}", o.class.name, s("message")),
         };
         format!("PHP Fatal error:  Uncaught {text}\n  thrown in {file} on line {line}")
+    }
+
+    /// A named argument's name (from the AST, which lives forever).
+    pub fn arg_name(&self, name: &'static str) -> Rc<str> {
+        let key = name.as_ptr() as usize;
+        if let Some(n) = self.arg_names.borrow().get(&key) {
+            return n.clone();
+        }
+        let n: Rc<str> = Rc::from(name);
+        self.arg_names.borrow_mut().insert(key, n.clone());
+        n
     }
 
     pub fn static_prop_slot(&self, sp: &Rc<StaticProp>) -> R<Value> {

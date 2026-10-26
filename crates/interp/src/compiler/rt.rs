@@ -1779,23 +1779,31 @@ unsafe fn call_expanded(
 /// Spread and named arguments, expanded like the interpreter's eval_args.
 unsafe fn expand_args(it: &Interp, vals: Vec<Value>, meta: *const ast::Arg) -> R<(Vec<Value>, Vec<(Rc<str>, Value)>)> {
     let ast_args = std::slice::from_raw_parts(meta, vals.len());
-    let mut pos = vec![];
+    let mut pos = Vec::with_capacity(vals.len());
     let mut named = vec![];
     for (v, a) in vals.into_iter().zip(ast_args) {
         if a.spread {
-            let pairs: Vec<(Value, Value)> = match v {
-                Value::Array(arr) => arr.iter().map(|(k, v)| (k.to_value(), v)).collect(),
-                Value::Object(o) if o.class.is_a("traversable") => it.iterate(&o)?,
-                _ => return Err(it.error("Error", "Only arrays and Traversables can be unpacked")),
-            };
-            for (k, v) in pairs {
-                match k {
-                    Value::Str(s) => named.push((Rc::from(String::from_utf8_lossy(&s).as_ref()), v)),
-                    _ => pos.push(v),
+            match v {
+                Value::Array(arr) => {
+                    for (k, v) in arr.iter() {
+                        match k {
+                            Key::Str(s) => named.push((Rc::from(String::from_utf8_lossy(&s).as_ref()), v)),
+                            Key::Int(_) => pos.push(v),
+                        }
+                    }
                 }
+                Value::Object(o) if o.class.is_a("traversable") => {
+                    for (k, v) in it.iterate(&o)? {
+                        match k {
+                            Value::Str(s) => named.push((Rc::from(String::from_utf8_lossy(&s).as_ref()), v)),
+                            _ => pos.push(v),
+                        }
+                    }
+                }
+                _ => return Err(it.error("Error", "Only arrays and Traversables can be unpacked")),
             }
         } else if let Some(n) = &a.name {
-            named.push((Rc::from(&*n.name), v));
+            named.push((it.arg_name(&n.name), v));
         } else {
             if !named.is_empty() {
                 return Err(it.error("Error", "Cannot use positional argument after named argument"));

@@ -396,7 +396,7 @@ impl Interp {
                     }
                 }
             } else if let Some(n) = &a.name {
-                named.push((Rc::from(&*n.name), v));
+                named.push((self.arg_name(&n.name), v));
             } else {
                 if !named.is_empty() {
                     return Err(self.error("Error", "Cannot use positional argument after named argument"));
@@ -442,7 +442,7 @@ impl Interp {
             };
             let v = if by_ref && is_ref_target(&a.value) { Value::Ref(self.make_ref(f, &a.value)?) } else { self.eval(f, &a.value)? };
             match &a.name {
-                Some(n) => named.push((Rc::from(&*n.name), v)),
+                Some(n) => named.push((self.arg_name(&n.name), v)),
                 None => pos.push(v),
             }
         }
