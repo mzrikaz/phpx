@@ -2571,7 +2571,6 @@ impl Interp {
             self.included.borrow_mut().insert(url.clone());
             return match self.parse_file(&url, crate::pstr::lossy(&src).into_owned()) {
                 Ok((id, file)) => {
-                    self.register_strict(id, file);
                     self.run_file_in(f, file, id)
                 }
                 Err(msg) => {
@@ -2656,12 +2655,7 @@ impl Interp {
     }
 
     pub fn register_strict(&self, id: usize, file: &ast::File) {
-        let strict = file.stmts.iter().any(|s| match &s.kind {
-            ast::StmtKind::Declare { items, .. } => items
-                .iter()
-                .any(|(k, v)| k.name.eq_ignore_ascii_case("strict_types") && matches!(v.kind, ast::ExprKind::Int(1))),
-            _ => false,
-        });
+        let strict = crate::interp::declares_strict(&file.stmts);
         let mut fs = self.file_strict.borrow_mut();
         if fs.len() <= id {
             fs.resize(id + 1, false);

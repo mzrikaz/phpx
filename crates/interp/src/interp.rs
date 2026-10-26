@@ -172,7 +172,9 @@ thread_local! {
     /// Namespace segments of a file's top level, by file id. They depend
     /// only on the (cached) syntax tree, so they last as long as it does:
     /// a server worker's later requests reuse them.
-    static SEGMENTS: RefCell<FxHashMap<usize, Segments>> = RefCell::new(FxHashMap::default());
+    /// Keyed by file id, with the statements they were split from and
+    /// whether the file declares strict_types.
+    static SEGMENTS: RefCell<FxHashMap<usize, (*const Stmt, bool, Segments)>> = RefCell::new(FxHashMap::default());
 }
 
 thread_local! {
@@ -798,12 +800,17 @@ impl Interp {
 
     /// Top-level statements: build namespace contexts, hoist declarations, run.
     pub(crate) fn run_stmts_top(&self, frame: &mut Frame, stmts: &'static [Stmt], file: usize) -> R<Flow> {
-        let strict = stmts.iter().any(|s| match &s.kind {
-            StmtKind::Declare { items, .. } => items.iter().any(|(k, v)| {
-                k.name.eq_ignore_ascii_case("strict_types") && matches!(v.kind, ast::ExprKind::Int(1))
-            }),
-            _ => false,
-        });
+        // (The main script's statements are split once per file id too.)
+        let cached = SEGMENTS.with(|m| m.borrow().get(&file).filter(|s| s.0 == stmts.as_ptr()).map(|s| (s.1, s.2.clone())));
+        let (strict, segments) = match cached {
+            Some(s) => s,
+            None => {
+                let strict = declares_strict(stmts);
+                let s = Rc::new(self.namespace_segments(stmts, file, strict));
+                SEGMENTS.with(|m| m.borrow_mut().insert(file, (stmts.as_ptr(), strict, s.clone())));
+                (strict, s)
+            }
+        };
         {
             let mut fs = self.file_strict.borrow_mut();
             if fs.len() <= file {
@@ -811,16 +818,6 @@ impl Interp {
             }
             fs[file] = strict;
         }
-        // (The main script's statements are split once per file id too.)
-        let cached = SEGMENTS.with(|m| m.borrow().get(&file).filter(|s| s.first().is_none_or(|x| x.0.as_ptr() == stmts.as_ptr())).cloned());
-        let segments = match cached {
-            Some(s) => s,
-            None => {
-                let s = Rc::new(self.namespace_segments(stmts, file, strict));
-                SEGMENTS.with(|m| m.borrow_mut().insert(file, s.clone()));
-                s
-            }
-        };
         for (body, ctx) in segments.iter() {
             self.hoist(body, ctx)?;
         }
@@ -1586,6 +1583,16 @@ impl Interp {
         *sp.value.borrow_mut() = Some(v.clone());
         Ok(v)
     }
+}
+
+/// Whether top-level statements include `declare(strict_types=1)`.
+pub(crate) fn declares_strict(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|s| match &s.kind {
+        StmtKind::Declare { items, .. } => items.iter().any(|(k, v)| {
+            k.name.eq_ignore_ascii_case("strict_types") && matches!(v.kind, ast::ExprKind::Int(1))
+        }),
+        _ => false,
+    })
 }
 
 fn collect_uses(stmts: &[Stmt], ctx: &mut NsCtx) {
