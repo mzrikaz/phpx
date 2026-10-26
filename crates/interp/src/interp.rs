@@ -166,6 +166,11 @@ pub(crate) fn parse_gen() -> u64 {
     PARSE_GEN.with(|g| g.get())
 }
 
+/// Paths of the files in this thread's parse cache.
+pub(crate) fn parsed_paths() -> Vec<PathBuf> {
+    PARSED.with(|p| p.borrow().keys().cloned().collect())
+}
+
 /// A file's modification time, size and inode: unchanged means the same
 /// content (how opcache validates its cache, without reading the file).
 type FileStamp = (i64, i64, u64, u64);
@@ -407,6 +412,9 @@ pub struct Interp {
     pub method_sites: RefCell<FxHashMap<usize, (usize, usize, Rc<crate::class::Method>)>>,
     /// Files included so far, in inclusion order (the main script first).
     pub included: RefCell<indexmap::IndexSet<PathBuf, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>>,
+    /// Snapshot mode: files a template already ran, with what they
+    /// returned; including one hands back that value instead of running it.
+    pub preloaded: RefCell<HashMap<PathBuf, Value>>,
     /// Declared classes per AST node, so hoisted declarations aren't redone.
     pub declared: RefCell<HashSet<usize>>,
     /// (file, byte offset) of the statement running now, for error lines.
@@ -500,6 +508,7 @@ impl Interp {
             generators: RefCell::new(vec![]),
             autoloading: RefCell::new(HashSet::new()),
             included: RefCell::new(indexmap::IndexSet::default()),
+            preloaded: RefCell::new(HashMap::default()),
             declared: RefCell::new(HashSet::new()),
             pos: Cell::new(Pos { file: 0, off: 0 }),
             globals: Cell::new(std::ptr::null_mut()),

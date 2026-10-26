@@ -15,6 +15,10 @@ use std::sync::{Arc, OnceLock};
 use crate::interp::{Frame, Interp};
 use crate::value::{pstr, Key, PhpArray, Value};
 
+#[cfg(unix)]
+#[path = "snapshot.rs"]
+mod snapshot;
+
 static SAPI: OnceLock<&'static str> = OnceLock::new();
 
 /// php_sapi_name(): "cli", or "cli-server" under -S.
@@ -27,6 +31,19 @@ thread_local! {
     static BODY: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     /// Temporary files of this request's uploads.
     static UPLOADS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
+
+fn set_body(body: Vec<u8>) {
+    BODY.with(|b| *b.borrow_mut() = body);
+}
+
+/// Delete what's left of this request's uploads.
+fn forget_uploads() {
+    UPLOADS.with(|u| {
+        for f in u.borrow_mut().drain() {
+            let _ = std::fs::remove_file(f);
+        }
+    });
 }
 
 pub fn request_body() -> Vec<u8> {
@@ -473,16 +490,23 @@ fn int_leaves(v: Value, under: bool) -> Value {
     }
 }
 
-fn request_globals(it: &Rc<Interp>, frame: &mut Frame, req: &Request, cfg: &Config, script: &(String, PathBuf, String)) {
-    let mut server = PhpArray::new();
+/// A request's superglobals. `inherit` (snapshot children): $_SERVER keeps
+/// what the booted template put there (e.g. .env values) under the request's
+/// keys, and $_ENV is left as boot left it.
+fn request_globals(it: &Rc<Interp>, frame: &mut Frame, req: &Request, cfg: &Config, script: &(String, PathBuf, String), inherit: bool) {
+    let mut server = match frame.var_slot("_SERVER").borrow().clone() {
+        Value::Array(a) if inherit => (*a).clone(),
+        _ => PhpArray::new(),
+    };
     let mut put = |k: &str, v: Value| {
         server.insert(Key::Str(pstr(k)), v);
     };
-    for (k, v) in std::env::vars() {
-        put(&k, Value::str(&v));
+    if !inherit {
+        for (k, v) in std::env::vars() {
+            put(&k, Value::str(&v));
+        }
+        put("DOCUMENT_ROOT", Value::str(&cfg.docroot.to_string_lossy()));
     }
-    let docroot = cfg.docroot.to_string_lossy().into_owned();
-    put("DOCUMENT_ROOT", Value::str(&docroot));
     put("REMOTE_ADDR", Value::str(&req.remote.ip().to_string()));
     put("REMOTE_PORT", Value::str(&req.remote.port().to_string()));
     put("SERVER_SOFTWARE", Value::str("PHP 8.5.10 Development Server"));
@@ -543,8 +567,22 @@ fn request_globals(it: &Rc<Interp>, frame: &mut Frame, req: &Request, cfg: &Conf
     set(frame, "_COOKIE", cookies);
     set(frame, "_FILES", files);
     set(frame, "_REQUEST", Value::array(request));
-    set(frame, "_ENV", Value::array(PhpArray::new()));
+    if !inherit {
+        set(frame, "_ENV", Value::array(PhpArray::new()));
+    }
     it.response.borrow_mut().headers.push("X-Powered-By: PHP/8.5.10".into());
+}
+
+/// $_SERVER for a snapshot template: what every request shares.
+fn server_base(put: &mut impl FnMut(&str, Value), cfg: &Config) {
+    for (k, v) in std::env::vars() {
+        put(&k, Value::str(&v));
+    }
+    put("DOCUMENT_ROOT", Value::str(&cfg.docroot.to_string_lossy()));
+    put("SERVER_SOFTWARE", Value::str("PHP 8.5.10 Development Server"));
+    let (host, port) = cfg.addr.rsplit_once(':').unwrap_or((&cfg.addr, "80"));
+    put("SERVER_NAME", Value::str(host));
+    put("SERVER_PORT", Value::str(port));
 }
 
 fn send_simple(stream: &mut TcpStream, code: i64, ctype: &str, body: &[u8], host: &str) {
@@ -580,7 +618,7 @@ fn run_php(stream: &TcpStream, req: &Request, cfg: &Arc<Config>, script_file: &P
     let out = HttpOut { stream: sock, interp: interp.clone(), host, started: started.clone() };
     // PHP consumes multipart bodies into $_POST/$_FILES; php://input is empty.
     let multipart = req.header("content-type").is_some_and(|c| c.to_ascii_lowercase().starts_with("multipart/form-data"));
-    BODY.with(|b| *b.borrow_mut() = if multipart { vec![] } else { req.body.clone() });
+    set_body(if multipart { vec![] } else { req.body.clone() });
     let cfg2 = cfg.clone();
     let req_ptr: *const Request = req;
     let interp2 = interp.clone();
@@ -588,7 +626,8 @@ fn run_php(stream: &TcpStream, req: &Request, cfg: &Arc<Config>, script_file: &P
         *interp2.borrow_mut() = Rc::downgrade(it);
         // The request outlives this call (run_main returns before it drops).
         let req = unsafe { &*req_ptr };
-        request_globals(it, frame, req, &cfg2, &target);
+        request_globals(it, frame, req, &cfg2, &target, false);
+        true
     });
     let path = script_file.canonicalize().unwrap_or_else(|_| script_file.to_path_buf());
     let (_, returned_false) = crate::run_main(&path, src, Box::new(out), setup);
@@ -598,11 +637,7 @@ fn run_php(stream: &TcpStream, req: &Request, cfg: &Arc<Config>, script_file: &P
         let mut out = HttpOut { stream: stream.try_clone().unwrap(), interp, host: req.header("host").unwrap_or("localhost").to_string(), started: started.clone() };
         let _ = out.start();
     }
-    UPLOADS.with(|u| {
-        for f in u.borrow_mut().drain() {
-            let _ = std::fs::remove_file(f);
-        }
-    });
+    forget_uploads();
     let code = *started.borrow();
     (code, returned_false)
 }
@@ -627,42 +662,65 @@ fn serve_static(stream: &mut TcpStream, req: &Request, file: &Path) -> i64 {
     }
 }
 
-fn handle(mut stream: TcpStream, cfg: Arc<Config>) {
+fn handle(stream: TcpStream, cfg: Arc<Config>) {
+    let Some((req, peer)) = accept_request(&stream) else { return };
+    respond(stream, &req, &cfg, &peer);
+}
+
+/// Read a connection's request, logging like PHP's server.
+fn accept_request(stream: &TcpStream) -> Option<(Request, String)> {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
     log(&format!("{peer} Accepted"));
-    let req = match read_request(&stream) {
-        Ok(Some(r)) => r,
+    match read_request(stream) {
+        Ok(Some(r)) => Some((r, peer)),
         _ => {
             log(&format!("{peer} Closed without sending a request; it was probably just an unused speculative preconnection"));
             log(&format!("{peer} Closing"));
-            return;
+            None
         }
-    };
-    let target = resolve(&cfg.docroot, req.path());
-    let status_log = |code: i64, note: &str| log(&format!("{peer} [{code}]: {} {}{note}", req.method, req.uri));
+    }
+}
+
+/// Where a request goes without a router: (script name, file, path info).
+fn router_target(req: &Request, cfg: &Config) -> (String, PathBuf, String) {
+    resolve(&cfg.docroot, req.path()).unwrap_or_else(|| (req.path().to_string(), cfg.docroot.join(req.path().trim_start_matches('/')), String::new()))
+}
+
+fn respond(stream: TcpStream, req: &Request, cfg: &Arc<Config>, peer: &str) {
     if let Some(router) = &cfg.router {
-        let t = target.clone().unwrap_or_else(|| (req.path().to_string(), cfg.docroot.join(req.path().trim_start_matches('/')), String::new()));
-        let (sent, returned_false) = run_php(&stream, &req, &cfg, router, t);
+        let (sent, returned_false) = run_php(&stream, req, cfg, router, router_target(req, cfg));
         if !returned_false {
-            if let Some(code) = sent {
-                if code != 200 {
-                    status_log(code, "");
-                }
-            }
-            log(&format!("{peer} Closing"));
+            router_done(req, sent, peer);
             return;
         }
     }
-    match target {
+    serve_target(stream, req, cfg, peer);
+}
+
+/// The router handled the request (it didn't return false).
+fn router_done(req: &Request, sent: Option<i64>, peer: &str) {
+    if let Some(code) = sent {
+        if code != 200 {
+            log(&format!("{peer} [{code}]: {} {}", req.method, req.uri));
+        }
+    }
+    log(&format!("{peer} Closing"));
+}
+
+/// No router, or it returned false: the PHP script or static file the path
+/// names.
+fn serve_target(mut stream: TcpStream, req: &Request, cfg: &Arc<Config>, peer: &str) {
+    let status_log = |code: i64, note: &str| log(&format!("{peer} [{code}]: {} {}{note}", req.method, req.uri));
+    match resolve(&cfg.docroot, req.path()) {
         Some(t) if t.1.extension().is_some_and(|e| e == "php") => {
             let file = t.1.clone();
-            let (sent, _) = run_php(&stream, &req, &cfg, &file, t);
+            let (sent, _) = run_php(&stream, req, cfg, &file, t);
             if let Some(code) = sent {
                 status_log(code, "");
             }
         }
         Some(t) => {
-            let code = serve_static(&mut stream, &req, &t.1);
+            let code = serve_static(&mut stream, req, &t.1);
             status_log(code, "");
         }
         None => {
@@ -705,8 +763,16 @@ pub fn serve(addr: &str, docroot: Option<&Path>, router: Option<&Path>) -> i32 {
     // Worker threads run requests one at a time each (PHP's server has one
     // unless PHP_CLI_SERVER_WORKERS says more); a worker keeps parsed
     // files between requests, while each request gets a fresh interpreter.
+    // Log lines carry the pid with more than one (artisan serve parses them).
     let workers = std::env::var("PHP_CLI_SERVER_WORKERS").ok().and_then(|v| v.parse::<usize>().ok()).filter(|&n| n > 1).unwrap_or(1);
     let _ = PID_PREFIX.set(workers > 1);
+    log(&format!("PHP 8.5.10 Development Server (http://{addr}) started"));
+    // PHPX_SNAPSHOT=1: boot the app once and fork each request from it.
+    #[cfg(unix)]
+    if std::env::var_os("PHPX_SNAPSHOT").is_some_and(|v| v == "1") {
+        let Err(why) = snapshot::serve(&listener, &cfg);
+        log(&format!("Snapshot: off ({why}); serving every request from scratch"));
+    }
     let (tx, rx) = std::sync::mpsc::channel::<TcpStream>();
     let rx = Arc::new(std::sync::Mutex::new(rx));
     let mut threads = vec![];
@@ -726,7 +792,6 @@ pub fn serve(addr: &str, docroot: Option<&Path>, router: Option<&Path>) -> i32 {
             }
         }
     }
-    log(&format!("PHP 8.5.10 Development Server (http://{addr}) started"));
     // PHPX_SERVE_MAX_REQUESTS=n: stop after n connections (benchmarks and
     // profiling, which report when the process ends).
     let max = std::env::var("PHPX_SERVE_MAX_REQUESTS").ok().and_then(|v| v.parse::<usize>().ok());

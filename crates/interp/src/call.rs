@@ -2700,6 +2700,9 @@ impl Interp {
                     }
                 };
                 if let Some((id, file)) = found {
+                    if let Some(v) = self.take_preloaded(&canon) {
+                        return Ok(v);
+                    }
                     if !self.included.borrow_mut().insert(canon) && matches!(kind, IncludeOnce | RequireOnce) {
                         return Ok(Value::Bool(true));
                     }
@@ -2723,6 +2726,9 @@ impl Interp {
             return Ok(Value::Bool(false));
         };
         let canon = crate::fs::realpath_cached(&found).unwrap_or(found.clone());
+        if let Some(v) = self.take_preloaded(&canon) {
+            return Ok(v);
+        }
         if matches!(kind, IncludeOnce | RequireOnce) && self.included.borrow().contains(&canon) {
             return Ok(Value::Bool(true));
         }
@@ -2751,7 +2757,17 @@ impl Interp {
         }
     }
 
-    pub fn register_strict(&self, id: usize, file: &ast::File) {
+    /// A file the snapshot template already ran: its return value, once.
+    fn take_preloaded(&self, canon: &std::path::Path) -> Option<Value> {
+        if self.preloaded.borrow().is_empty() {
+            return None;
+        }
+        let v = self.preloaded.borrow_mut().remove(canon)?;
+        self.included.borrow_mut().insert(canon.to_path_buf());
+        Some(v)
+    }
+
+        pub fn register_strict(&self, id: usize, file: &ast::File) {
         let strict = crate::interp::declares_strict(&file.stmts);
         let mut fs = self.file_strict.borrow_mut();
         if fs.len() <= id {

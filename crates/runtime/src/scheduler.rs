@@ -75,7 +75,7 @@ thread_local! {
     static SCHED: RefCell<Scheduler> = RefCell::new(Scheduler::default());
     static YIELDER: Cell<*const Yielder<(), ()>> = const { Cell::new(ptr::null()) };
     /// epoll (Linux) / kqueue (BSD, macOS). TODO: io_uring backend.
-    static POLLER: Poller = Poller::new().expect("failed to create poller");
+    static POLLER: RefCell<Poller> = RefCell::new(Poller::new().expect("failed to create poller"));
     static STACK_SIZE: Cell<usize> = const { Cell::new(DEFAULT_STACK_SIZE) };
     /// Stack limit of the running task, 0 outside tasks.
     static STACK_LIMIT: Cell<usize> = const { Cell::new(0) };
@@ -276,16 +276,23 @@ pub(crate) fn assert_idle() {
     })
 }
 
+/// In a child just forked: a poller of its own. An epoll fd would be shared
+/// with the parent and a kqueue one is not inherited at all; fds the parent
+/// registered are not carried over.
+pub fn after_fork() {
+    POLLER.with(|p| *p.borrow_mut() = Poller::new().expect("failed to create poller"));
+}
+
 /// Start tracking a non-blocking fd. Interest is armed per wait (oneshot).
 pub(crate) fn register_io(fd: BorrowedFd<'_>) -> io::Result<()> {
     // SAFETY: callers (net.rs) call `deregister_io` before the fd is closed.
-    POLLER.with(|p| unsafe { p.add(&fd, Event::none(fd.as_raw_fd() as usize)) })
+    POLLER.with(|p| unsafe { p.borrow().add(&fd, Event::none(fd.as_raw_fd() as usize)) })
 }
 
 pub(crate) fn deregister_io(fd: BorrowedFd<'_>) {
     // During thread exit the poller may already be gone (a socket held by
     // a thread-local dropped later); closing the fd unregisters it anyway.
-    let _ = POLLER.try_with(|p| p.delete(fd));
+    let _ = POLLER.try_with(|p| p.borrow().delete(fd));
 }
 
 /// Park until one of `fds` (each with its read / write interest) is ready
@@ -296,7 +303,7 @@ pub(crate) fn wait_fds(fds: &[(BorrowedFd<'_>, bool, bool)], deadline: Option<In
     for &(fd, r, w) in fds {
         let key = fd.as_raw_fd() as usize;
         let ev = Event::new(key, r, w);
-        POLLER.with(|p| p.modify(fd, ev))?;
+        POLLER.with(|p| p.borrow().modify(fd, ev))?;
         with(|s| {
             let prev = s.io_waiters.insert(key, me);
             assert!(prev.is_none_or(|t| t == me), "two tasks waiting on fd {key}");
@@ -311,7 +318,7 @@ pub(crate) fn wait_fds(fds: &[(BorrowedFd<'_>, bool, bool)], deadline: Option<In
             for &(fd, ..) in self.0 {
                 let key = fd.as_raw_fd() as usize;
                 if with(|s| s.io_waiters.remove(&key)).is_some() {
-                    let _ = POLLER.with(|p| p.modify(fd, Event::none(key)));
+                    let _ = POLLER.with(|p| p.borrow().modify(fd, Event::none(key)));
                 }
                 with(|s| s.io_fired.remove(&key));
             }
@@ -341,7 +348,7 @@ pub(crate) fn wait_fds(fds: &[(BorrowedFd<'_>, bool, bool)], deadline: Option<In
 fn poll_io(events: &mut Events, deadline: Option<Instant>) {
     let timeout = deadline.map(|at| at.saturating_duration_since(Instant::now()));
     events.clear();
-    match POLLER.with(|p| p.wait(events, timeout)) {
+    match POLLER.with(|p| p.borrow().wait(events, timeout)) {
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::Interrupted => return,
         Err(e) => panic!("poller failed: {e}"),

@@ -165,7 +165,10 @@ fn cli_globals(frame: &mut Frame, path: &Path, argv: &[String]) {
 
 pub fn run_source_args(path: &Path, src: String, argv: Vec<String>, out: Box<dyn Write>) -> i32 {
     let script = path.to_path_buf();
-    run_main(path, src, out, Box::new(move |_, frame| cli_globals(frame, &script, &argv))).0
+    run_main(path, src, out, Box::new(move |_, frame| {
+        cli_globals(frame, &script, &argv);
+        true
+    })).0
 }
 
 /// Clear the thread-local state one request leaves behind, before a
@@ -185,8 +188,9 @@ pub(crate) fn reset_request_state() {
     ext_more::reset();
 }
 
-/// Sets up a script's globals once its interpreter exists.
-pub(crate) type Setup = Box<dyn FnOnce(&Rc<Interp>, &mut Frame)>;
+/// Sets up a script's globals once its interpreter exists; false skips
+/// running the script.
+pub(crate) type Setup = Box<dyn FnOnce(&Rc<Interp>, &mut Frame) -> bool>;
 
 /// Run a main script: (exit code, whether the script returned false).
 pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Setup) -> (i32, bool) {
@@ -213,7 +217,9 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
         phpx_runtime::set_stack_size(INTERP_STACK);
         let ctx = main_it.top_ctx(id, false);
         let mut frame = Frame::new(ctx, 0);
-        setup(&main_it, &mut frame);
+        if !setup(&main_it, &mut frame) {
+            return Ok((0, false));
+        }
         main_it.globals.set(&mut frame);
         let mut returned_false = false;
         // auto_prepend_file / auto_append_file run around the script (the

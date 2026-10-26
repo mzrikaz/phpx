@@ -3,15 +3,16 @@
 //! raises a flag; the script stops at the next statement boundary with
 //! PHP's fatal error.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::time::Duration;
 
 /// Limit in milliseconds (0 = none) and the CPU time when it was set.
 static LIMIT_MS: AtomicU64 = AtomicU64::new(0);
 static START_NS: AtomicU64 = AtomicU64::new(0);
 static EXPIRED: AtomicBool = AtomicBool::new(false);
-static WATCHER: OnceLock<()> = OnceLock::new();
+/// Pid of the process whose watcher thread is running (a forked child has
+/// none: fork keeps only the calling thread).
+static WATCHER_PID: AtomicU32 = AtomicU32::new(0);
 
 fn cpu_ns() -> u64 {
     let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
@@ -26,7 +27,8 @@ pub fn set(seconds: i64) {
     START_NS.store(cpu_ns(), Relaxed);
     LIMIT_MS.store(seconds.max(0) as u64 * 1000, Relaxed);
     if seconds > 0 {
-        WATCHER.get_or_init(|| {
+        let pid = std::process::id();
+        if WATCHER_PID.swap(pid, Relaxed) != pid {
             std::thread::Builder::new()
                 .name("phpx-timeout".into())
                 .spawn(|| loop {
@@ -43,7 +45,24 @@ pub fn set(seconds: i64) {
                     }
                 })
                 .expect("spawn timeout watcher");
-        });
+        }
+    }
+}
+
+/// Held across fork(): the watcher thread can't be inside ALL_PENDING
+/// then, so the child doesn't inherit a lock no thread will release.
+pub fn fork_guard() -> std::sync::MutexGuard<'static, Vec<&'static AtomicBool>> {
+    crate::value::ALL_PENDING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// In a forked child: the limit restarts against the child's own CPU
+/// clock, with a watcher thread of its own.
+pub fn after_fork() {
+    let lim = LIMIT_MS.load(Relaxed);
+    if lim > 0 {
+        set((lim / 1000) as i64);
+    } else {
+        START_NS.store(cpu_ns(), Relaxed);
     }
 }
 
