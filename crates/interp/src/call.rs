@@ -1067,11 +1067,14 @@ impl Interp {
         }
         let entry = if inv.is_generator || ret_ref { None } else { self.native_entry_of(&inv) };
         let mut pos = pos;
-        if let Some(entry) = entry.filter(|_| named.is_empty() && inv.captured.is_empty()) {
+        let mut named = named;
+        if let Some(entry) = entry.filter(|_| inv.captured.is_empty()) {
             // Compiled: bind straight from the arguments, like calls
             // between compiled functions (declines leave them untouched).
-            if let Some(r) = self.native_call_args(&inv, entry, &mut pos) {
-                return r;
+            if named.is_empty() || self.named_in_order(&inv, &mut pos, &mut named)? {
+                if let Some(r) = self.native_call_args(&inv, entry, &mut pos) {
+                    return r;
+                }
             }
         }
         let mut f = self.bind_args(&inv, pos, named, saved_pos)?;
@@ -1133,6 +1136,37 @@ impl Interp {
         };
         self.pos.set(saved_pos);
         Ok(result)
+    }
+
+    /// Named arguments that only fill parameters after the positional ones
+    /// (none variadic): moved into position, skipped parameters taking
+    /// their defaults. False (nothing moved) for anything else, including
+    /// every error case, which the full binder reports.
+    #[inline(never)]
+    fn named_in_order(&self, inv: &Invoke, pos: &mut Vec<Value>, named: &mut Vec<(Rc<str>, Value)>) -> R<bool> {
+        let mut last = 0;
+        for (n, _) in named.iter() {
+            match inv.params.iter().position(|p| *p.name.name == **n) {
+                Some(j) if j >= pos.len() && !inv.params[j].variadic && !inv.params[j].by_ref => last = last.max(j),
+                _ => return Ok(false),
+            }
+        }
+        if (pos.len()..last).any(|j| inv.params[j].default.is_none() && !named.iter().any(|(n, _)| *inv.params[j].name.name == **n)) {
+            return Ok(false);
+        }
+        let mut f = Frame::for_call(inv.ctx.clone(), inv.func.clone(), inv.fn_id);
+        f.this = inv.this.clone();
+        f.class = inv.class.clone();
+        f.static_class = inv.static_class.clone();
+        for j in pos.len()..=last {
+            let p = &inv.params[j];
+            let v = match named.iter().position(|(n, _)| *p.name.name == **n) {
+                Some(k) => named.swap_remove(k).1,
+                None => self.eval(&mut f, p.default.as_ref().unwrap())?,
+            };
+            pos.push(v);
+        }
+        Ok(true)
     }
 
     /// Call a compiled entry with the arguments as they are. None = it

@@ -225,7 +225,8 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
         return 0;
     }
     for (i, p) in spec.params.iter().enumerate() {
-        if p.by_ref || p.variadic || (p.promote.is_some() && f.this.is_none()) || (i >= n && p.default.is_none()) {
+        // (Typed variadics: their errors number each argument.)
+        if p.by_ref || (p.variadic && p.ty.is_some()) || (p.promote.is_some() && f.this.is_none()) || (i >= n && p.default.is_none() && !p.variadic) {
             return 2;
         }
     }
@@ -237,7 +238,15 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
         _ => return 2,
     };
     let strict = || it.file_strict(it.pos.get().file as usize);
+    let mut consumed = n.min(spec.params.len());
     for (i, p) in spec.params.iter().enumerate() {
+        if p.variadic {
+            let rest: Vec<Value> = (i..n).map(|k| take(args.add(k)).into_deref()).collect();
+            consumed = n;
+            ptr::drop_in_place(locals.add(i));
+            put(locals.add(i), Value::array(PhpArray::from_list(rest)));
+            break;
+        }
         let v = if i < n {
             take(args.add(i)).into_deref()
         } else {
@@ -278,7 +287,7 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
         put(locals.add(i), v);
     }
     // Extra arguments are ignored (func_get_args() isn't compiled).
-    for i in spec.params.len()..n {
+    for i in consumed..n {
         drop(take(args.add(i)));
     }
     if let Some(cd) = closure {
