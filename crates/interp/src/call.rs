@@ -84,6 +84,20 @@ pub(crate) fn use_classes(classes: impl Iterator<Item = Rc<Class>>) {
     IN_USE.with(|u| u.borrow_mut().extend(classes));
 }
 
+/// What a class declaration's parents, interfaces and traits resolve to:
+/// (full name, lowercase name).
+pub(crate) struct ClassDeps {
+    extends: Vec<(String, Rc<str>)>,
+    implements: Vec<(String, Rc<str>)>,
+    traits: Vec<(String, Rc<str>)>,
+}
+
+thread_local! {
+    /// ClassDeps by declaration, with the context they were resolved in
+    /// (held, so its address cannot be reused by another).
+    static CLASS_DEPS: std::cell::RefCell<rustc_hash::FxHashMap<usize, (Rc<NsCtx>, Rc<ClassDeps>)>> = Default::default();
+}
+
 /// A new request: the classes the last one declared go back to their
 /// state as built (constants unevaluated, static properties unset).
 /// Destructors queued by what they held are dropped, as PHP runs none
@@ -1982,11 +1996,34 @@ impl Interp {
 
     // ---- class declaration ---------------------------------------------------
 
-    pub fn deps_ready(&self, c: &ast::Class, ctx: &NsCtx) -> bool {
+    pub fn deps_ready(&self, c: &'static ast::Class, ctx: &Rc<NsCtx>) -> bool {
         // Early binding only uses already-declared classes (no autoload), like PHP.
-        let ready = |n: &String| self.classes.borrow().contains_key(&*self.lower.get(&self.resolve_class_name(ctx, n)));
-        let traits = c.members.iter().filter_map(|m| if let Member::TraitUse { traits, .. } = m { Some(traits) } else { None }).flatten();
-        c.extends.iter().all(ready) && c.implements.iter().all(ready) && traits.into_iter().all(ready)
+        let deps = self.class_deps(c, ctx);
+        let classes = self.classes.borrow();
+        deps.extends.iter().chain(&deps.implements).chain(&deps.traits).all(|(_, l)| classes.contains_key(&**l))
+    }
+
+    /// The names a class declaration's parents, interfaces and traits
+    /// resolve to in `ctx` (worked out once per declaration and context).
+    fn class_deps(&self, c: &'static ast::Class, ctx: &Rc<NsCtx>) -> Rc<ClassDeps> {
+        let key = c as *const _ as usize;
+        if let Some(d) = CLASS_DEPS.with(|m| m.borrow().get(&key).filter(|d| Rc::ptr_eq(&d.0, ctx)).map(|d| d.1.clone())) {
+            return d;
+        }
+        let resolve = |names: &[String]| {
+            names
+                .iter()
+                .map(|n| {
+                    let full = self.resolve_class_name(ctx, n);
+                    let lower = self.lower.get(&full);
+                    (full, lower)
+                })
+                .collect::<Vec<_>>()
+        };
+        let traits: Vec<String> = c.members.iter().filter_map(|m| if let Member::TraitUse { traits, .. } = m { Some(traits) } else { None }).flatten().cloned().collect();
+        let d = Rc::new(ClassDeps { extends: resolve(&c.extends), implements: resolve(&c.implements), traits: resolve(&traits) });
+        CLASS_DEPS.with(|m| m.borrow_mut().insert(key, (ctx.clone(), d.clone())));
+        d
     }
 
     pub fn declare_anon_class(&self, f: &Frame, c: &'static ast::Class) -> R<Rc<Class>> {
@@ -2031,20 +2068,27 @@ impl Interp {
         if self.classes.borrow().contains_key(&*cls.lname) || !(Rc::ptr_eq(&cls.decl_ctx, ctx) || *cls.decl_ctx == **ctx) {
             return Ok(false);
         }
+        let names = self.class_deps(c, ctx);
         let (parent, ifaces) = match c.kind {
-            ClassKind::Interface => (None, &c.extends[..]),
-            _ => (c.extends.first(), &c.implements[..]),
+            ClassKind::Interface => (None, &names.extends[..]),
+            _ => (names.extends.first(), &names.implements[..]),
+        };
+        let get = |(full, lower): &(String, Rc<str>)| {
+            let known = self.classes.borrow().get(&**lower).cloned();
+            match known {
+                Some(c) => Ok(c),
+                None => self.lookup_class(full),
+            }
         };
         if let Some(p) = parent {
-            let pc = self.lookup_class(&self.resolve_class_name(ctx, p))?;
+            let pc = get(p)?;
             if !cls.parent.as_ref().is_some_and(|q| Rc::ptr_eq(q, &pc)) {
                 return Ok(false);
             }
         }
-        let traits = c.members.iter().filter_map(|m| if let Member::TraitUse { traits, .. } = m { Some(traits) } else { None }).flatten();
         let mut deps = cls.deps.iter();
-        for n in ifaces.iter().chain(traits) {
-            let d = self.lookup_class(&self.resolve_class_name(ctx, n))?;
+        for n in ifaces.iter().chain(&names.traits) {
+            let d = get(n)?;
             if !deps.next().is_some_and(|q| Rc::ptr_eq(q, &d)) {
                 return Ok(false);
             }
