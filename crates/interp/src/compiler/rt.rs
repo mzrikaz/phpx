@@ -2049,7 +2049,16 @@ pub unsafe extern "C" fn rt_method_call(
                 .find(|e| Rc::ptr_eq(&e.class, &o.class) && e.scope.as_ref().map_or(ptr::null(), Rc::as_ptr) == scope)
                 .map(|e| (e.method.clone(), e.entry, e.decl_class.clone()));
             if let Some((m, entry, decl)) = seen {
-                return poly_call(it, o, &m, entry, decl, args, n, locals, dst);
+                // Interpreted when first seen but compiled since: drop the
+                // stale entry and cache the compiled one (below).
+                let now_compiled = entry.is_none()
+                    && matches!(&m.body, crate::class::MethodBody::User(func) if matches!(it.compiled_entry(*func as *const ast::Function as usize), Some(Some(_))));
+                if now_compiled {
+                    site.poly.borrow_mut().retain(|e| !(Rc::ptr_eq(&e.class, &o.class) && e.scope.as_ref().map_or(ptr::null(), Rc::as_ptr) == scope));
+                    *site.interp.borrow_mut() = None;
+                } else {
+                    return poly_call(it, o, &m, entry, decl, args, n, locals, dst);
+                }
             }
         }
         let hit = hit.or_else(|| {

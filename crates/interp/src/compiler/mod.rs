@@ -1040,6 +1040,13 @@ impl Interp {
         guard.as_mut()?.entry_for(self, fn_id, mk)
     }
 
+    /// Whether a function has been compiled, without counting a call:
+    /// None while undecided, Some(None) when it doesn't compile.
+    pub fn compiled_entry(&self, fn_id: usize) -> Option<Option<Entry>> {
+        let guard = self.native.try_borrow().ok()?;
+        guard.as_ref()?.compiled.get(&fn_id).copied()
+    }
+
     /// Run a user function natively (parameters already bound in `f`).
     /// None = run it in the interpreter (cold, unsupported, or declined).
     pub fn try_native(&self, fn_id: usize, mk: impl FnOnce() -> Target, f: &mut crate::interp::Frame) -> Option<R<Value>> {
