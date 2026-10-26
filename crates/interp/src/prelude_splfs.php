@@ -13,37 +13,8 @@ class SplFileInfo implements Stringable
         $this->__phpx_setPath($filename);
     }
 
-    /** @internal */
-    protected function __phpx_setPath(string $path): void
-    {
-        $len = strlen($path);
-        while ($len > 1 && $path[$len - 1] === '/') {
-            $len--;
-        }
-        $path = substr($path, 0, $len);
-        $this->pathName = $path;
-        $i = strrpos($path, '/');
-        $this->fileName = $i === false ? $path : substr($path, $i + 1);
-    }
-
-    public function getPath(): string
-    {
-        $i = strrpos($this->getPathname(), '/');
-        return $i === false ? '' : substr($this->getPathname(), 0, $i);
-    }
-
-    public function getFilename(): string { return $this->fileName; }
-
-    public function getExtension(): string
-    {
-        $f = $this->getFilename();
-        $i = strrpos($f, '.');
-        return $i === false ? '' : substr($f, $i + 1);
-    }
-
-    public function getBasename(string $suffix = ''): string { return basename($this->getFilename(), $suffix); }
-
-    public function getPathname(): string { return $this->pathName; }
+    // getPath(), getFilename(), getPathname(), getRealPath(), isDir() & co
+    // are native (splfs.rs).
 
     /** @internal */
     private function __phpx_stat(string $what, mixed $v): mixed
@@ -66,9 +37,6 @@ class SplFileInfo implements Stringable
     public function isWritable(): bool { return is_writable($this->getPathname()); }
     public function isReadable(): bool { return is_readable($this->getPathname()); }
     public function isExecutable(): bool { return is_executable($this->getPathname()); }
-    public function isFile(): bool { return is_file($this->getPathname()); }
-    public function isDir(): bool { return is_dir($this->getPathname()); }
-    public function isLink(): bool { return is_link($this->getPathname()); }
 
     public function getLinkTarget(): string|false
     {
@@ -78,8 +46,6 @@ class SplFileInfo implements Stringable
         }
         return $t;
     }
-
-    public function getRealPath(): string|false { return realpath($this->getPathname()); }
 
     public function getFileInfo(?string $class = null): SplFileInfo
     {
@@ -223,12 +189,7 @@ final class Directory
 
 class DirectoryIterator extends SplFileInfo implements SeekableIterator
 {
-    /** @internal */
-    protected string $__phpx_dir = '';
-    /** @internal */
-    protected array $__phpx_entries = [];
-    /** @internal */
-    protected int $__phpx_pos = 0;
+    // Entries, position and the stepping methods are native (splfs.rs).
 
     public function __construct(string $directory)
     {
@@ -237,82 +198,6 @@ class DirectoryIterator extends SplFileInfo implements SeekableIterator
         }
         $this->__phpx_open($directory);
     }
-
-    /** @internal */
-    protected function __phpx_open(string $directory): void
-    {
-        $len = strlen($directory);
-        while ($len > 1 && $directory[$len - 1] === '/') {
-            $len--;
-        }
-        $this->__phpx_dir = substr($directory, 0, $len);
-        $h = @opendir($directory);
-        if ($h === false) {
-            throw new UnexpectedValueException(static::class . '::__construct(' . $directory . '): Failed to open directory: ' . (file_exists($directory) ? 'Not a directory' : 'No such file or directory'));
-        }
-        $entries = [];
-        while (($e = readdir($h)) !== false) {
-            $entries[] = $e;
-        }
-        closedir($h);
-        $this->__phpx_entries = $this->__phpx_filter($entries);
-        $this->__phpx_pos = 0;
-        $this->__phpx_sync();
-    }
-
-    /** @internal */
-    protected function __phpx_filter(array $entries): array { return $entries; }
-
-    /** @internal */
-    protected function __phpx_sync(): void
-    {
-        $e = $this->__phpx_entries[$this->__phpx_pos] ?? '';
-        $this->__phpx_setPath($e === '' ? $this->__phpx_dir : $this->__phpx_dir . '/' . $e);
-    }
-
-    public function getFilename(): string { return $this->__phpx_entries[$this->__phpx_pos] ?? ''; }
-
-    public function getPath(): string { return $this->__phpx_dir; }
-
-    public function getPathname(): string
-    {
-        $e = $this->__phpx_entries[$this->__phpx_pos] ?? '';
-        return $e === '' ? '' : $this->__phpx_dir . '/' . $e;
-    }
-
-    public function isDot(): bool
-    {
-        $e = $this->getFilename();
-        return $e === '.' || $e === '..';
-    }
-
-    public function current(): mixed { return $this; }
-    public function key(): mixed { return $this->__phpx_pos; }
-
-    public function next(): void
-    {
-        $this->__phpx_pos++;
-        $this->__phpx_sync();
-    }
-
-    public function rewind(): void
-    {
-        $this->__phpx_pos = 0;
-        $this->__phpx_sync();
-    }
-
-    public function valid(): bool { return $this->__phpx_pos < count($this->__phpx_entries); }
-
-    public function seek(int $offset): void
-    {
-        if ($offset < 0 || $offset >= count($this->__phpx_entries)) {
-            throw new OutOfBoundsException('Seek position ' . $offset . ' is out of range');
-        }
-        $this->__phpx_pos = $offset;
-        $this->__phpx_sync();
-    }
-
-    public function __toString(): string { return $this->getFilename(); }
 }
 
 class FilesystemIterator extends DirectoryIterator
@@ -335,40 +220,16 @@ class FilesystemIterator extends DirectoryIterator
 
     public function __construct(string $directory, int $flags = FilesystemIterator::KEY_AS_PATHNAME | FilesystemIterator::CURRENT_AS_FILEINFO | FilesystemIterator::SKIP_DOTS)
     {
-        $this->__phpx_flags = $flags | self::SKIP_DOTS;
+        $this->__phpx_flags = $flags;
         if ($directory === '') {
             throw new ValueError(static::class . '::__construct(): Argument #1 ($directory) cannot be empty');
         }
         $this->__phpx_open($directory);
     }
 
-    /** @internal */
-    protected function __phpx_filter(array $entries): array
-    {
-        if ($this->__phpx_flags & self::SKIP_DOTS) {
-            $entries = array_values(array_filter($entries, fn($e) => $e !== '.' && $e !== '..'));
-        }
-        return $entries;
-    }
-
     public function getFlags(): int { return $this->__phpx_flags & (self::KEY_MODE_MASK | self::CURRENT_MODE_MASK | self::OTHER_MODE_MASK); }
     public function setFlags(int $flags): void { $this->__phpx_flags = $flags; }
 
-    public function current(): mixed
-    {
-        if ($this->__phpx_flags & self::CURRENT_AS_PATHNAME) {
-            return $this->getPathname();
-        }
-        if ($this->__phpx_flags & self::CURRENT_AS_SELF) {
-            return $this;
-        }
-        return $this->getFileInfo();
-    }
-
-    public function key(): mixed
-    {
-        return ($this->__phpx_flags & self::KEY_AS_FILENAME) ? $this->getFilename() : $this->getPathname();
-    }
 }
 
 class RecursiveDirectoryIterator extends FilesystemIterator implements RecursiveIterator
@@ -385,18 +246,6 @@ class RecursiveDirectoryIterator extends FilesystemIterator implements Recursive
         $this->__phpx_open($directory);
     }
 
-    public function hasChildren(bool $allowLinks = false): bool
-    {
-        if ($this->isDot()) {
-            return false;
-        }
-        $p = $this->getPathname();
-        if (!$allowLinks && !($this->__phpx_flags & self::FOLLOW_SYMLINKS) && is_link($p)) {
-            return false;
-        }
-        return is_dir($p);
-    }
-
     public function getChildren(): RecursiveDirectoryIterator
     {
         $c = new static($this->getPathname(), $this->__phpx_flags);
@@ -411,10 +260,6 @@ class RecursiveDirectoryIterator extends FilesystemIterator implements Recursive
         return ($this->__phpx_sub === '' ? '' : $this->__phpx_sub . '/') . $this->getFilename();
     }
 
-    public function key(): mixed
-    {
-        return ($this->__phpx_flags & self::KEY_AS_FILENAME) ? $this->getFilename() : $this->getPathname();
-    }
 }
 
 class GlobIterator extends FilesystemIterator implements Countable
@@ -424,13 +269,8 @@ class GlobIterator extends FilesystemIterator implements Countable
         $this->__phpx_flags = $flags;
         $files = glob($pattern) ?: [];
         $i = strrpos($pattern, '/');
-        $this->__phpx_dir = $i === false ? '.' : substr($pattern, 0, $i);
-        $this->__phpx_entries = array_map('basename', $files);
-        $this->__phpx_pos = 0;
-        $this->__phpx_sync();
+        $this->__phpx_set_entries($i === false ? '.' : substr($pattern, 0, $i), array_map('basename', $files));
     }
-
-    public function count(): int { return count($this->__phpx_entries); }
 }
 
 class SplFileObject extends SplFileInfo implements RecursiveIterator, SeekableIterator

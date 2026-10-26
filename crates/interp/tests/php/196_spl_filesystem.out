@@ -1,0 +1,60 @@
+Array
+(
+    [0] => BASE/a.txt=>SplFileInfo:BASE/a.txt
+    [1] => BASE/b.php=>SplFileInfo:BASE/b.php
+    [2] => BASE/link=>SplFileInfo:BASE/link
+    [3] => BASE/sub=>SplFileInfo:BASE/sub
+)
+Array
+(
+    [0] => ..=>BASE/..
+    [1] => .=>BASE/.
+    [2] => a.txt=>BASE/a.txt
+    [3] => b.php=>BASE/b.php
+    [4] => link=>BASE/link
+    [5] => sub=>BASE/sub
+)
+[[".",true,true,false,false,"","BASE","BASE\/."],["..",true,true,false,false,"","BASE","BASE\/.."],["a.txt",false,false,true,false,"txt","BASE","BASE\/a.txt"],["b.php",false,false,true,false,"php","BASE","BASE\/b.php"],["link",false,true,false,true,"","BASE","BASE\/link"],["sub",false,true,false,false,"","BASE","BASE\/sub"]]
+Array
+(
+    [0] => BASE/a.txt|a.txt|F|BASE/a.txt|a
+    [1] => BASE/b.php|b.php|F|BASE/b.php|b.php
+    [2] => BASE/link|link|D|BASE/sub|link
+    [3] => BASE/sub/c.TXT|sub/c.TXT|F|BASE/sub/c.TXT|c.TXT
+    [4] => BASE/sub/deep/d|sub/deep/d|F|BASE/sub/deep/d|d
+    [5] => BASE/sub/deep|sub/deep|D|BASE/sub/deep|deep
+    [6] => BASE/sub|sub|D|BASE/sub|sub
+)
+Array
+(
+    [0] => BASE/a.txt
+    [1] => BASE/b.php
+    [2] => BASE/link/c.TXT
+    [3] => BASE/link/deep/d
+    [4] => BASE/sub/c.TXT
+    [5] => BASE/sub/deep/d
+)
+1
+BASE/a.txt a.txt
+string(3) "sub"
+string(4) "BASE"
+string(8) "BASE/sub"
+bool(true)
+string(0) ""
+string(8) "BASE/sub"
+string(8) "BASE/sub"
+string(13) "nofile.tar.gz"
+string(0) ""
+string(2) "gz"
+string(10) "nofile.tar"
+bool(false)
+bool(false)
+Seek position 99 is out of range
+DirectoryIterator::__construct(BASE/nope): Failed to open directory: No such file or directory
+MyInfo
+object(SplFileInfo)#10 (2) {
+  ["pathName":"SplFileInfo":private]=>
+  string(12) "/tmp/x/y.txt"
+  ["fileName":"SplFileInfo":private]=>
+  string(5) "y.txt"
+}

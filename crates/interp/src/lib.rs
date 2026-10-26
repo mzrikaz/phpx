@@ -59,6 +59,7 @@ mod openssl;
 mod random;
 mod intl;
 mod fileinfo;
+mod splfs;
 mod mbcase;
 mod mbcase_table;
 mod db;
