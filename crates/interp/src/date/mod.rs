@@ -189,6 +189,7 @@ fn dt_construct(it: &Interp, this: Option<&Rc<Obj>>, cls: &Rc<Class>, a: Vec<Val
     let (ts, us) = now();
     match parse_at(it, &text, ts, us, &zone) {
         Ok(d) => {
+            set_last_errors(&[], &[]);
             store(o, d);
             Ok(Value::Null)
         }
@@ -339,10 +340,44 @@ fn dt_create_from_format(it: &Interp, _: Option<&Rc<Obj>>, cls: &Rc<Class>, a: V
     let text = it.to_str(&arg(&a, 1))?;
     let zone = zone_of(&arg(&a, 2)).unwrap_or_else(|| default_zone(it));
     let (ts, us) = now();
-    match fromformat::parse(&f, &text, ts, us, &zone) {
-        Ok(d) => new_object(it, cls, d),
-        Err(_) => Ok(Value::Bool(false)),
+    let r = fromformat::parse(&f, &text);
+    set_last_errors(&r.warnings, &r.errors);
+    if !r.errors.is_empty() {
+        return Ok(Value::Bool(false));
     }
+    new_object(it, cls, fromformat::to_state(&r, ts, us, &zone))
+}
+
+thread_local! {
+    /// DateTime::getLastErrors(): the last parse's warnings and errors.
+    static LAST_ERRORS: std::cell::RefCell<Option<Value>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The warning_count/warnings/error_count/errors entries of a parse.
+pub(crate) fn errors_array(warnings: &[(usize, String)], errors: &[(usize, String)], out: &mut PhpArray) {
+    let list = |v: &[(usize, String)]| {
+        let mut a = PhpArray::new();
+        for (pos, msg) in v {
+            a.insert(Key::Int(*pos as i64), Value::str(msg));
+        }
+        Value::array(a)
+    };
+    out.insert(Key::Str(pstr("warning_count")), Value::Int(warnings.len() as i64));
+    out.insert(Key::Str(pstr("warnings")), list(warnings));
+    out.insert(Key::Str(pstr("error_count")), Value::Int(errors.len() as i64));
+    out.insert(Key::Str(pstr("errors")), list(errors));
+}
+
+/// Record a parse for getLastErrors() (false when it was clean).
+pub(crate) fn set_last_errors(warnings: &[(usize, String)], errors: &[(usize, String)]) {
+    let v = if warnings.is_empty() && errors.is_empty() {
+        None
+    } else {
+        let mut a = PhpArray::new();
+        errors_array(warnings, errors, &mut a);
+        Some(Value::array(a))
+    };
+    LAST_ERRORS.with(|l| *l.borrow_mut() = v);
 }
 
 fn dt_create_from_interface(it: &Interp, _: Option<&Rc<Obj>>, cls: &Rc<Class>, a: Vec<Value>) -> R<Value> {
@@ -352,7 +387,7 @@ fn dt_create_from_interface(it: &Interp, _: Option<&Rc<Obj>>, cls: &Rc<Class>, a
 }
 
 fn dt_get_last_errors(_: &Interp, _: Option<&Rc<Obj>>, _: &Rc<Class>, _: Vec<Value>) -> R<Value> {
-    Ok(Value::Bool(false))
+    Ok(LAST_ERRORS.with(|l| l.borrow().clone()).unwrap_or(Value::Bool(false)))
 }
 
 /// The three `date`/`timezone_type`/`timezone` entries back to a state.

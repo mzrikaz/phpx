@@ -1,0 +1,77 @@
+["Y-m-d H:i:s","2026-10-26T06:21:33.000000Z"] => false {"warning_count":0,"warnings":[],"error_count":2,"errors":{"10":"Unexpected data found.","19":"Trailing data"}}
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0,"warning_count":0,"warnings":[],"error_count":2,"errors":{"10":"Unexpected data found.","19":"Trailing data"},"is_localtime":false}
+["Y-m-d H:i:s","2026-10-26 06:21:33"] => 2026-10-26 06:21:33.000000 UTC +00:00 false
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["Y-m-d H:i:s","2026-10-26 06:21:33 extra"] => false {"warning_count":0,"warnings":[],"error_count":1,"errors":{"19":"Trailing data"}}
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0,"warning_count":0,"warnings":[],"error_count":1,"errors":{"19":"Trailing data"},"is_localtime":false}
+["Y-m-d H:i:s","garbage"] => false {"warning_count":0,"warnings":[],"error_count":3,"errors":{"0":"A four digit year could not be found","7":"Not enough data available to satisfy format"}}
+   {"year":false,"month":false,"day":false,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":3,"errors":{"0":"A four digit year could not be found","7":"Not enough data available to satisfy format"},"is_localtime":false}
+["Y-m-d","2026-02-30"] => 2026-03-02 {"warning_count":1,"warnings":{"10":"The parsed date was invalid"},"error_count":0,"errors":[]}
+   {"year":2026,"month":2,"day":30,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":1,"warnings":{"10":"The parsed date was invalid"},"error_count":0,"errors":[],"is_localtime":false}
+["!Y-m-d","2026-10-26"] => 2026-10-26 00:00:00.000000 UTC +00:00 false
+   {"year":2026,"month":10,"day":26,"hour":0,"minute":0,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["Y-m-d|","2026-10-26"] => 2026-10-26 00:00:00.000000 UTC +00:00 false
+   {"year":2026,"month":10,"day":26,"hour":0,"minute":0,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["d\/m\/Y H:i","26\/10\/2026 6:21"] => 2026-10-26 06:21:00.000000 UTC +00:00 false
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["D, d M Y","Mon, 26 Oct 2026"] => 2026-10-26 false
+   {"year":2026,"month":10,"day":26,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false,"relative":{"year":0,"month":0,"day":0,"hour":0,"minute":0,"second":0,"weekday":1}}
+["l jS F Y","Monday 26th October 2026"] => 2026-10-26 false
+   {"year":2026,"month":10,"day":26,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false,"relative":{"year":0,"month":0,"day":0,"hour":0,"minute":0,"second":0,"weekday":1}}
+["U","1700000000"] => 2023-11-14 22:13:20.000000 GMT+0000 +00:00 false
+   {"year":2023,"month":11,"day":14,"hour":22,"minute":13,"second":20,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":true,"zone":0,"is_dst":false}
+["U.u","1700000000.123456"] => 2023-11-14 22:13:20.123456 GMT+0000 +00:00 false
+   {"year":2023,"month":11,"day":14,"hour":22,"minute":13,"second":20,"fraction":0.123456,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":true,"zone":0,"is_dst":false}
+["Y-m-d\\TH:i:sP","2026-10-26T06:21:33+05:30"] => 2026-10-26 06:21:33.000000 GMT+0530 +05:30 false
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":true,"zone":19800,"is_dst":false}
+["Y-m-d H:i:s T","2026-10-26 06:21:33 EST"] => 2026-10-26 06:21:33.000000 EST -05:00 false
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":true,"zone":-18000,"is_dst":false,"tz_abbr":"EST"}
+["Y-m-d H:i:s e","2026-10-26 06:21:33 Asia\/Colombo"] => 2026-10-26 06:21:33.000000 +0530 +05:30 false
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":true,"tz_id":"Asia\/Colombo"}
+["Y-m-d H:i:s.u","2026-10-26 06:21:33.5"] => 2026-10-26 06:21:33.500000 UTC +00:00 false
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0.5,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["Y-m-d H:i:s.v","2026-10-26 06:21:33.12"] => 2026-10-26 06:21:33.120000 UTC +00:00 false
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0.12,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["g:i a","6:21 pm"] => 2026-10-26 18:21:00.000000 UTC +00:00 false
+   {"year":false,"month":false,"day":false,"hour":18,"minute":21,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["h:i A","12:30 AM"] => 2026-10-26 00:30:00.000000 UTC +00:00 false
+   {"year":false,"month":false,"day":false,"hour":0,"minute":30,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["h:i","13:30"] => false {"warning_count":0,"warnings":[],"error_count":1,"errors":["Hour cannot be higher than 12"]}
+   {"year":false,"month":false,"day":false,"hour":13,"minute":30,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":1,"errors":["Hour cannot be higher than 12"],"is_localtime":false}
+["Y-m-d+","2026-10-26 trailing"] => 2026-10-26 {"warning_count":1,"warnings":{"10":"Trailing data"},"error_count":0,"errors":[]}
+   {"year":2026,"month":10,"day":26,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":1,"warnings":{"10":"Trailing data"},"error_count":0,"errors":[],"is_localtime":false}
+["Y-m-d H:i:s","2026-10-26"] => false {"warning_count":0,"warnings":[],"error_count":1,"errors":{"10":"Not enough data available to satisfy format"}}
+   {"year":2026,"month":10,"day":26,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":1,"errors":{"10":"Not enough data available to satisfy format"},"is_localtime":false}
+["y-n-j","26-1-5"] => 2026-01-05 false
+   {"year":2026,"month":1,"day":5,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["Y z","2026 100"] => 2026-04-11 false
+   {"year":2026,"month":4,"day":11,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["z Y","100 2026"] => false {"warning_count":0,"warnings":[],"error_count":1,"errors":["A 'day of year' can only come after a year has been found"]}
+   {"year":2026,"month":false,"day":false,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":1,"errors":["A 'day of year' can only come after a year has been found"],"is_localtime":false}
+["Y-m-d ?","2026-10-26 X"] => 2026-10-26 false
+   {"year":2026,"month":10,"day":26,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["Y#m#d","2026\/10.26"] => 2026-10-26 false
+   {"year":2026,"month":10,"day":26,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["Y-m-d *","2026-10-26 foo123"] => false {"warning_count":0,"warnings":[],"error_count":1,"errors":{"14":"Trailing data"}}
+   {"year":2026,"month":10,"day":26,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":1,"errors":{"14":"Trailing data"},"is_localtime":false}
+["H\\h i\\m","06h 21m"] => 2026-10-26 06:21:00.000000 UTC +00:00 false
+   {"year":false,"month":false,"day":false,"hour":6,"minute":21,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["Y-m-d H:i:s","2026-13-45 25:61:61"] => 2027-02-15 02:02:01.000000 UTC +00:00 {"warning_count":2,"warnings":{"19":"The parsed date was invalid"},"error_count":0,"errors":[]}
+   {"year":2026,"month":13,"day":45,"hour":25,"minute":61,"second":61,"fraction":0,"warning_count":2,"warnings":{"19":"The parsed date was invalid"},"error_count":0,"errors":[],"is_localtime":false}
+["Y-m-d G:i","2026-10-26 6:05"] => 2026-10-26 06:05:00.000000 UTC +00:00 false
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":5,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["Ymd","20261026"] => 2026-10-26 false
+   {"year":2026,"month":10,"day":26,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["YmdHis","20261026062133"] => 2026-10-26 06:21:33.000000 UTC +00:00 false
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
+["Y-m-d",""] => false {"warning_count":0,"warnings":[],"error_count":1,"errors":["Not enough data available to satisfy format"]}
+   {"year":false,"month":false,"day":false,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":1,"errors":["Not enough data available to satisfy format"],"is_localtime":false}
+["Y-m-d H:i:s O","2026-10-26 06:21:33 +0200"] => 2026-10-26 06:21:33.000000 GMT+0200 +02:00 false
+   {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":true,"zone":7200,"is_dst":false}
+bool(false)
+GMT+0530 +05:30 +05:30
+GMT+0530 +05:30 +05:30
+GMT+0530 +05:30 +05:30
+GMT+0000 +00:00 +00:00
+GMT+0000 +00:00 +00:00
+string(6) "+00:00"

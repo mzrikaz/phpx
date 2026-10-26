@@ -63,56 +63,43 @@ fn strftime(it: &Interp, a: &[Value], gmt: bool) -> R<Value> {
 fn parse_from_format(it: &Interp, a: &[Value]) -> R<Value> {
     let fmt = s(it, a, 0)?.to_vec();
     let text = s(it, a, 1)?.to_vec();
-    let (ts, us) = now();
-    let zone = default_zone(it);
-    let r = fromformat::parse(&fmt, &text, ts, us, &zone);
+    let r = fromformat::parse(&fmt, &text);
     let mut out = PhpArray::new();
-    let mut put = |k: &str, v: Value| {
-        out.insert(Key::Str(pstr(k)), v);
-    };
-    let has_any = |set: &[u8]| fmt.iter().any(|c| set.contains(c));
-    let date_set = (has_any(b"Yyxo"), has_any(b"mnMF"), has_any(b"djz"));
-    let time_set = has_any(b"HGhgisuvU");
-    let reset = has_any(b"!|");
-    let zoned = has_any(b"eTOPpU");
-    match &r {
-        Ok(st) => {
-            let off = st.zone.offset(st.ts);
-            let c = Civil::from_local(st.ts + off as i64, st.us);
-            let f = |set: bool, v: i64| if set || reset { Value::Int(v) } else { Value::Bool(false) };
-            put("year", f(date_set.0, c.y));
-            put("month", f(date_set.1, c.m));
-            put("day", f(date_set.2, c.d));
-            put("hour", f(time_set, c.h));
-            put("minute", f(time_set, c.i));
-            put("second", f(time_set, c.s));
-            put("fraction", if time_set || reset { Value::Float(c.us as f64 / 1e6) } else { Value::Bool(false) });
+    let int_or_false = |v: Option<i64>| v.map_or(Value::Bool(false), Value::Int);
+    out.insert(Key::Str(pstr("year")), int_or_false(r.y));
+    out.insert(Key::Str(pstr("month")), int_or_false(r.m));
+    out.insert(Key::Str(pstr("day")), int_or_false(r.d));
+    out.insert(Key::Str(pstr("hour")), int_or_false(r.h));
+    out.insert(Key::Str(pstr("minute")), int_or_false(r.i));
+    out.insert(Key::Str(pstr("second")), int_or_false(r.s));
+    out.insert(Key::Str(pstr("fraction")), r.us.map_or(Value::Bool(false), |us| Value::Float(us as f64 / 1e6)));
+    super::errors_array(&r.warnings, &r.errors, &mut out);
+    out.insert(Key::Str(pstr("is_localtime")), Value::Bool(r.zone.is_some()));
+    if let Some(z) = &r.zone {
+        let at = r.sse.unwrap_or_else(|| now().0);
+        out.insert(Key::Str(pstr("zone_type")), Value::Int(z.type_num()));
+        let (off, dst, abbr) = z.at(at);
+        if z.type_num() != 3 {
+            out.insert(Key::Str(pstr("zone")), Value::Int(off as i64 - if dst { 3600 } else { 0 }));
+            out.insert(Key::Str(pstr("is_dst")), Value::Bool(dst));
         }
-        Err(_) => {
-            for k in ["year", "month", "day", "hour", "minute", "second", "fraction"] {
-                put(k, Value::Bool(false));
+        match z.type_num() {
+            2 => {
+                out.insert(Key::Str(pstr("tz_abbr")), Value::str(&abbr));
             }
-        }
-    }
-    put("warning_count", Value::Int(0));
-    put("warnings", Value::array(PhpArray::new()));
-    let mut errs = PhpArray::new();
-    if let Err(msg) = &r {
-        errs.insert(Key::Int(0), Value::str(msg));
-    }
-    put("error_count", Value::Int(errs.len() as i64));
-    put("errors", Value::array(errs));
-    put("is_localtime", Value::Bool(zoned && r.is_ok()));
-    if let (true, Ok(st)) = (zoned, &r) {
-        put("zone_type", Value::Int(st.zone.type_num()));
-        let (off, dst, abbr) = st.zone.at(st.ts);
-        put("zone", Value::Int(off as i64 - if dst { 3600 } else { 0 }));
-        put("is_dst", Value::Bool(dst));
-        match st.zone.type_num() {
-            2 => put("tz_abbr", Value::str(&abbr)),
-            3 => put("tz_id", Value::str(&st.zone.name())),
+            3 => {
+                out.insert(Key::Str(pstr("tz_id")), Value::str(&z.name()));
+            }
             _ => {}
         }
+    }
+    if let Some(wd) = r.weekday {
+        let mut rel = PhpArray::new();
+        for k in ["year", "month", "day", "hour", "minute", "second"] {
+            rel.insert(Key::Str(pstr(k)), Value::Int(0));
+        }
+        rel.insert(Key::Str(pstr("weekday")), Value::Int(wd));
+        out.insert(Key::Str(pstr("relative")), Value::array(rel));
     }
     Ok(Value::array(out))
 }
