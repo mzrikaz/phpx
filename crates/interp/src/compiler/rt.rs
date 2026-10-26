@@ -640,14 +640,63 @@ pub unsafe extern "C" fn rt_magic(c: *mut Cx, e: *const ast::Expr, dst: *mut Val
     0
 }
 
-pub unsafe extern "C" fn rt_class_const(c: *mut Cx, cref: *const ast::ClassRef, name: *const u8, len: u64, dst: *mut Value) -> u64 {
-    let (it, f) = cx(c);
-    status(it, it.class_const(f, &*cref, name_of(name, len)), |v| put(dst, v))
+/// Inline cache of a `C::NAME` / `C::$name` read: what it resolved to for
+/// a class reference, `static` class and calling scope (constants are
+/// immutable once evaluated; a static property's slot is fixed).
+#[derive(Default)]
+pub struct ClassSite {
+    key: std::cell::Cell<[usize; 3]>,
+    sp: RefCell<Option<Rc<crate::class::StaticProp>>>,
+    cv: RefCell<Option<Value>>,
 }
 
-pub unsafe extern "C" fn rt_static_prop_get(c: *mut Cx, cref: *const ast::ClassRef, name: *const u8, len: u64, dst: *mut Value) -> u64 {
+impl ClassSite {
+    fn key(cref: *const ast::ClassRef, f: &Frame) -> [usize; 3] {
+        let p = |c: Option<&Rc<crate::class::Class>>| c.map_or(0, |c| Rc::as_ptr(c) as usize);
+        [cref as usize, p(f.static_class.as_ref()), p(f.class.as_ref())]
+    }
+}
+
+pub unsafe extern "C" fn rt_class_const(c: *mut Cx, cref: *const ast::ClassRef, name: *const u8, len: u64, site: *const ClassSite, dst: *mut Value) -> u64 {
     let (it, f) = cx(c);
-    let r = it.find_static_prop(f, &*cref, name_of(name, len)).and_then(|sp| it.static_prop_slot(&sp));
+    let site = &*site;
+    let key = ClassSite::key(cref, f);
+    if site.key.get() == key {
+        if let Some(v) = &*site.cv.borrow() {
+            put(dst, v.clone());
+            return 0;
+        }
+    }
+    let r = it.class_const(f, &*cref, name_of(name, len));
+    if let Ok(v) = &r {
+        // Deprecated constants warn on every read.
+        let cacheable = it.class_ref(f, &*cref).is_ok_and(|cls| cls.deprecated_consts.is_empty());
+        if cacheable {
+            site.key.set(key);
+            *site.cv.borrow_mut() = Some(v.clone());
+        }
+    }
+    status(it, r, |v| put(dst, v))
+}
+
+pub unsafe extern "C" fn rt_static_prop_get(c: *mut Cx, cref: *const ast::ClassRef, name: *const u8, len: u64, site: *const ClassSite, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    let site = &*site;
+    let key = ClassSite::key(cref, f);
+    if site.key.get() == key {
+        if let Some(sp) = &*site.sp.borrow() {
+            if let Some(v) = sp.value.borrow().as_ref() {
+                put(dst, v.deref());
+                return 0;
+            }
+        }
+    }
+    let r = it.find_static_prop(f, &*cref, name_of(name, len)).and_then(|sp| {
+        let v = it.static_prop_slot(&sp)?;
+        site.key.set(key);
+        *site.sp.borrow_mut() = Some(sp);
+        Ok(v)
+    });
     status(it, r, |v| put(dst, v))
 }
 
@@ -688,7 +737,7 @@ pub unsafe extern "C" fn rt_instanceof_dyn(c: *mut Cx, v: *const Value, class: *
 pub unsafe extern "C" fn rt_called_class(c: *mut Cx, dst: *mut Value) -> u64 {
     let (it, f) = cx(c);
     let r = match &f.static_class {
-        Some(c) => Ok(Value::str(&c.name)),
+        Some(c) => Ok(c.name_value.clone()),
         None => Err(it.error("Error", "get_called_class() must be called from within a class")),
     };
     status(it, r, |v| put(dst, v))

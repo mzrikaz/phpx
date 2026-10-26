@@ -74,6 +74,7 @@ pub struct Lower<'a> {
     pub sites: &'a mut Vec<Box<CallSite>>,
     pub msites: Vec<Box<super::rt::MethodSite>>,
     pub psites: Vec<Box<super::rt::PropSite>>,
+    pub csites: Vec<Box<super::rt::ClassSite>>,
     /// Top-level code: `return` exits through this block (status 3).
     pub exit_ret: Option<Block>,
     /// Per pending call (innermost last): arguments to write back to
@@ -204,6 +205,7 @@ impl<'a> Lower<'a> {
             sites,
             msites: vec![],
             psites: vec![],
+            csites: vec![],
             exit_ret: None,
             write_backs: vec![],
             osr_target: None,
@@ -1542,14 +1544,16 @@ impl<'a> Lower<'a> {
                     _ => {
                         let cr = self.class_ref_ptr(class)?;
                         let (np, nl) = self.name_parts(&name.name);
-                        self.helper_value("rt_class_const", |l| vec![l.cx, cr, np, nl])?
+                        let site = self.class_site();
+                        self.helper_value("rt_class_const", |l| vec![l.cx, cr, np, nl, site])?
                     }
                 }
             }
             StaticProp { class, name } => {
                 let cr = self.class_ref_ptr(class)?;
                 let (np, nl) = self.name_parts(&name.name);
-                self.helper_value("rt_static_prop_get", |l| vec![l.cx, cr, np, nl])?
+                let site = self.class_site();
+                self.helper_value("rt_static_prop_get", |l| vec![l.cx, cr, np, nl, site])?
             }
             Call { callee, args } if !matches!(callee.kind, ExprKind::Name(_)) => {
                 let cv = self.expr(callee)?;
@@ -2631,6 +2635,13 @@ impl<'a> Lower<'a> {
                 Ok(r)
             }
         }
+    }
+
+    fn class_site(&mut self) -> CValue {
+        let site = Box::<super::rt::ClassSite>::default();
+        let sp = &*site as *const super::rt::ClassSite as i64;
+        self.csites.push(site);
+        self.iconst(sp)
     }
 
     /// A class reference operand: the AST node for a name, or for `$x::`

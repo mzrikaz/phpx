@@ -70,6 +70,7 @@ pub struct Native {
     sites: Vec<Box<CallSite>>,
     msites: Vec<Box<rt::MethodSite>>,
     psites: Vec<Box<rt::PropSite>>,
+    csites: Vec<Box<rt::ClassSite>>,
     specs: Vec<Box<LocalsSpec>>,
     log: bool,
     /// Debugging aids for bisecting miscompiles: compile at most this many
@@ -153,8 +154,8 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_empty_prop: 5 => true,
     rt_const: 3 => true,
     rt_magic: 3 => true,
-    rt_class_const: 5 => true,
-    rt_static_prop_get: 5 => true,
+    rt_class_const: 6 => true,
+    rt_static_prop_get: 6 => true,
     rt_called_class: 2 => true,
     rt_dyn_class: 2 => true,
     rt_class_name_of: 3 => true,
@@ -386,6 +387,7 @@ impl Native {
             sites: vec![],
             msites: vec![],
             psites: vec![],
+            csites: vec![],
             specs: vec![],
             log: std::env::var("PHPX_NATIVE_LOG").is_ok(),
             max: std::env::var("PHPX_NATIVE_MAX").ok().and_then(|v| v.parse().ok()),
@@ -677,9 +679,11 @@ impl Native {
             l.b.seal_all_blocks();
             let msites = std::mem::take(&mut l.msites);
             let psites = std::mem::take(&mut l.psites);
+            let csites = std::mem::take(&mut l.csites);
             l.b.finalize(cfg);
             self.msites.extend(msites);
             self.psites.extend(psites);
+            self.csites.extend(csites);
         }
         self.module.define_function(id, &mut ctx).map_err(|e| {
             if self.log {
