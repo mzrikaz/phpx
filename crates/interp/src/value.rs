@@ -1374,10 +1374,20 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
                 out.s("}\n");
                 return;
             }
-            let mut props: Vec<(Rc<str>, bool, Value)> =
-                o.props.borrow().iter().map(|(k, v)| (k.clone(), is_shared_ref(v), v.deref())).collect();
-            props.extend(o.view_props().into_iter().map(|(k, v)| (k, false, v)));
-            out.s(&format!("object({})#{} ({}) {{\n", o.class.name, o.id, props.len()));
+            // Empty slots of typed properties show as uninitialized(T) but
+            // don't count.
+            let mut props: Vec<(Rc<str>, bool, Option<Value>)> = o
+                .props
+                .borrow()
+                .slots()
+                .filter_map(|(k, v)| match v {
+                    Some(v) => Some((k.clone(), is_shared_ref(v), Some(v.deref()))),
+                    None => o.class.find_prop(k).filter(|d| d.ty.is_some()).map(|_| (k.clone(), false, None)),
+                })
+                .collect();
+            props.extend(o.view_props().into_iter().map(|(k, v)| (k, false, Some(v))));
+            let count = props.iter().filter(|p| p.2.is_some()).count();
+            out.s(&format!("object({})#{} ({}) {{\n", o.class.name, o.id, count));
             seen.push(ptr);
             for (name, amp, v) in props.iter() {
                 out.pad(indent + 2);
@@ -1387,7 +1397,14 @@ fn var_dump_item(v: &Value, amp: bool, indent: usize, out: &mut Out, seen: &mut 
                     crate::class::Vis::Protected => out.s(&format!("[\"{n}\":protected]=>\n")),
                     crate::class::Vis::Private => out.s(&format!("[\"{n}\":\"{decl}\":private]=>\n")),
                 }
-                var_dump_item(v, *amp, indent + 2, out, seen, dbg);
+                match v {
+                    Some(v) => var_dump_item(v, *amp, indent + 2, out, seen, dbg),
+                    None => {
+                        let ty = o.class.find_prop(name).and_then(|d| d.ty).map(crate::call::type_str).unwrap_or_default();
+                        out.pad(indent + 2);
+                        out.s(&format!("uninitialized({ty})\n"));
+                    }
+                }
             }
             seen.pop();
             out.pad(indent);

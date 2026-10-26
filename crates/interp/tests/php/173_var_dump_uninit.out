@@ -1,0 +1,32 @@
+object(T)#1 (0) {
+  ["a"]=>
+  uninitialized(int)
+  ["b"]=>
+  uninitialized(?string)
+  ["c":protected]=>
+  uninitialized(array)
+  ["d":"T":private]=>
+  uninitialized(string|int)
+}
+object(T)#1 (1) {
+  ["a"]=>
+  int(5)
+  ["b"]=>
+  uninitialized(?string)
+  ["c":protected]=>
+  uninitialized(array)
+  ["d":"T":private]=>
+  uninitialized(string|int)
+}
+object(U)#2 (0) {
+  ["a"]=>
+  uninitialized(int)
+  ["b"]=>
+  uninitialized(?string)
+  ["c":protected]=>
+  uninitialized(array)
+  ["d":"T":private]=>
+  uninitialized(string|int)
+  ["f"]=>
+  uninitialized(float)
+}

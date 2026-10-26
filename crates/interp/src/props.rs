@@ -410,6 +410,20 @@ impl Props {
             .filter_map(move |(k, v)| v.as_ref().filter(|_| !hidden || !k.starts_with(HIDDEN_PREFIX)).map(|v| (k, v)))
     }
 
+    /// Every slot in order, empty declared ones included (var_dump shows
+    /// typed ones as `uninitialized(T)`); hidden ones left out.
+    pub fn slots(&self) -> impl Iterator<Item = (&Rc<str>, Option<&Value>)> + '_ {
+        let hidden = self.shape.hidden;
+        let declared = self.shape.declared;
+        self.shape
+            .names
+            .iter()
+            .zip(self.vals.iter())
+            .enumerate()
+            .filter(move |(i, (k, v))| (v.is_some() || *i < declared) && (!hidden || !k.starts_with(HIDDEN_PREFIX)))
+            .map(|(_, (k, v))| (k, v.as_ref()))
+    }
+
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&Rc<str>, &mut Value)> + '_ {
         let hidden = self.shape.hidden;
         self.shape
