@@ -541,6 +541,27 @@ impl Interp {
     }
 
     fn load_prelude(&self) {
+        // Declared once per thread: later interpreters start from what
+        // that left (its classes reset per request like any reused class).
+        if let Some(()) = PRELUDE_STATE.with(|p| {
+            let p = p.borrow();
+            let st = p.as_ref()?;
+            *self.classes.borrow_mut() = st.classes.clone();
+            *self.functions.borrow_mut() = st.functions.clone();
+            *self.decl_ctx.borrow_mut() = st.decl_ctx.clone();
+            *self.declared.borrow_mut() = st.declared.clone();
+            let mut consts = self.constants.borrow_mut();
+            for (k, v) in &st.consts {
+                consts.insert(k.clone(), v.clone());
+            }
+            if st.shadows_builtin {
+                crate::value::builtin_shadowed().store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            crate::call::use_classes(st.classes.values().cloned());
+            Some(())
+        }) {
+            return;
+        }
         // Parsed once per thread (each request's interpreter declares it).
         let (src, file) = PRELUDE.with(|p| *p.get_or_init(|| {
             let (src, file) = prelude_source();
@@ -554,7 +575,30 @@ impl Interp {
         if self.run_stmts_top(&mut frame, &file.stmts, id).is_err() {
             panic!("prelude failed to load");
         }
+        let st = PreludeState {
+            classes: self.classes.borrow().clone(),
+            functions: self.functions.borrow().clone(),
+            decl_ctx: self.decl_ctx.borrow().clone(),
+            declared: self.declared.borrow().clone(),
+            consts: self.constants.borrow().defined(),
+            shadows_builtin: crate::value::builtin_shadowed().load(std::sync::atomic::Ordering::Relaxed),
+        };
+        PRELUDE_STATE.with(|p| *p.borrow_mut() = Some(st));
     }
+}
+
+/// What declaring the prelude leaves in an interpreter.
+struct PreludeState {
+    classes: FxHashMap<Rc<str>, Rc<Class>>,
+    functions: FxHashMap<Rc<str>, Rc<UserFn>>,
+    decl_ctx: FxHashMap<usize, Rc<NsCtx>>,
+    declared: HashSet<usize>,
+    consts: Vec<(String, Value)>,
+    shadows_builtin: bool,
+}
+
+thread_local! {
+    static PRELUDE_STATE: RefCell<Option<PreludeState>> = const { RefCell::new(None) };
 }
 
 /// The prelude's source and syntax tree.

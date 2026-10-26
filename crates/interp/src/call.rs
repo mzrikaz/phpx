@@ -79,6 +79,11 @@ impl std::hash::Hash for dyn ResolvedKey + '_ {
     }
 }
 
+/// The prelude's classes are in use by every request (see Interp::load_prelude).
+pub(crate) fn use_classes(classes: impl Iterator<Item = Rc<Class>>) {
+    IN_USE.with(|u| u.borrow_mut().extend(classes));
+}
+
 /// A new request: the classes the last one declared go back to their
 /// state as built (constants unevaluated, static properties unset).
 /// Destructors queued by what they held are dropped, as PHP runs none
@@ -87,7 +92,14 @@ pub(crate) fn reset_classes() {
     let used = IN_USE.with(|u| std::mem::take(&mut *u.borrow_mut()));
     let mut held: Vec<Box<dyn std::any::Any>> = vec![];
     for cls in &used {
-        held.push(Box::new(cls.consts.replace(cls.consts_init.clone())));
+        // (Only a class whose constants were evaluated needs them back.)
+        let evaluated = {
+            let c = cls.consts.borrow();
+            c.len() != cls.consts_init.len() || c.values().any(|s| matches!(s, ConstSlot::Ready(_) | ConstSlot::Evaluating))
+        };
+        if evaluated {
+            held.push(Box::new(cls.consts.replace(cls.consts_init.clone())));
+        }
         for sp in cls.static_props.values() {
             if *sp.declaring == *cls.lname {
                 held.push(Box::new(sp.value.borrow_mut().take()));
