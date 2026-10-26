@@ -1404,7 +1404,13 @@ unsafe fn root_place(it: &Interp, f: &mut Frame, root: *mut Value, name: *const 
         return Ok(crate::expr::Place { root: crate::expr::Root::Static(sp), path });
     }
     match &*root {
-        Value::Object(o) => Ok(place_for(it, f, Some(o.clone()), name_of(name, len), path)),
+        Value::Object(o) => {
+            let p = place_for(it, f, Some(o.clone()), name_of(name, len), path);
+            if let crate::expr::Root::Prop(o, key) = &p.root {
+                it.check_prop_place(f, o, key)?;
+            }
+            Ok(p)
+        }
         other => Err(it.error("Error", &format!("Attempt to assign property \"{}\" on {}", name_of(name, len), other.type_name()))),
     }
 }
@@ -1524,23 +1530,16 @@ pub unsafe extern "C" fn rt_unset_place(c: *mut Cx, root: *mut Value, name: *con
             let pkey = it.prop_key(f, o, name_of(name, len));
             let pname = &*pkey;
             if path.is_empty() {
-                if o.props.borrow().contains_key(pname) {
-                    if o.class.find_prop(pname).is_some_and(|d| d.readonly) {
-                        return Err(it.error("Error", &format!("Cannot unset readonly property {}::${pname}", o.class.name)));
-                    }
-                    o.props.borrow_mut().shift_remove(pname);
-                } else if it.prop_visible(f, o, pname) && it.prop_uninit(o, pname) {
-                    o.props.borrow_mut().mark_unset(pname);
-                } else if it.has_magic(o, crate::expr::MAGIC_UNSET, pname) {
-                    it.call_magic(o, crate::expr::MAGIC_UNSET, pname, None)?;
-                }
-                return Ok(());
+                return it.unset_prop(f, o, pname);
             }
+            it.check_prop_place(f, o, pname)?;
             // unset($obj->p[k]): edit the property's array in place.
-            let mut cur = o.props.borrow_mut().get_mut(pname).map(std::mem::take).unwrap_or_default();
-            remove_path(it, &mut cur, &path)?;
+            let Some(mut cur) = o.props.borrow_mut().get_mut(pname).map(std::mem::take) else {
+                return it.unset_dim_creates(f, o, pname);
+            };
+            let r = remove_path(it, &mut cur, &path);
             o.props.borrow_mut().insert(Rc::from(pname), cur);
-            return Ok(());
+            return r;
         }
         let mut cur = take(root);
         let r = remove_path(it, &mut cur, &path);

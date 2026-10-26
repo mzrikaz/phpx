@@ -1,0 +1,55 @@
+0 0 Cannot access private property B::$secret
+0 1 Cannot access private property B::$secret
+0 2 Cannot access private property B::$secret
+0 3 Cannot access private property B::$secret
+0 4 Cannot access protected property B::$prot
+0 5 Cannot access protected property B::$prot
+0 6 Cannot access private property B::$secret
+0 7 Cannot access private property B::$secret
+0 8 Cannot access protected property B::$prot
+0 9 Cannot access private property B::$secret
+0 10 Cannot access private property B::$secret
+0 11 Cannot access private property B::$secret
+0 12 Cannot access private property B::$secret
+0 13 Cannot access private property B::$secret
+0 14 Cannot access private property B::$secret
+0 15 ok
+0 16 Cannot access private property B::$secret
+0 17 Cannot access protected property B::$prot
+object(B)#1 (3) {
+  ["secret":"B":private]=>
+  array(0) {
+  }
+  ["prot":protected]=>
+  array(0) {
+  }
+  ["pub"]=>
+  array(1) {
+    ["r"]=>
+    NULL
+  }
+}
+__get items
+__get items
+__get items
+M Object
+(
+    [data:M:private] => Array
+        (
+            [items] => Array
+                (
+                    [0] => 0
+                    [1] => 1
+                    [2] => 2
+                )
+
+        )
+
+)
+__unset s
+__unset s
+object(stdClass)#22 (1) {
+  ["a"]=>
+  NULL
+}
+end

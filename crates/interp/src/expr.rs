@@ -1186,6 +1186,7 @@ impl Interp {
                 match obj {
                     Value::Object(o) => {
                         let name = self.prop_key_rc(f, &o, name);
+                        self.check_prop_place(f, &o, &name)?;
                         Ok(Place { root: Root::Prop(o, name), path: vec![] })
                     }
                     other => Err(self.error("Error", &format!("Attempt to assign property \"{name}\" on {}", other.type_name()))),
@@ -1249,6 +1250,15 @@ impl Interp {
         Ok(Some(cur))
     }
 
+    /// A write, reference or unset() of an inaccessible property (no
+    /// magic to take it) is an error.
+    pub(crate) fn check_prop_place(&self, f: &Frame, o: &Rc<Obj>, key: &str) -> R<()> {
+        if !self.prop_visible(f, o, key) && !self.has_magic(o, MAGIC_GET, key) && !self.has_magic(o, MAGIC_SET, key) {
+            return Err(self.error("Error", &format!("Cannot access {} property {}::${key}", vis_word(o, key), o.class.name)));
+        }
+        Ok(())
+    }
+
     pub fn place_set(&self, f: &mut Frame, p: &Place, v: Value) -> R<()> {
         if p.path.is_empty() {
             match &p.root {
@@ -1270,18 +1280,29 @@ impl Interp {
             Root::Prop(o, name) => {
                 let decl_ro = o.class.find_prop(name).is_some_and(|d| d.readonly) || o.class.is_enum();
                 let present = o.props.borrow().contains_key(&**name);
-                if !present && !self.prop_uninit(o, name) && self.has_magic(o, MAGIC_GET, name) {
-                    // Indirect modification through __get works only for objects.
-                    match self.get_prop(f, o, name)? {
+                let visible = self.prop_visible(f, o, name);
+                if (!visible || (!present && !self.prop_uninit(o, name))) && self.has_magic(o, MAGIC_GET, name) {
+                    // Indirect modification through __get: into the
+                    // reference `&__get` returns, or an object's elements.
+                    let prev = self.want_ref.replace(Some(crate::interp::WANT_REF_ANY));
+                    let got = self.call_magic(o, MAGIC_GET, name, None);
+                    self.want_ref.set(prev);
+                    match got? {
+                        Value::Ref(cell) => {
+                            let mut cur = std::mem::take(&mut *cell.borrow_mut());
+                            let r = self.write_path(&mut cur, &p.path, v);
+                            *cell.borrow_mut() = cur;
+                            r?
+                        }
                         Value::Object(inner) => Some(Pending { obj: inner, path: p.path.clone(), value: v }),
                         _ => {
-                            self.warn(&format!("Indirect modification of overloaded property {}::${name} has no effect", o.class.name));
+                            self.notice(&format!("Indirect modification of overloaded property {}::${name} has no effect", o.class.name));
                             None
                         }
                     }
                 } else {
-                    if !self.prop_visible(f, o, name) {
-                        return Err(self.error("Error", &format!("Cannot modify {} property {}::${name}", vis_word(o, name), o.class.name)));
+                    if !visible {
+                        return Err(self.error("Error", &format!("Cannot access {} property {}::${name}", vis_word(o, name), o.class.name)));
                     }
                     let mut cur = o.props.borrow_mut().get_mut(&**name).map(std::mem::take).unwrap_or_default();
                     if decl_ro && present && !matches!(cur, Value::Object(_)) {
@@ -1724,6 +1745,8 @@ impl Interp {
                         if let Some(c) = cur.as_mut() {
                             remove(c);
                             o.props.borrow_mut().insert(name.clone(), cur.unwrap());
+                        } else {
+                            self.unset_dim_creates(f, o, name)?;
                         }
                     }
                     Root::Static(sp) => {
@@ -1738,16 +1761,7 @@ impl Interp {
                 let name = self.member_name(f, name)?;
                 if let Value::Object(o) = self.eval(f, object)? {
                     let name = self.prop_key_rc(f, &o, name);
-                    if o.props.borrow().contains_key(&*name) {
-                        if o.class.find_prop(&name).is_some_and(|d| d.readonly) {
-                            return Err(self.error("Error", &format!("Cannot unset readonly property {}::${name}", o.class.name)));
-                        }
-                        o.props.borrow_mut().shift_remove(&*name);
-                    } else if self.prop_visible(f, &o, &name) && self.prop_uninit(&o, &name) {
-                        o.props.borrow_mut().mark_unset(&name);
-                    } else if self.has_magic(&o, MAGIC_UNSET, &name) {
-                        self.call_magic(&o, MAGIC_UNSET, &name, None)?;
-                    }
+                    self.unset_prop(f, &o, &name)?;
                 }
                 Ok(())
             }
@@ -1757,6 +1771,37 @@ impl Interp {
     }
 
     // ---- properties ----------------------------------------------------------
+
+    /// `unset($o->name)`, `name` already mapped with `prop_key`.
+    pub(crate) fn unset_prop(&self, f: &Frame, o: &Rc<Obj>, name: &str) -> R<()> {
+        if !self.prop_visible(f, o, name) {
+            if self.has_magic(o, MAGIC_UNSET, name) {
+                self.call_magic(o, MAGIC_UNSET, name, None)?;
+                return Ok(());
+            }
+            return Err(self.error("Error", &format!("Cannot access {} property {}::${name}", vis_word(o, name), o.class.name)));
+        }
+        if o.props.borrow().contains_key(name) {
+            if o.class.find_prop(name).is_some_and(|d| d.readonly) {
+                return Err(self.error("Error", &format!("Cannot unset readonly property {}::${name}", o.class.name)));
+            }
+            o.props.borrow_mut().shift_remove(name);
+        } else if self.prop_uninit(o, name) {
+            o.props.borrow_mut().mark_unset(name);
+        } else if self.has_magic(o, MAGIC_UNSET, name) {
+            self.call_magic(o, MAGIC_UNSET, name, None)?;
+        }
+        Ok(())
+    }
+
+    /// `unset($o->name[k])` on a missing property: fetching it for the
+    /// unset creates it as null (a dynamic property, with its deprecation).
+    pub(crate) fn unset_dim_creates(&self, f: &Frame, o: &Rc<Obj>, name: &str) -> R<()> {
+        if !o.props.borrow().contains_key(name) && o.class.find_prop(name).is_none() && !self.has_magic(o, MAGIC_GET, name) {
+            self.set_prop(f, o, name, Value::Null)?;
+        }
+        Ok(())
+    }
 
     /// Storage key of `$o->name` seen from the running scope: the plain name,
     /// or the mangled key of an ancestor's private property that a subclass
@@ -1927,7 +1972,7 @@ impl Interp {
                     return Ok(());
                 }
                 if !visible {
-                    return Err(self.error("Error", &format!("Cannot modify {} property {}::${name}", vis_word(o, name), o.class.name)));
+                    return Err(self.error("Error", &format!("Cannot access {} property {}::${name}", vis_word(o, name), o.class.name)));
                 }
                 if d.readonly {
                     if o.props.borrow().contains_key(name) {
