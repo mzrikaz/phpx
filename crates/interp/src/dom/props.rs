@@ -258,7 +258,7 @@ fn set(it: &Interp, this: This, _: &Rc<Class>, a: Args) -> R<Value> {
     let (doc, id) = this_node(it, this)?;
     let name = text(it, &a, 0)?;
     let val = a.get(1).cloned().unwrap_or_default();
-    let sval = || -> R<String> { Ok(String::from_utf8_lossy(&it.to_str(&val)?).into_owned()) };
+    let sval = || -> R<String> { Ok(crate::pstr::lossy(&it.to_str(&val)?).into_owned()) };
     let o = this.unwrap();
     let mut d = doc.borrow_mut();
     let k = d.n(id).kind;

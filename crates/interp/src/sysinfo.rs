@@ -12,7 +12,7 @@ use crate::interp::{BuiltinFn, Interp, R};
 use crate::value::{Key, PhpArray, Value};
 
 fn text(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 fn cstr(s: &str) -> CString {
@@ -84,7 +84,7 @@ fn read_name(msg: &[u8], mut i: usize) -> Option<(String, usize)> {
             i = ptr;
             continue;
         }
-        labels.push(String::from_utf8_lossy(msg.get(i + 1..i + 1 + len)?).into_owned());
+        labels.push(crate::pstr::lossy(msg.get(i + 1..i + 1 + len)?).into_owned());
         i += 1 + len;
     }
     Some((labels.join("."), end.unwrap_or(i)))

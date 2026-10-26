@@ -293,7 +293,7 @@ fn class_arg(it: &Interp, v: &Value) -> R<Option<Rc<Class>>> {
         Value::Object(o) => Ok(Some(o.class.clone())),
         other => {
             let n = it.to_str(other)?;
-            let n = String::from_utf8_lossy(&n).into_owned();
+            let n = crate::pstr::lossy(&n).into_owned();
             it.find_class(n.trim_start_matches('\\'))
         }
     }
@@ -716,7 +716,7 @@ fn eval_in(it: &Interp, ctx: &Rc<NsCtx>, class: Option<&str>, e: &'static ast::E
 }
 
 fn str_arg(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&it.to_str(&arg(a, i))?).into_owned())
+    Ok(crate::pstr::lossy(&it.to_str(&arg(a, i))?).into_owned())
 }
 
 /// A frame whose scope is class `c` (visibility as seen from inside it).
@@ -861,7 +861,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                     continue;
                 }
                 let name = it.to_str(&field("name"))?;
-                let name = String::from_utf8_lossy(&name).into_owned();
+                let name = crate::pstr::lossy(&name).into_owned();
                 let v = if has_default { prop_default_value(it, &c, &name)? } else { Value::Null };
                 out.insert(Key::Str(pstr(&name)), v);
             }
@@ -878,7 +878,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(match &v {
             Value::Int(id) => {
                 let name = has(a, 1).then(|| arg(a, 1)).map(|n| it.to_str(&n)).transpose()?;
-                let name = name.map(|n| String::from_utf8_lossy(&n).into_owned()).unwrap_or_default();
+                let name = name.map(|n| crate::pstr::lossy(&n).into_owned()).unwrap_or_default();
                 src_desc(it, *id, &name)
             }
             Value::Object(o) => match &*o.internal() {
@@ -886,7 +886,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                 _ => Value::Null,
             },
             other => {
-                let n = String::from_utf8_lossy(&it.to_str(other)?).into_owned();
+                let n = crate::pstr::lossy(&it.to_str(other)?).into_owned();
                 match it.find_function(&f.ctx, &format!("\\{}", n.trim_start_matches('\\'))) {
                     Some(c) => closure_desc(it, &c, None),
                     None => Value::Null,
@@ -988,7 +988,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             for (k, v) in args.iter() {
                 match k {
                     Key::Int(_) => pos.push(v.clone()),
-                    Key::Str(s) => named.push((Rc::from(&*String::from_utf8_lossy(&s)), v.clone())),
+                    Key::Str(s) => named.push((Rc::from(&*crate::pstr::lossy(&s)), v.clone())),
                 }
             }
         }

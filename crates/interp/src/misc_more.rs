@@ -10,7 +10,7 @@ use crate::interp::{BuiltinFn, Frame, Interp, R};
 use crate::value::{Key, PhpArray, Value};
 
 fn text(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 fn key(k: &str) -> Key {
@@ -394,7 +394,7 @@ pub fn highlight(it: &Interp, src: &[u8]) -> String {
     let mut out = format!("<pre><code style=\"color: {html}\">");
     let mut last = 0u8;
     for t in crate::tokenizer::tokenize(src) {
-        let txt = String::from_utf8_lossy(&src[t.start..t.end]);
+        let txt = crate::pstr::lossy(&src[t.start..t.end]);
         let role = match t.id {
             267 => 0,
             392 | 393 => 1,
@@ -540,13 +540,13 @@ fn zval_dump(it: &Interp, out: &mut String, v: &Value, indent: usize) {
         Value::Bool(b) => out.push_str(&format!("{pad}bool({b})\n")),
         Value::Int(n) => out.push_str(&format!("{pad}int({n})\n")),
         Value::Float(f) => out.push_str(&format!("{pad}float({})\n", it.to_string_lossy(&Value::Float(f)).unwrap_or_default())),
-        Value::Str(s) => out.push_str(&format!("{pad}string({}) \"{}\" refcount(1)\n", s.len(), String::from_utf8_lossy(&s))),
+        Value::Str(s) => out.push_str(&format!("{pad}string({}) \"{}\" refcount(1)\n", s.len(), crate::pstr::lossy(&s))),
         Value::Array(a) => {
             out.push_str(&format!("{pad}array({}) {}refcount(2){{\n", a.len(), if a.is_list() { "packed " } else { "" }));
             for (k, x) in a.iter() {
                 match k {
                     Key::Int(n) => out.push_str(&format!("{pad}  [{n}]=>\n")),
-                    Key::Str(s) => out.push_str(&format!("{pad}  [\"{}\"]=>\n", String::from_utf8_lossy(&s))),
+                    Key::Str(s) => out.push_str(&format!("{pad}  [\"{}\"]=>\n", crate::pstr::lossy(&s))),
                 }
                 zval_dump(it, out, &x, indent + 2);
             }
@@ -625,7 +625,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("get_meta_tags", |it, _, a| {
         let path = text(it, a, 0)?;
         let Some(src) = read_source(it, &path, "get_meta_tags") else { return Ok(Value::Bool(false)) };
-        Ok(Value::array(meta_tags(&String::from_utf8_lossy(&src))))
+        Ok(Value::array(meta_tags(&crate::pstr::lossy(&src))))
     });
     t.insert("fscanf", |it, f, a| {
         let line = (it.builtins["fgets"])(it, f, &mut [a[0].clone()])?;

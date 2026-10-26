@@ -1381,7 +1381,7 @@ fn cmp_num(a: Num, b: Num) -> Option<Ordering> {
 // ---- dumping -------------------------------------------------------------------
 
 fn bytes_lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
-    String::from_utf8_lossy(b)
+    crate::pstr::lossy(b)
 }
 
 /// Raw output bytes. Dumps build `Vec<u8>` so non-UTF-8 strings survive.

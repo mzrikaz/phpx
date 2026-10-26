@@ -83,7 +83,7 @@ fn run(it: &Interp, cmd: &str, mut each: impl FnMut(&[u8])) -> R<Option<i64>> {
 }
 
 fn text(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 fn check_cmd(it: &Interp, fname: &str, cmd: &str) -> R<()> {
@@ -132,12 +132,12 @@ enum Spec {
 fn spec(it: &Interp, v: &Value, fd: usize) -> R<Spec> {
     match v {
         Value::Array(a) => {
-            let kind = a.get(&Key::Int(0)).map(|k| it.to_str(&k)).transpose()?.map(|k| String::from_utf8_lossy(&k).into_owned()).unwrap_or_default();
-            let s1 = a.get(&Key::Int(1)).map(|k| it.to_str(&k)).transpose()?.map(|k| String::from_utf8_lossy(&k).into_owned()).unwrap_or_default();
+            let kind = a.get(&Key::Int(0)).map(|k| it.to_str(&k)).transpose()?.map(|k| crate::pstr::lossy(&k).into_owned()).unwrap_or_default();
+            let s1 = a.get(&Key::Int(1)).map(|k| it.to_str(&k)).transpose()?.map(|k| crate::pstr::lossy(&k).into_owned()).unwrap_or_default();
             match kind.as_str() {
                 "pipe" => Ok(Spec::Pipe(if s1.starts_with('r') { "w" } else { "r" })),
                 "file" => {
-                    let mode = a.get(&Key::Int(2)).map(|k| it.to_str(&k)).transpose()?.map(|k| String::from_utf8_lossy(&k).into_owned()).unwrap_or_else(|| "r".into());
+                    let mode = a.get(&Key::Int(2)).map(|k| it.to_str(&k)).transpose()?.map(|k| crate::pstr::lossy(&k).into_owned()).unwrap_or_else(|| "r".into());
                     let mut o = std::fs::OpenOptions::new();
                     match mode.chars().next().unwrap_or('r') {
                         'w' => o.write(true).create(true).truncate(true),
@@ -182,7 +182,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("proc_open", |it, _, a| {
         let (mut c, command) = match arg(a, 0) {
             Value::Array(parts) => {
-                let parts: Vec<String> = parts.values().map(|v| it.to_str(&v).map(|s| String::from_utf8_lossy(&s).into_owned())).collect::<R<_>>()?;
+                let parts: Vec<String> = parts.values().map(|v| it.to_str(&v).map(|s| crate::pstr::lossy(&s).into_owned())).collect::<R<_>>()?;
                 if parts.is_empty() {
                     return Err(it.error("ValueError", "proc_open(): Argument #1 ($command) must have at least one element"));
                 }
@@ -191,7 +191,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                 (c, parts.join(" "))
             }
             v => {
-                let cmd = String::from_utf8_lossy(&it.to_str(&v)?).into_owned();
+                let cmd = crate::pstr::lossy(&it.to_str(&v)?).into_owned();
                 check_cmd(it, "proc_open", &cmd)?;
                 (shell(&cmd), cmd)
             }
@@ -228,10 +228,10 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         if let Value::Array(env) = arg(a, 4) {
             c.env_clear();
             for (k, v) in env.iter() {
-                let val = String::from_utf8_lossy(&it.to_str(&v)?).into_owned();
+                let val = crate::pstr::lossy(&it.to_str(&v)?).into_owned();
                 match k {
                     Key::Str(s) => {
-                        c.env(String::from_utf8_lossy(&s).into_owned(), val);
+                        c.env(crate::pstr::lossy(&s).into_owned(), val);
                     }
                     // A list entry is a whole "NAME=value" (Symfony Process
                     // passes its environment like this).

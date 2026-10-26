@@ -295,7 +295,7 @@ fn convert(it: &Interp, st: &mut State, r: Reply, p: &Pending) -> R<Value> {
         (Out::Str, Reply::Bulk(Some(b))) => Value::bytes(b),
         (Out::Str, Reply::Bulk(None)) => Value::Bool(false),
         (Out::Str, Reply::Status(s)) => Value::str(&s),
-        (Out::Float, Reply::Bulk(Some(b))) => Value::Float(String::from_utf8_lossy(&b).parse().unwrap_or(0.0)),
+        (Out::Float, Reply::Bulk(Some(b))) => Value::Float(crate::pstr::lossy(&b).parse().unwrap_or(0.0)),
         (Out::Float, Reply::Bulk(None)) => Value::Bool(false),
         (Out::Float, Reply::Int(n)) => Value::Float(n as f64),
         (Out::Vals, Reply::Array(items)) | (Out::Strs, Reply::Array(items)) => {
@@ -322,7 +322,7 @@ fn convert(it: &Interp, st: &mut State, r: Reply, p: &Pending) -> R<Value> {
                     _ => continue,
                 };
                 let v = match (p.out, v) {
-                    (Out::Scores, Reply::Bulk(Some(b))) => Value::Float(String::from_utf8_lossy(&b).parse().unwrap_or(0.0)),
+                    (Out::Scores, Reply::Bulk(Some(b))) => Value::Float(crate::pstr::lossy(&b).parse().unwrap_or(0.0)),
                     (Out::Map, Reply::Bulk(b)) => val(b)?,
                     (_, other) => raw(it, st, other)?,
                 };
@@ -354,7 +354,7 @@ fn convert(it: &Interp, st: &mut State, r: Reply, p: &Pending) -> R<Value> {
         (Out::Ping, Reply::Bulk(Some(b))) => Value::bytes(b),
         (Out::Info, Reply::Bulk(Some(b))) => {
             let mut arr = PhpArray::new();
-            for line in String::from_utf8_lossy(&b).lines() {
+            for line in crate::pstr::lossy(&b).lines() {
                 if line.starts_with('#') || line.is_empty() {
                     continue;
                 }
@@ -486,7 +486,7 @@ fn float_arg(it: &Interp, a: &[Value], i: usize) -> R<f64> {
 // ---- connection ---------------------------------------------------------------------
 
 fn connect(it: &Interp, this: Option<&Rc<Obj>>, a: Vec<Value>, persistent: bool) -> R<Value> {
-    let host = String::from_utf8_lossy(&it.to_str(&arg(&a, 0))?).into_owned();
+    let host = crate::pstr::lossy(&it.to_str(&arg(&a, 0))?).into_owned();
     let unix = host.starts_with('/') || host.starts_with("unix://");
     let port = match a.get(1) {
         Some(v) if !v.is_null() && !unix => it.to_int(v)?,
@@ -844,7 +844,7 @@ fn raw_command(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>
 /// false]. The prelude's scan()/hScan()/sScan()/zScan() keep the
 /// by-reference iterator.
 fn scan(it: &Interp, this: Option<&Rc<Obj>>, a: Vec<Value>) -> R<Value> {
-    let cmdname = String::from_utf8_lossy(&it.to_str(&arg(&a, 0))?).into_owned();
+    let cmdname = crate::pstr::lossy(&it.to_str(&arg(&a, 0))?).into_owned();
     let keyed = cmdname != "SCAN";
     let key = keyed.then(|| arg(&a, 1));
     let cur = arg(&a, 2);
@@ -893,7 +893,7 @@ fn scan(it: &Interp, this: Option<&Rc<Obj>>, a: Vec<Value>) -> R<Value> {
         };
         let v = state(it, this, |st| convert(it, st, items, &pending(out)))??;
         let done = cursor == b"0";
-        let c = match String::from_utf8_lossy(&cursor).parse::<i64>() {
+        let c = match crate::pstr::lossy(&cursor).parse::<i64>() {
             Ok(n) => Value::Int(n),
             Err(_) => Value::bytes(cursor.clone()),
         };
@@ -1025,7 +1025,7 @@ fn subscribe(it: &Interp, this: Option<&Rc<Obj>>, a: Vec<Value>, pattern: bool) 
                 it.call_callable(&callable, vec![me.clone(), Value::bytes(strs[1].clone()), Value::bytes(strs[2].clone()), Value::bytes(strs[3].clone())], vec![])?;
             }
             Some(b"unsubscribe") | Some(b"punsubscribe") => {
-                active = strs.get(2).and_then(|n| String::from_utf8_lossy(n).parse().ok()).unwrap_or(0);
+                active = strs.get(2).and_then(|n| crate::pstr::lossy(n).parse().ok()).unwrap_or(0);
             }
             _ => {}
         }

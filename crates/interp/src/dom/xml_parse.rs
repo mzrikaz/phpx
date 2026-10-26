@@ -583,7 +583,7 @@ impl<S: Sink> P<'_, S> {
 /// The input as UTF-8 per its BOM or declared encoding.
 fn decode(input: &[u8]) -> String {
     if let Some(rest) = input.strip_prefix(b"\xEF\xBB\xBF") {
-        return String::from_utf8_lossy(rest).into_owned();
+        return crate::pstr::lossy(rest).into_owned();
     }
     if input.starts_with(b"\xFF\xFE") || input.starts_with(b"\xFE\xFF") {
         let le = input[0] == 0xFF;
@@ -593,7 +593,7 @@ fn decode(input: &[u8]) -> String {
     let head = &input[..input.len().min(200)];
     if head.starts_with(b"<?xml") {
         let decl_end = memchr::memmem::find(head, b"?>").unwrap_or(head.len());
-        let decl = String::from_utf8_lossy(&head[..decl_end]).to_ascii_lowercase();
+        let decl = crate::pstr::lossy(&head[..decl_end]).to_ascii_lowercase();
         if let Some(p) = decl.find("encoding") {
             let v = decl[p + 8..].trim_start_matches([' ', '=', '"', '\'']);
             let enc: String = v.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
@@ -602,7 +602,7 @@ fn decode(input: &[u8]) -> String {
             }
         }
     }
-    String::from_utf8_lossy(input).into_owned()
+    crate::pstr::lossy(input).into_owned()
 }
 
 /// Parse `input` into `sink`. Returns whether the document was

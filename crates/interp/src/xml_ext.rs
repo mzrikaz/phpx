@@ -217,7 +217,7 @@ fn with<T>(o: &Rc<Obj>, f: impl FnOnce(&mut Parser) -> T) -> T {
 
 fn create(it: &Interp, a: &[Value], ns_sep: Option<String>) -> R<Value> {
     if has(a, 0) && !a[0].is_null() {
-        let enc = String::from_utf8_lossy(&s(it, a, 0)?).to_ascii_uppercase();
+        let enc = crate::pstr::lossy(&s(it, a, 0)?).to_ascii_uppercase();
         if !matches!(enc.as_str(), "ISO-8859-1" | "UTF-8" | "US-ASCII" | "") {
             return Err(it.error("ValueError", &format!("xml_parser_create(): Argument #1 ($encoding) is not a supported source encoding")));
         }
@@ -523,7 +523,7 @@ fn set_handler(it: &Interp, a: &[Value], func: &str, f: fn(&mut Handlers, Option
 pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("xml_parser_create", |it, _, a| create(it, a, None));
     t.insert("xml_parser_create_ns", |it, _, a| {
-        let sep = if has(a, 1) { String::from_utf8_lossy(&s(it, a, 1)?).into_owned() } else { ":".into() };
+        let sep = if has(a, 1) { crate::pstr::lossy(&s(it, a, 1)?).into_owned() } else { ":".into() };
         let sep: String = sep.chars().take(1).collect();
         create(it, a, Some(if sep.is_empty() { ":".into() } else { sep }))
     });
@@ -618,7 +618,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                 with(&po, |p| p.skip_tagstart = n as usize)
             }
             XML_OPTION_TARGET_ENCODING => {
-                let e = String::from_utf8_lossy(&it.to_str(&v)?).to_ascii_uppercase();
+                let e = crate::pstr::lossy(&it.to_str(&v)?).to_ascii_uppercase();
                 if !matches!(e.as_str(), "ISO-8859-1" | "UTF-8" | "US-ASCII") {
                     return Err(it.error("ValueError", "xml_parser_set_option(): Argument #3 ($value) is not a supported target encoding"));
                 }

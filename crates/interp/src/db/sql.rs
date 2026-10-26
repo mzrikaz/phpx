@@ -74,7 +74,7 @@ pub fn scan(sql: &[u8]) -> Vec<Piece> {
                     j += 1;
                 }
                 flush(&mut out, start, i);
-                out.push(Piece::Named(String::from_utf8_lossy(&sql[i..j]).into_owned()));
+                out.push(Piece::Named(crate::pstr::lossy(&sql[i..j]).into_owned()));
                 i = j;
                 start = i;
             }

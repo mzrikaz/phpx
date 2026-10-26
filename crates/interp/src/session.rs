@@ -345,7 +345,7 @@ fn start(it: &Interp, f: &mut Frame, a: &[Value]) -> R<Value> {
     let mut read_and_close = false;
     if let Value::Array(opts) = arg(a, 0) {
         for (k, v) in opts.iter() {
-            let k = String::from_utf8_lossy(&k.to_value().scalar_bytes().unwrap_or_default()).into_owned();
+            let k = crate::pstr::lossy(&k.to_value().scalar_bytes().unwrap_or_default()).into_owned();
             if k == "read_and_close" {
                 read_and_close = v.truthy();
                 continue;
@@ -557,7 +557,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::str(&old))
     });
     t.insert("session_create_id", |it, _, a| {
-        let prefix = if has(a, 0) { String::from_utf8_lossy(&s(it, a, 0)?).into_owned() } else { String::new() };
+        let prefix = if has(a, 0) { crate::pstr::lossy(&s(it, a, 0)?).into_owned() } else { String::new() };
         if !prefix.is_empty() && !valid_id(&prefix) {
             it.warn("session_create_id(): Prefix cannot contain special characters. Only the A-Z, a-z, 0-9, \"-\", and \",\" characters are allowed");
             return Ok(Value::Bool(false));
@@ -708,7 +708,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         match arg(a, 0) {
             Value::Array(o) => {
                 for (k, v) in o.iter() {
-                    let k = String::from_utf8_lossy(&k.to_value().scalar_bytes().unwrap_or_default()).to_ascii_lowercase();
+                    let k = crate::pstr::lossy(&k.to_value().scalar_bytes().unwrap_or_default()).to_ascii_lowercase();
                     match k.as_str() {
                         "lifetime" => p.lifetime = it.to_int(&v)?,
                         "path" => p.path = it.to_string_lossy(&v)?,

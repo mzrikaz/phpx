@@ -513,7 +513,7 @@ fn to_php(it: &Interp, j: J, assoc: bool) -> Value {
             let o = Obj::new(cls, crate::value::Internal::None);
             for (k, v) in items {
                 let v = to_php(it, v, assoc);
-                o.props.borrow_mut().insert(Rc::from(String::from_utf8_lossy(&k).as_ref()), v);
+                o.props.borrow_mut().insert(Rc::from(crate::pstr::lossy(&k).as_ref()), v);
             }
             Value::Object(o)
         }

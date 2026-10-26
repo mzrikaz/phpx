@@ -337,7 +337,7 @@ impl Interp {
     pub fn class_of_value(&self, v: &Value) -> R<Rc<Class>> {
         match v {
             Value::Object(o) => Ok(o.class.clone()),
-            Value::Str(s) => self.lookup_class(&String::from_utf8_lossy(s)),
+            Value::Str(s) => self.lookup_class(&crate::pstr::lossy(s)),
             _ => Err(self.error("Error", "Class name must be a valid object or a string")),
         }
     }
@@ -468,7 +468,7 @@ impl Interp {
                 };
                 for (k, v) in pairs {
                     match k {
-                        Value::Str(s) => named.push((Rc::from(String::from_utf8_lossy(&s).as_ref()), v)),
+                        Value::Str(s) => named.push((Rc::from(crate::pstr::lossy(&s).as_ref()), v)),
                         _ => pos.push(v),
                     }
                 }
@@ -639,7 +639,7 @@ impl Interp {
             None => 0,
         };
         let prefix = match vals.get(2) {
-            Some(v) => String::from_utf8_lossy(&self.to_str(v)?).into_owned(),
+            Some(v) => crate::pstr::lossy(&self.to_str(v)?).into_owned(),
             None => String::new(),
         };
         let valid = |n: &str| {
@@ -649,7 +649,7 @@ impl Interp {
         let mut count = 0;
         for (k, v) in arr.iter() {
             let key = match &k {
-                crate::value::Key::Str(s) => String::from_utf8_lossy(s).into_owned(),
+                crate::value::Key::Str(s) => crate::pstr::lossy(s).into_owned(),
                 crate::value::Key::Int(i) if flags & 0xff == 3 => i.to_string(),
                 _ => continue,
             };
@@ -688,7 +688,7 @@ impl Interp {
     fn eval_code(&self, f: &mut Frame, args: &'static [ast::Arg]) -> R<Value> {
         let Some(a) = args.first() else { return Ok(Value::Null) };
         let v = self.eval(f, &a.value)?;
-        let code = String::from_utf8_lossy(&self.to_str(&v)?).into_owned();
+        let code = crate::pstr::lossy(&self.to_str(&v)?).into_owned();
         let (file, line) = self.here();
         let path = format!("{file}({line}) : eval()'d code");
         // Parsed code is kept (the AST is 'static): reuse it when the same
@@ -727,7 +727,7 @@ impl Interp {
         fn add(it: &Interp, f: &Frame, v: &Value, out: &mut PhpArray) {
             match v {
                 Value::Str(s) => {
-                    let n = String::from_utf8_lossy(s);
+                    let n = crate::pstr::lossy(s);
                     if let Some(slot) = f.vars.get(&*n) {
                         out.insert(Key::Str(s.clone()), slot.borrow().clone());
                     } else if n == "this" {
@@ -837,7 +837,7 @@ impl Interp {
                 if let Some(c) = self.str_callables.borrow().get(&**bytes) {
                     return Ok(c.clone());
                 }
-                let s = String::from_utf8_lossy(bytes).into_owned();
+                let s = crate::pstr::lossy(bytes).into_owned();
                 if let Some((cls, m)) = s.split_once("::") {
                     let class = self.string_class(f, cls)?;
                     return self.method_callable(f, None, &class, m);
@@ -855,7 +855,7 @@ impl Interp {
                 let m: std::borrow::Cow<str> = match &m {
                     Value::Str(s) => match std::str::from_utf8(s) {
                         Ok(s) => std::borrow::Cow::Borrowed(s),
-                        Err(_) => std::borrow::Cow::Owned(String::from_utf8_lossy(s).into_owned()),
+                        Err(_) => std::borrow::Cow::Owned(crate::pstr::lossy(s).into_owned()),
                     },
                     other => std::borrow::Cow::Owned(self.to_string_lossy(other)?),
                 };
@@ -865,7 +865,7 @@ impl Interp {
                         self.method_callable(f, Some(o), &class, &m)
                     }
                     Value::Str(c) => {
-                        let class = self.string_class(f, &String::from_utf8_lossy(&c))?;
+                        let class = self.string_class(f, &crate::pstr::lossy(&c))?;
                         self.method_callable(f, None, &class, &m)
                     }
                     _ => Err(self.error("Error", "Array callback must have exactly two elements")),
@@ -890,7 +890,7 @@ impl Interp {
             Value::Ref(r) => return self.is_callable_value(f, &r.borrow()),
             Value::Object(o) => matches!(&*o.internal(), Internal::Closure(_)) || o.class.find_method("__invoke").is_some(),
             Value::Str(s) => {
-                let s = String::from_utf8_lossy(s).into_owned();
+                let s = crate::pstr::lossy(s).into_owned();
                 match s.split_once("::") {
                     Some((cls, m)) => self.find_class(cls)?.is_some_and(|c| has_method(&c, m, false)),
                     None => self.find_function(&f.ctx, &format!("\\{}", s.trim_start_matches('\\'))).is_some(),
@@ -898,12 +898,12 @@ impl Interp {
             }
             Value::Array(a) if a.len() == 2 => {
                 let m = match a.get(&Key::Int(1)) {
-                    Some(Value::Str(m)) => String::from_utf8_lossy(&m).into_owned(),
+                    Some(Value::Str(m)) => crate::pstr::lossy(&m).into_owned(),
                     _ => return Ok(false),
                 };
                 match a.get(&Key::Int(0)) {
                     Some(Value::Object(o)) => has_method(&o.class, &m, true),
-                    Some(Value::Str(c)) => self.find_class(&String::from_utf8_lossy(&c))?.is_some_and(|c| has_method(&c, &m, false)),
+                    Some(Value::Str(c)) => self.find_class(&crate::pstr::lossy(&c))?.is_some_and(|c| has_method(&c, &m, false)),
                     _ => false,
                 }
             }

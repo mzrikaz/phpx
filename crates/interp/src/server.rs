@@ -237,7 +237,7 @@ fn read_request(stream: &TcpStream) -> std::io::Result<Option<Request>> {
 }
 
 fn percent_decode(s: &str) -> String {
-    String::from_utf8_lossy(&percent_decode_bytes(s)).into_owned()
+    crate::pstr::lossy(&percent_decode_bytes(s)).into_owned()
 }
 
 pub fn percent_decode_bytes(s: &str) -> Vec<u8> {
@@ -382,7 +382,7 @@ fn multipart(body: &[u8], boundary: &str) -> (String, String) {
         }
         let rest_part = rest.strip_prefix(b"\r\n").unwrap_or(rest);
         let Some(he) = memchr::memmem::find(rest_part, b"\r\n\r\n") else { break };
-        let head = String::from_utf8_lossy(&rest_part[..he]).into_owned();
+        let head = crate::pstr::lossy(&rest_part[..he]).into_owned();
         let data_start = &rest_part[he + 4..];
         let end = memchr::memmem::find(data_start, format!("\r\n{delim}").as_bytes()).unwrap_or(data_start.len());
         let data = &data_start[..end];
@@ -566,7 +566,7 @@ fn not_found_page(path: &str) -> Vec<u8> {
 /// Run `script` for the request; returns (status sent, returned false).
 fn run_php(stream: &TcpStream, req: &Request, cfg: &Arc<Config>, script_file: &Path, target: (String, PathBuf, String)) -> (Option<i64>, bool) {
     let src = match std::fs::read(script_file) {
-        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+        Ok(b) => crate::pstr::lossy(&b).into_owned(),
         Err(_) => return (None, false),
     };
     let interp = Rc::new(RefCell::new(Weak::new()));

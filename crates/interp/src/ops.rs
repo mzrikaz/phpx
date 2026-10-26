@@ -32,7 +32,7 @@ impl Interp {
     }
 
     pub fn to_string_lossy(&self, v: &Value) -> R<String> {
-        Ok(String::from_utf8_lossy(&self.to_str(v)?).into_owned())
+        Ok(crate::pstr::lossy(&self.to_str(v)?).into_owned())
     }
 
     pub fn to_key(&self, v: &Value) -> R<Key> {
@@ -333,7 +333,7 @@ impl Interp {
                             for (k, val) in a.iter() {
                                 let name = match k {
                                     Key::Int(n) => n.to_string(),
-                                    Key::Str(s) => String::from_utf8_lossy(&s).into_owned(),
+                                    Key::Str(s) => crate::pstr::lossy(&s).into_owned(),
                                 };
                                 o.set_prop(&name, val.clone());
                             }

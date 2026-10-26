@@ -311,7 +311,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("gmstrftime", |it, _, a| strftime(it, a, true));
     t.insert("date_parse_from_format", |it, _, a| parse_from_format(it, a));
     t.insert("timezone_name_from_abbr", |it, _, a| {
-        let abbr = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let abbr = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         let off = if has(a, 1) { it.to_int(&a[1])? } else { -1 };
         let dst = if has(a, 2) { it.to_int(&a[2])? } else { -1 };
         Ok(name_from_abbr(&abbr, off, dst).map(Value::str).unwrap_or(Value::Bool(false)))

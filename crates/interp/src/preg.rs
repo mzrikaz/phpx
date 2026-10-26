@@ -147,7 +147,7 @@ fn compile(it: &Interp, fname: &str, pat: &[u8]) -> R<Option<Rc<Compiled>>> {
     if anchored {
         src.extend_from_slice(if extended { b"\n)" } else { b")" });
     }
-    let text = String::from_utf8_lossy(&src);
+    let text = crate::pstr::lossy(&src);
     let re = match b.build(&text) {
         Ok(r) => r,
         Err(e) => {

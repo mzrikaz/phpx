@@ -235,7 +235,7 @@ impl Hash for PStr {
 
 impl fmt::Debug for PStr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", String::from_utf8_lossy(self))
+        write!(f, "{:?}", crate::pstr::lossy(self))
     }
 }
 
@@ -275,5 +275,15 @@ mod tests {
         assert_eq!(a.len(), 104);
         a.bytes_mut()[0] = b'Z';
         assert_eq!(a[0], b'Z');
+    }
+}
+
+/// `String::from_utf8_lossy` with a fast check first: valid UTF-8 (nearly
+/// every string) is validated word at a time instead of chunk by chunk.
+#[inline]
+pub fn lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
+    match std::str::from_utf8(b) {
+        Ok(s) => std::borrow::Cow::Borrowed(s),
+        Err(_) => String::from_utf8_lossy(b),
     }
 }

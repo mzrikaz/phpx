@@ -141,7 +141,7 @@ pub fn finish() {
         let mut names = Vec::with_capacity(n);
         for _ in 0..n {
             let len = data[i] as usize;
-            names.push(String::from_utf8_lossy(&data[i + 1..i + 1 + len]).into_owned());
+            names.push(crate::pstr::lossy(&data[i + 1..i + 1 + len]).into_owned());
             i += 1 + len;
         }
         total += 1;

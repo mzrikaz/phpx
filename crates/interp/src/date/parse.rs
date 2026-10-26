@@ -176,7 +176,7 @@ impl<'a> P<'a> {
         while j < self.s.len() && (self.s[j].is_ascii_alphabetic() || self.s[j] >= 0x80) {
             j += 1;
         }
-        (String::from_utf8_lossy(&self.s[i..j]).to_ascii_lowercase(), j)
+        (crate::pstr::lossy(&self.s[i..j]).to_ascii_lowercase(), j)
     }
 
     fn set_date(&mut self, y: Option<i64>, m: i64, d: i64, at: usize) -> Res<()> {

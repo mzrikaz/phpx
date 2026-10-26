@@ -10,7 +10,7 @@ use crate::interp::{BuiltinFn, Interp, R};
 use crate::value::{pstr, Key, PhpArray, Value};
 
 fn bstr(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 // ---- headers -----------------------------------------------------------------------
@@ -60,7 +60,7 @@ fn cookie_header(it: &Interp, a: &[Value], raw: bool) -> R<String> {
     let name = bstr(it, a, 0)?;
     let value = if has(a, 1) { s(it, a, 1)?.to_vec() } else { vec![] };
     let enc = if raw {
-        String::from_utf8_lossy(&value).into_owned()
+        crate::pstr::lossy(&value).into_owned()
     } else {
         value.iter().map(|&c| if c.is_ascii_alphanumeric() || b"-_.~".contains(&c) { (c as char).to_string() } else { format!("%{c:02X}") }).collect()
     };
@@ -70,7 +70,7 @@ fn cookie_header(it: &Interp, a: &[Value], raw: bool) -> R<String> {
         Value::Array(o) => {
             for (k, v) in o.iter() {
                 let k = match k {
-                    Key::Str(s) => String::from_utf8_lossy(&s).to_ascii_lowercase(),
+                    Key::Str(s) => crate::pstr::lossy(&s).to_ascii_lowercase(),
                     Key::Int(_) => continue,
                 };
                 match k.as_str() {
@@ -160,7 +160,7 @@ fn decode_entities(st: &[u8], flags: i64) -> Vec<u8> {
             if let Some(end) = st[i + 1..].iter().take(32).position(|&c| c == b';') {
                 let name = &st[i + 1..i + 1 + end];
                 let cp: Option<u32> = if let Some(num) = name.strip_prefix(b"#") {
-                    let txt = String::from_utf8_lossy(num);
+                    let txt = crate::pstr::lossy(num);
                     let v = if let Some(h) = txt.strip_prefix('x').or_else(|| txt.strip_prefix('X')) {
                         u32::from_str_radix(h, 16).ok()
                     } else {
@@ -197,7 +197,7 @@ fn decode_entities(st: &[u8], flags: i64) -> Vec<u8> {
 }
 
 fn encode_entities(st: &[u8], flags: i64, double: bool) -> Vec<u8> {
-    let text = String::from_utf8_lossy(st);
+    let text = crate::pstr::lossy(st);
     let mut out = String::with_capacity(st.len());
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
@@ -430,13 +430,13 @@ fn valid_url(u: &str, flags: i64) -> bool {
     let Some(parts) = crate::ext::parse_url(u) else { return false };
     let get = |k: &str| parts.iter().find(|(n, _)| *n == k).map(|(_, v)| v.clone());
     let Some(Value::Str(scheme)) = get("scheme") else { return false };
-    let scheme = String::from_utf8_lossy(&scheme).to_ascii_lowercase();
+    let scheme = crate::pstr::lossy(&scheme).to_ascii_lowercase();
     let host = get("host");
     if host.is_none() && !matches!(scheme.as_str(), "mailto" | "news" | "file") {
         return false;
     }
     if let Some(Value::Str(h)) = &host {
-        let h = String::from_utf8_lossy(h);
+        let h = crate::pstr::lossy(h);
         if !(h.starts_with('[') || h.split('.').all(|l| !l.is_empty() && l.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'))) {
             return false;
         }
@@ -759,7 +759,7 @@ fn sscanf(input: &[u8], fmt: &[u8]) -> Option<Vec<Value>> {
         let v = match conv {
             b'd' | b'i' | b'u' => {
                 let t = take(&mut i, &|c, k| c.is_ascii_digit() || (k == 0 && (c == b'-' || c == b'+')));
-                match String::from_utf8_lossy(&t).parse::<i64>() {
+                match crate::pstr::lossy(&t).parse::<i64>() {
                     Ok(n) => Value::Int(n),
                     Err(_) => {
                         failed = true;
@@ -769,7 +769,7 @@ fn sscanf(input: &[u8], fmt: &[u8]) -> Option<Vec<Value>> {
             }
             b'x' | b'X' => {
                 let t = take(&mut i, &|c, _| c.is_ascii_hexdigit());
-                match i64::from_str_radix(&String::from_utf8_lossy(&t), 16) {
+                match i64::from_str_radix(&crate::pstr::lossy(&t), 16) {
                     Ok(n) => Value::Int(n),
                     Err(_) => {
                         failed = true;
@@ -779,11 +779,11 @@ fn sscanf(input: &[u8], fmt: &[u8]) -> Option<Vec<Value>> {
             }
             b'o' => {
                 let t = take(&mut i, &|c, _| (b'0'..=b'7').contains(&c));
-                Value::Int(i64::from_str_radix(&String::from_utf8_lossy(&t), 8).unwrap_or(0))
+                Value::Int(i64::from_str_radix(&crate::pstr::lossy(&t), 8).unwrap_or(0))
             }
             b'f' | b'e' | b'g' | b'E' => {
                 let t = take(&mut i, &|c, k| c.is_ascii_digit() || c == b'.' || c == b'e' || c == b'E' || (k == 0 && (c == b'-' || c == b'+')));
-                Value::Float(String::from_utf8_lossy(&t).parse().unwrap_or(0.0))
+                Value::Float(crate::pstr::lossy(&t).parse().unwrap_or(0.0))
             }
             b's' => Value::bytes(take(&mut i, &|c, _| !c.is_ascii_whitespace())),
             b'c' => {

@@ -228,7 +228,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::Int(old))
     });
     let trigger: BuiltinFn = |it, _, a| {
-        let msg = String::from_utf8_lossy(&crate::builtins::s(it, a, 0)?).into_owned();
+        let msg = crate::pstr::lossy(&crate::builtins::s(it, a, 0)?).into_owned();
         let level = if a.len() > 1 { it.to_int(&a[1])? } else { E_USER_NOTICE };
         if !matches!(level, E_USER_ERROR | E_USER_WARNING | E_USER_NOTICE | E_USER_DEPRECATED) {
             return Err(it.error("ValueError", "trigger_error(): Argument #2 ($error_level) must be one of E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, or E_USER_DEPRECATED"));

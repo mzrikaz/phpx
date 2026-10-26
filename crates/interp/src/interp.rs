@@ -756,7 +756,7 @@ impl Interp {
             return Ok(Ok((self.file_id(canon, src), file)));
         }
         let bytes = std::fs::read(read)?;
-        let r = self.parse_file(canon, String::from_utf8_lossy(&bytes).into_owned());
+        let r = self.parse_file(canon, crate::pstr::lossy(&bytes).into_owned());
         if r.is_ok() {
             PARSED.with(|p| {
                 if let Some(e) = p.borrow_mut().get_mut(canon) {
@@ -1090,7 +1090,7 @@ impl Interp {
             _ => {
                 let v = self.eval(f, e)?;
                 let s = self.to_str(&v)?;
-                Ok(self.intern(&String::from_utf8_lossy(&s)))
+                Ok(self.intern(&crate::pstr::lossy(&s)))
             }
         }
     }
@@ -1537,11 +1537,11 @@ impl Interp {
 
     /// Render an uncaught exception like PHP's fatal error message.
     pub fn uncaught_message(&self, o: &Rc<Obj>) -> String {
-        let s = |n: &str| o.get_prop(n).and_then(|v| v.scalar_bytes()).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+        let s = |n: &str| o.get_prop(n).and_then(|v| v.scalar_bytes()).map(|b| crate::pstr::lossy(&b).into_owned()).unwrap_or_default();
         let (file, line) = (s("file"), s("line"));
         // PHP prints the exception's string form (its chain and traces).
         let text = match self.call_method(o, "__toString", vec![]) {
-            Ok(v) => v.scalar_bytes().map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default(),
+            Ok(v) => v.scalar_bytes().map(|b| crate::pstr::lossy(&b).into_owned()).unwrap_or_default(),
             Err(_) => format!("{}: {} in {file}:{line}\nStack trace:\n#0 {{main}}", o.class.name, s("message")),
         };
         format!("PHP Fatal error:  Uncaught {text}\n  thrown in {file} on line {line}")

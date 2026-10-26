@@ -89,7 +89,7 @@ impl Interp {
 fn key_string(k: &Key) -> String {
     match k {
         Key::Int(n) => n.to_string(),
-        Key::Str(s) => String::from_utf8_lossy(s).into_owned(),
+        Key::Str(s) => crate::pstr::lossy(s).into_owned(),
     }
 }
 

@@ -99,7 +99,7 @@ pub fn run_file(path: &Path, out: Box<dyn Write>) -> i32 {
 /// Run a script with `$argv` = [path, args...].
 pub fn run_file_args(path: &Path, args: &[String], out: Box<dyn Write>) -> i32 {
     let src = match std::fs::read(path) {
-        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+        Ok(b) => crate::pstr::lossy(&b).into_owned(),
         Err(e) => {
             eprintln!("Could not open input file: {} ({e})", path.display());
             return 1;
@@ -297,6 +297,6 @@ pub fn run_capture(src: &str) -> (String, i32) {
         }
     }
     let code = run_source(Path::new("/test.php"), src.to_string(), Box::new(W(buf.clone())));
-    let out = String::from_utf8_lossy(&buf.borrow()).into_owned();
+    let out = crate::pstr::lossy(&buf.borrow()).into_owned();
     (out, code)
 }

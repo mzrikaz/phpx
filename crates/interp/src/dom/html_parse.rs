@@ -68,13 +68,13 @@ fn blank(c: u8) -> bool {
 /// the encoding, and anything else is ISO-8859-1 (libxml2's default).
 pub fn decode(input: &[u8]) -> (String, Option<String>) {
     if let Some(rest) = input.strip_prefix(b"\xEF\xBB\xBF") {
-        return (String::from_utf8_lossy(rest).into_owned(), None);
+        return (crate::pstr::lossy(rest).into_owned(), None);
     }
     if input.starts_with(b"<?xm") {
-        return (String::from_utf8_lossy(input).into_owned(), Some("UTF-8".into()));
+        return (crate::pstr::lossy(input).into_owned(), Some("UTF-8".into()));
     }
     match meta_charset(input) {
-        Some(cs) if cs.eq_ignore_ascii_case("utf-8") || cs.eq_ignore_ascii_case("utf8") => (String::from_utf8_lossy(input).into_owned(), Some(cs)),
+        Some(cs) if cs.eq_ignore_ascii_case("utf-8") || cs.eq_ignore_ascii_case("utf8") => (crate::pstr::lossy(input).into_owned(), Some(cs)),
         cs => {
             // libxml2 settles on ISO-8859-1 at the first non-ASCII byte.
             let cs = cs.or_else(|| (!input.is_ascii()).then(|| "ISO-8859-1".to_string()));
@@ -106,7 +106,7 @@ fn meta_charset(input: &[u8]) -> Option<String> {
                     i += 1;
                 }
                 if i > s {
-                    return Some(String::from_utf8_lossy(&input[start + s..start + i]).into_owned());
+                    return Some(crate::pstr::lossy(&input[start + s..start + i]).into_owned());
                 }
             }
         }
@@ -342,7 +342,7 @@ impl P<'_> {
         while self.cur().is_ascii_alphanumeric() || matches!(self.cur(), b':' | b'-' | b'_' | b'.') {
             self.i += 1;
         }
-        Some(String::from_utf8_lossy(&self.s[st..self.i]).to_ascii_lowercase())
+        Some(crate::pstr::lossy(&self.s[st..self.i]).to_ascii_lowercase())
     }
 
     /// An XML Name (entity names, PI targets, doctype names).
@@ -354,7 +354,7 @@ impl P<'_> {
         while name_char(self.cur()) {
             self.i += 1;
         }
-        Some(String::from_utf8_lossy(&self.s[st..self.i]).into_owned())
+        Some(crate::pstr::lossy(&self.s[st..self.i]).into_owned())
     }
 
     fn char_ref(&mut self) -> u32 {
@@ -606,7 +606,7 @@ impl P<'_> {
             self.i += 1;
         }
         if self.i > st {
-            let text = String::from_utf8_lossy(&self.s[st..self.i]).into_owned();
+            let text = crate::pstr::lossy(&self.s[st..self.i]).into_owned();
             self.cdata(&text);
         }
     }
@@ -616,7 +616,7 @@ impl P<'_> {
         while !matches!(self.cur(), b'<' | b'&' | 0) {
             self.i += 1;
         }
-        let text = String::from_utf8_lossy(&self.s[st..self.i]).into_owned();
+        let text = crate::pstr::lossy(&self.s[st..self.i]).into_owned();
         if self.are_blanks(&text) {
             if self.opts & HTML_PARSE_NOBLANKS == 0 {
                 self.characters(&text);
@@ -671,12 +671,12 @@ impl P<'_> {
         let mut j = st;
         while j < self.s.len() {
             if self.s[j..].starts_with(b"-->") {
-                let text = String::from_utf8_lossy(&self.s[st..j]).into_owned();
+                let text = crate::pstr::lossy(&self.s[st..j]).into_owned();
                 self.i = j + 3;
                 return self.add_misc(Node::new(COMMENT, "#comment", &text));
             }
             if self.s[j..].starts_with(b"--!>") {
-                let text = String::from_utf8_lossy(&self.s[st..j]).into_owned();
+                let text = crate::pstr::lossy(&self.s[st..j]).into_owned();
                 self.i = j + 4;
                 return self.add_misc(Node::new(COMMENT, "#comment", &text));
             }
@@ -705,7 +705,7 @@ impl P<'_> {
             self.err(47, format!("PI {target} never end ..."));
             return;
         }
-        let data = String::from_utf8_lossy(&self.s[st..self.i]).into_owned();
+        let data = crate::pstr::lossy(&self.s[st..self.i]).into_owned();
         self.i += 1;
         self.add_misc(Node::new(PI, &target, &data));
     }
@@ -720,7 +720,7 @@ impl P<'_> {
         while self.cur() != 0 && self.cur() != q {
             self.i += 1;
         }
-        let v = String::from_utf8_lossy(&self.s[st..self.i]).into_owned();
+        let v = crate::pstr::lossy(&self.s[st..self.i]).into_owned();
         if self.cur() == q {
             self.i += 1;
         }

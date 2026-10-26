@@ -114,7 +114,7 @@ fn with_state<T>(o: &Obj, f: impl FnOnce(&mut DirState) -> T) -> Option<T> {
 
 fn str_prop(o: &Obj, name: &str) -> String {
     match o.get_prop(name) {
-        Some(Value::Str(s)) => String::from_utf8_lossy(&s).into_owned(),
+        Some(Value::Str(s)) => crate::pstr::lossy(&s).into_owned(),
         _ => String::new(),
     }
 }
@@ -131,7 +131,7 @@ fn pathname(it: &Interp, o: &Rc<Obj>) -> R<String> {
     if let Some(m) = o.class.find_method("getpathname") {
         if !matches!(&*m.declaring, "splfileinfo" | "directoryiterator") {
             let v = it.call_method(o, "getPathname", vec![])?;
-            return Ok(String::from_utf8_lossy(&it.to_str(&v)?).into_owned());
+            return Ok(crate::pstr::lossy(&it.to_str(&v)?).into_owned());
         }
     }
     Ok(with_state(o, |s| s.pathname()).unwrap_or_else(|| str_prop(o, "pathName")))
@@ -158,7 +158,7 @@ fn set_path(o: &Obj, path: &str) {
 
 fn fi_set_path(it: &Interp, o: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) -> R<Value> {
     let p = it.to_str(&a.first().cloned().unwrap_or_default())?;
-    set_path(this(o), &String::from_utf8_lossy(&p));
+    set_path(this(o), &crate::pstr::lossy(&p));
     Ok(Value::Null)
 }
 
@@ -175,7 +175,7 @@ fn filename(it: &Interp, o: &Rc<Obj>) -> R<String> {
     if let Some(m) = o.class.find_method("getfilename") {
         if !matches!(&*m.declaring, "splfileinfo" | "directoryiterator") {
             let v = it.call_method(o, "getFilename", vec![])?;
-            return Ok(String::from_utf8_lossy(&it.to_str(&v)?).into_owned());
+            return Ok(crate::pstr::lossy(&it.to_str(&v)?).into_owned());
         }
     }
     Ok(match with_state(o, |s| s.current().map(|e| e.name.to_string()).unwrap_or_default()) {
@@ -266,7 +266,7 @@ fn kind_of(t: std::io::Result<std::fs::FileType>) -> Kind {
 /// Open `directory` (DirectoryIterator and subclasses' constructors).
 fn di_open(it: &Interp, o: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) -> R<Value> {
     let o = this(o);
-    let directory = String::from_utf8_lossy(&it.to_str(&a.first().cloned().unwrap_or_default())?).into_owned();
+    let directory = crate::pstr::lossy(&it.to_str(&a.first().cloned().unwrap_or_default())?).into_owned();
     let dir = {
         let mut d = directory.as_str();
         while d.len() > 1 && d.ends_with('/') {
@@ -295,11 +295,11 @@ fn di_open(it: &Interp, o: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) -> R<
 /// GlobIterator: the matches of a pattern, in `dir`.
 fn di_set_entries(it: &Interp, o: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) -> R<Value> {
     let o = this(o);
-    let dir = String::from_utf8_lossy(&it.to_str(&a.first().cloned().unwrap_or_default())?).into_owned();
+    let dir = crate::pstr::lossy(&it.to_str(&a.first().cloned().unwrap_or_default())?).into_owned();
     let mut entries = vec![];
     if let Some(Value::Array(names)) = a.get(1).map(Value::deref) {
         for (_, n) in names.iter() {
-            let name = String::from_utf8_lossy(&it.to_str(&n)?).into_owned();
+            let name = crate::pstr::lossy(&it.to_str(&n)?).into_owned();
             let kind = kind_of(std::fs::symlink_metadata(format!("{dir}/{name}")).map(|m| m.file_type()));
             entries.push(Entry { name: Rc::from(name.as_str()), kind });
         }

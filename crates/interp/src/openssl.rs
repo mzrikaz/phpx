@@ -295,7 +295,7 @@ fn fit_iv(it: &Interp, func: &str, c: Cipher, iv: &[u8]) -> Option<Vec<u8>> {
 
 fn cipher_arg(it: &Interp, func: &str, a: &[Value], i: usize) -> R<Option<Cipher>> {
     let name = s(it, a, i)?;
-    let c = Cipher::lookup(&String::from_utf8_lossy(&name));
+    let c = Cipher::lookup(&crate::pstr::lossy(&name));
     if c.is_none() {
         it.warn(&format!("{func}(): Unknown cipher algorithm"));
     }
@@ -428,7 +428,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("openssl_digest", |it, _, a| {
         let data = s(it, a, 0)?;
-        let algo = String::from_utf8_lossy(&s(it, a, 1)?).into_owned();
+        let algo = crate::pstr::lossy(&s(it, a, 1)?).into_owned();
         let binary = arg(a, 2).truthy();
         let Some(mut h) = md_name(&algo).and_then(|n| crate::ext::Hasher::new(&n)) else {
             it.warn("openssl_digest(): Unknown digest algorithm");
@@ -442,7 +442,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let (pass, salt) = (s(it, a, 0)?, s(it, a, 1)?);
         let len = int(it, a, 2)?;
         let iters = int(it, a, 3)?;
-        let algo = if has(a, 4) { String::from_utf8_lossy(&s(it, a, 4)?).into_owned() } else { "sha1".into() };
+        let algo = if has(a, 4) { crate::pstr::lossy(&s(it, a, 4)?).into_owned() } else { "sha1".into() };
         let Some(algo) = md_name(&algo) else {
             it.warn("openssl_pbkdf2(): Unknown digest algorithm");
             return Ok(Value::Bool(false));

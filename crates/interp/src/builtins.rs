@@ -290,7 +290,7 @@ pub fn spl_class_arg(it: &Interp, a: &[Value], fname: &str) -> R<Option<std::rc:
     match arg(a, 0) {
         Value::Object(o) => Ok(Some(o.class.clone())),
         Value::Str(n) => {
-            let n = String::from_utf8_lossy(&n).into_owned();
+            let n = crate::pstr::lossy(&n).into_owned();
             let autoload = !has(a, 1) || arg(a, 1).truthy();
             let found = if autoload { it.find_class(&n)? } else { it.classes.borrow().get(&*it.lower.get(n.trim_start_matches('\\'))).cloned() };
             if found.is_none() {
@@ -336,7 +336,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     // Built-in classes written in PHP: E_DEPRECATED for their deprecated
     // methods (PHP's own message).
     t.insert("__phpx_deprecated", |it, _, a| {
-        it.deprecated(&String::from_utf8_lossy(&s(it, a, 0)?));
+        it.deprecated(&crate::pstr::lossy(&s(it, a, 0)?));
         Ok(Value::Null)
     });
     t.insert("var_export", |it, _, a| {
@@ -352,7 +352,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::Null)
     });
     t.insert("error_log", |it, _, a| {
-        eprintln!("{}", String::from_utf8_lossy(&s(it, a, 0)?));
+        eprintln!("{}", crate::pstr::lossy(&s(it, a, 0)?));
         Ok(Value::Bool(true))
     });
 
@@ -398,7 +398,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         if has(a, 1) {
             let base = int(it, a, 1)?;
             if let Value::Str(st) = arg(a, 0) {
-                let txt = String::from_utf8_lossy(&st).trim().to_ascii_lowercase();
+                let txt = crate::pstr::lossy(&st).trim().to_ascii_lowercase();
                 let (neg, txt) = match txt.strip_prefix('-') {
                     Some(r) => (true, r.to_string()),
                     None => (false, txt.trim_start_matches('+').to_string()),
@@ -427,7 +427,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("strval", |it, _, a| Ok(Value::Str(s(it, a, 0)?)));
     t.insert("boolval", |_, _, a| Ok(Value::Bool(arg(a, 0).truthy())));
     t.insert("settype", |it, _, a| {
-        let ty = String::from_utf8_lossy(&s(it, a, 1)?).to_ascii_lowercase();
+        let ty = crate::pstr::lossy(&s(it, a, 1)?).to_ascii_lowercase();
         let ty = match ty.as_str() {
             "integer" => "int",
             "boolean" => "bool",
@@ -496,7 +496,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("mt_getrandmax", |_, _, _| Ok(Value::Int(2147483647)));
     t.insert("getrandmax", |_, _, _| Ok(Value::Int(2147483647)));
     t.insert("base_convert", |it, _, a| {
-        let txt = String::from_utf8_lossy(&s(it, a, 0)?).to_ascii_lowercase();
+        let txt = crate::pstr::lossy(&s(it, a, 0)?).to_ascii_lowercase();
         let (from, to) = (int(it, a, 1)?, int(it, a, 2)?);
         for (i, (b, name)) in [(from, "from_base"), (to, "to_base")].into_iter().enumerate() {
             if !(2..=36).contains(&b) {
@@ -526,7 +526,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("get_parent_class", |it, _, a| {
         let cls = match arg(a, 0) {
             Value::Object(o) => Some(o.class.clone()),
-            Value::Str(n) => it.lookup_class(&String::from_utf8_lossy(&n)).ok(),
+            Value::Str(n) => it.lookup_class(&crate::pstr::lossy(&n)).ok(),
             _ => None,
         };
         Ok(cls.and_then(|c| c.parent.clone()).map(|p| Value::str(&p.name)).unwrap_or(Value::Bool(false)))
@@ -542,19 +542,19 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::array(out))
     });
     t.insert("method_exists", |it, _, a| {
-        let m = String::from_utf8_lossy(&s(it, a, 1)?).to_ascii_lowercase();
+        let m = crate::pstr::lossy(&s(it, a, 1)?).to_ascii_lowercase();
         let cls = match arg(a, 0) {
             Value::Object(o) => Some(o.class.clone()),
-            Value::Str(n) => it.lookup_class(&String::from_utf8_lossy(&n)).ok(),
+            Value::Str(n) => it.lookup_class(&crate::pstr::lossy(&n)).ok(),
             _ => None,
         };
         Ok(Value::Bool(cls.is_some_and(|c| c.find_method(&m).is_some())))
     });
     t.insert("property_exists", |it, _, a| {
-        let p = String::from_utf8_lossy(&s(it, a, 1)?).into_owned();
+        let p = crate::pstr::lossy(&s(it, a, 1)?).into_owned();
         Ok(Value::Bool(match arg(a, 0) {
             Value::Object(o) => o.class.find_prop(&p).is_some() || has_static_prop(&o.class, &p) || o.props.borrow().contains_key(&*p),
-            Value::Str(n) => it.lookup_class(&String::from_utf8_lossy(&n)).ok().is_some_and(|c| c.find_prop(&p).is_some() || has_static_prop(&c, &p)),
+            Value::Str(n) => it.lookup_class(&crate::pstr::lossy(&n)).ok().is_some_and(|c| c.find_prop(&p).is_some() || has_static_prop(&c, &p)),
             _ => false,
         }))
     });
@@ -563,7 +563,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("trait_exists", |it, _, a| class_kind_exists(it, a, phpx_syntax::ast::ClassKind::Trait));
     t.insert("enum_exists", |it, _, a| class_kind_exists(it, a, phpx_syntax::ast::ClassKind::Enum));
     t.insert("function_exists", |it, f, a| {
-        let n = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let n = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         // phpx's internal helpers for the prelude aren't PHP functions.
         if n.trim_start_matches('\\').to_ascii_lowercase().starts_with("__phpx") {
             return Ok(Value::Bool(false));
@@ -571,18 +571,18 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::Bool(it.find_function(&f.ctx, &format!("\\{}", n.trim_start_matches('\\'))).is_some()))
     });
     t.insert("is_a", |it, _, a| {
-        let target = it.lower.get(String::from_utf8_lossy(&s(it, a, 1)?).trim_start_matches('\\'));
+        let target = it.lower.get(crate::pstr::lossy(&s(it, a, 1)?).trim_start_matches('\\'));
         Ok(Value::Bool(match arg(a, 0) {
             Value::Object(o) => o.class.is_a(&target),
-            Value::Str(n) if arg(a, 2).truthy() => it.lookup_class(&String::from_utf8_lossy(&n)).is_ok_and(|c| c.is_a(&target)),
+            Value::Str(n) if arg(a, 2).truthy() => it.lookup_class(&crate::pstr::lossy(&n)).is_ok_and(|c| c.is_a(&target)),
             _ => false,
         }))
     });
     t.insert("is_subclass_of", |it, _, a| {
-        let target = it.lower.get(String::from_utf8_lossy(&s(it, a, 1)?).trim_start_matches('\\'));
+        let target = it.lower.get(crate::pstr::lossy(&s(it, a, 1)?).trim_start_matches('\\'));
         let cls = match arg(a, 0) {
             Value::Object(o) => Some(o.class.clone()),
-            Value::Str(n) => it.lookup_class(&String::from_utf8_lossy(&n)).ok(),
+            Value::Str(n) => it.lookup_class(&crate::pstr::lossy(&n)).ok(),
             _ => None,
         };
         Ok(Value::Bool(cls.is_some_and(|c| c.lname != target && c.is_a(&target))))
@@ -650,13 +650,13 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         for (k, v) in args.iter() {
             match k {
                 Key::Int(_) => pos.push(v.clone()),
-                Key::Str(n) => named.push((Rc::from(String::from_utf8_lossy(&n).as_ref()), v.clone())),
+                Key::Str(n) => named.push((Rc::from(crate::pstr::lossy(&n).as_ref()), v.clone())),
             }
         }
         it.call_callable(&c, pos, named)
     });
     t.insert("define", |it, _, a| {
-        let n = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let n = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         if it.constants.borrow().contains_key(&n) {
             it.warn(&format!("Constant {n} already defined"));
             return Ok(Value::Bool(false));
@@ -693,7 +693,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::array(out))
     });
     t.insert("defined", |it, f, a| {
-        let n = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let n = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         let n = n.trim_start_matches('\\');
         if let Some((class, name)) = n.split_once("::") {
             // Class constants and enum cases, visible from the caller.
@@ -706,7 +706,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::Bool(it.constants.borrow().contains_key(n)))
     });
     t.insert("constant", |it, f, a| {
-        let n = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let n = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         if let Some((cls, c)) = n.split_once("::") {
             let class = it.lookup_class(cls)?;
             return it.get_class_const(&class, c);
@@ -762,7 +762,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     // Extensions phpx implements natively. Others report false so Composer
     // polyfills (symfony/polyfill-*) fill the gaps.
     t.insert("extension_loaded", |it, _, a| {
-        let n = String::from_utf8_lossy(&s(it, a, 0)?).to_ascii_lowercase();
+        let n = crate::pstr::lossy(&s(it, a, 0)?).to_ascii_lowercase();
         Ok(Value::Bool(EXTENSIONS.iter().any(|e| e.eq_ignore_ascii_case(&n))))
     });
     t.insert("get_loaded_extensions", |_, _, _| {
@@ -814,12 +814,12 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             }
             return Ok(Value::array(out));
         }
-        let n = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let n = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         Ok(std::env::var(n).map(|v| Value::str(&v)).unwrap_or(Value::Bool(false)))
     });
     t.insert("uniqid", |it, _, a| {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-        let prefix = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let prefix = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         Ok(Value::str(&format!("{prefix}{:08x}{:05x}", now.as_secs(), now.subsec_micros())))
     });
     t.insert("random_bytes", |it, _, a| {
@@ -864,7 +864,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("date", |it, _, a| {
         let ts = if has(a, 1) && !arg(a, 1).is_null() { int(it, a, 1)? } else { now().as_secs() as i64 };
-        Ok(Value::str(&format_date(&String::from_utf8_lossy(&s(it, a, 0)?), ts)))
+        Ok(Value::str(&format_date(&crate::pstr::lossy(&s(it, a, 0)?), ts)))
     });
     t.insert("mktime", |it, _, a| {
         let n = now().as_secs() as i64;
@@ -912,7 +912,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
 }
 
 fn class_kind_exists(it: &Interp, a: &[Value], kind: phpx_syntax::ast::ClassKind) -> R<Value> {
-    let n = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+    let n = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
     let autoload = !has(a, 1) || arg(a, 1).truthy();
     let c = if autoload {
         it.find_class(&n)?
@@ -1010,7 +1010,7 @@ fn to_radix(mut n: u64, radix: u32) -> String {
 }
 
 fn from_radix(it: &Interp, a: &[Value], radix: u32) -> R<Value> {
-    let txt = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+    let txt = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
     let digits: String = txt.chars().filter(|c| c.is_digit(radix)).collect();
     Ok(match i64::from_str_radix(&digits, radix) {
         Ok(n) => Value::Int(n),

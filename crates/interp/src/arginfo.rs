@@ -218,7 +218,7 @@ impl Spec {
                 if it.str_callables.borrow().contains_key(&**s) {
                     return Ok(());
                 }
-                let name = String::from_utf8_lossy(s);
+                let name = crate::pstr::lossy(s);
                 if name.contains("::") || it.find_function(&it.file_ctx(0), &name).is_some() {
                     return Ok(());
                 }
@@ -329,7 +329,7 @@ fn scalar_coerce(it: &Interp, mask: u16, v: &Value) -> Option<Value> {
                 if let Some(n) = parse_numeric(s) {
                     if let crate::value::Num::Float(f) = n {
                         if mask & FLOAT == 0 && f.fract() != 0.0 && mask & STRING == 0 {
-                            it.deprecated(&format!("Implicit conversion from float-string \"{}\" to int loses precision", String::from_utf8_lossy(s)));
+                            it.deprecated(&format!("Implicit conversion from float-string \"{}\" to int loses precision", crate::pstr::lossy(s)));
                             return Some(Value::Int(f as i64));
                         }
                     }

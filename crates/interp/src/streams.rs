@@ -110,7 +110,7 @@ pub(crate) fn dir_resource(entries: Vec<String>) -> Value {
 }
 
 fn path_arg(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 /// Run `g` on an open stream resource; TypeError for anything else.
@@ -615,7 +615,7 @@ fn filter_url(it: &Interp, path: &str, mode: &str) -> Result<Value, String> {
             None => (3, part),
         };
         for n in names.split('|').filter(|n| !n.is_empty()) {
-            let n = String::from_utf8_lossy(&crate::server::percent_decode_bytes(n)).into_owned();
+            let n = crate::pstr::lossy(&crate::server::percent_decode_bytes(n)).into_owned();
             if which & 1 != 0 {
                 read.push(n.clone());
             }
@@ -1183,7 +1183,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("fnmatch", |it, _, a| Ok(Value::Bool(fnmatch(&s(it, a, 0)?, &s(it, a, 1)?))));
     t.insert("clearstatcache", |it, _, a| {
         if a.first().is_some_and(|v| v.truthy()) {
-            let p = if a.len() > 1 { String::from_utf8_lossy(&it.to_str(&a[1])?).into_owned() } else { String::new() };
+            let p = if a.len() > 1 { crate::pstr::lossy(&it.to_str(&a[1])?).into_owned() } else { String::new() };
             crate::fs::clear_realpath_cache((!p.is_empty()).then_some(p.as_str()));
         }
         Ok(Value::Null)

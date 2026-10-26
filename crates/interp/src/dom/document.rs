@@ -328,7 +328,7 @@ fn load_html(it: &Interp, this: This, _: &Rc<Class>, a: Args) -> R<Value> {
 }
 
 fn read_file(it: &Interp, a: &[Value], func: &str) -> R<Option<(Vec<u8>, String)>> {
-    let path = String::from_utf8_lossy(&source_arg(it, a, func, "filename")?).into_owned();
+    let path = crate::pstr::lossy(&source_arg(it, a, func, "filename")?).into_owned();
     match std::fs::read(&path) {
         Ok(b) => {
             let full = std::fs::canonicalize(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or(path);
@@ -367,7 +367,7 @@ fn save_target(it: &Interp, doc: &DocRef, a: &[Value], func: &str) -> R<Option<I
 
 fn expand_empty(out: Vec<u8>) -> Vec<u8> {
     // `<name .../>` -> `<name ...></name>` outside text (LIBXML_NOEMPTYTAG).
-    let s = String::from_utf8_lossy(&out).into_owned();
+    let s = crate::pstr::lossy(&out).into_owned();
     let mut res = String::with_capacity(s.len());
     let mut rest = s.as_str();
     while let Some(p) = rest.find("/>") {
@@ -427,7 +427,7 @@ fn save_html(it: &Interp, this: This, _: &Rc<Class>, a: Args) -> R<Value> {
 }
 
 fn write_file(it: &Interp, a: &[Value], data: Vec<u8>, func: &str) -> R<Value> {
-    let path = String::from_utf8_lossy(&source_arg(it, a, func, "filename")?).into_owned();
+    let path = crate::pstr::lossy(&source_arg(it, a, func, "filename")?).into_owned();
     match std::fs::write(&path, &data) {
         Ok(()) => Ok(Value::Int(data.len() as i64)),
         Err(e) => {

@@ -70,7 +70,7 @@ fn enc_arg(it: &Interp, a: &[Value], i: usize) -> R<String> {
 /// Decode to chars (via UTF-8); None with PHP's notice on bad input.
 fn chars(it: &Interp, data: &[u8], enc: &str, func: &str) -> R<Option<Vec<char>>> {
     match convert(enc, "UTF-8", data) {
-        Ok(u) => Ok(Some(String::from_utf8_lossy(&u).chars().collect())),
+        Ok(u) => Ok(Some(crate::pstr::lossy(&u).chars().collect())),
         Err(Failure::Open) => {
             it.warn(&format!("{func}(): Wrong encoding, conversion from \"{enc}\" to \"UCS-4LE\" is not allowed"));
             Ok(None)
@@ -169,7 +169,7 @@ fn mime_decode(it: &Interp, text: &[u8], to: &str, mode: i64) -> R<Option<Vec<u8
 fn encoded_word(t: &[u8]) -> Option<(String, u8, &[u8], usize)> {
     let rest = &t[2..];
     let q1 = rest.iter().position(|&c| c == b'?')?;
-    let cs = String::from_utf8_lossy(&rest[..q1]).into_owned();
+    let cs = crate::pstr::lossy(&rest[..q1]).into_owned();
     let enc = *rest.get(q1 + 1)?;
     if rest.get(q1 + 2) != Some(&b'?') || !matches!(enc, b'B' | b'b' | b'Q' | b'q') {
         return None;
@@ -202,7 +202,7 @@ fn q_decode(p: &[u8]) -> Vec<u8> {
 }
 
 fn mime_encode(it: &Interp, a: &[Value]) -> R<Value> {
-    let name = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+    let name = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
     let value = s(it, a, 1)?.to_vec();
     let mut scheme = "B".to_string();
     let (mut in_cs, mut out_cs) = (internal(), internal());
@@ -210,7 +210,7 @@ fn mime_encode(it: &Interp, a: &[Value]) -> R<Value> {
     let mut brk = "\r\n".to_string();
     if let Value::Array(p) = arg(a, 2) {
         for (k, v) in p.iter() {
-            let k = String::from_utf8_lossy(&k.to_value().scalar_bytes().unwrap_or_default()).into_owned();
+            let k = crate::pstr::lossy(&k.to_value().scalar_bytes().unwrap_or_default()).into_owned();
             match k.as_str() {
                 "scheme" => scheme = it.to_string_lossy(&v)?,
                 "input-charset" => in_cs = it.to_string_lossy(&v)?,

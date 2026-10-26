@@ -224,7 +224,7 @@ fn zip_kind(d: &[u8]) -> Magic {
         let start = 30 + name_len + extra;
         let body = &d[start.min(d.len())..];
         let mt: Vec<u8> = body.iter().take_while(|b| b.is_ascii_graphic()).copied().collect();
-        let mt = String::from_utf8_lossy(&mt).into_owned();
+        let mt = crate::pstr::lossy(&mt).into_owned();
         let desc = match mt.as_str() {
             "application/epub+zip" => "EPUB document",
             "application/vnd.oasis.opendocument.text" => "OpenDocument Text",
@@ -279,7 +279,7 @@ fn detect(d: &[u8]) -> Magic {
         return magic("image/jpeg", "JPEG image data", "jpeg/jpg/jpe/jfif");
     }
     if starts(b"GIF87a") || starts(b"GIF89a") {
-        let v = String::from_utf8_lossy(&d[3..6]).into_owned();
+        let v = crate::pstr::lossy(&d[3..6]).into_owned();
         return magic("image/gif", format!("GIF image data, version {v}, {} x {}", le16(d, 6), le16(d, 8)), "gif");
     }
     if starts(b"RIFF") && d.get(8..12) == Some(b"WEBP") {
@@ -391,7 +391,7 @@ fn detect(d: &[u8]) -> Magic {
     let lower: Vec<u8> = trimmed.iter().take(512).map(|b| b.to_ascii_lowercase()).collect();
     if d.starts_with(b"#!") {
         let first = d.split(|b| *b == b'\n').next().unwrap_or(b"");
-        let interp = String::from_utf8_lossy(first);
+        let interp = crate::pstr::lossy(first);
         let (mime, kind) = if interp.contains("php") {
             ("text/x-php", "PHP script")
         } else if interp.contains("python") {
@@ -535,7 +535,7 @@ fn call_flags(it: &Interp, o: &Obj, a: &[Value], i: usize) -> R<i64> {
 
 fn fi_file(it: &Interp, o: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value>) -> R<Value> {
     let o = o.unwrap();
-    let path = String::from_utf8_lossy(&s(it, &a, 0)?).into_owned();
+    let path = crate::pstr::lossy(&s(it, &a, 0)?).into_owned();
     let flags = call_flags(it, o, &a, 1)?;
     Ok(match read_path(it, "finfo::file", &path)? {
         Some(src) => Value::str(&answer_source(src, flags)),
@@ -594,7 +594,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("finfo_file", |it, _, a| {
         let o = finfo_arg(it, a, "finfo_file")?;
-        let path = String::from_utf8_lossy(&s(it, a, 1)?).into_owned();
+        let path = crate::pstr::lossy(&s(it, a, 1)?).into_owned();
         let flags = call_flags(it, &o, a, 2)?;
         Ok(match read_path(it, "finfo_file", &path)? {
             Some(src) => Value::str(&answer_source(src, flags)),
@@ -612,7 +612,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             let data = (it.builtins["stream_get_contents"])(it, &mut crate::interp::Frame::new(it.file_ctx(0), 0), &mut [arg(a, 0)])?;
             return Ok(Value::str(&answer(&it.to_str(&data)?, MIME_TYPE)));
         }
-        let path = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let path = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         Ok(match read_path(it, "mime_content_type", &path)? {
             Some(src) => Value::str(&answer_source(src, MIME_TYPE)),
             None => Value::Bool(false),

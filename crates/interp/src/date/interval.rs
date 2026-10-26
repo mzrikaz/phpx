@@ -116,7 +116,7 @@ fn bad_format(it: &Interp, s: &str) -> crate::interp::Ctrl {
 
 /// `P1Y2M3DT4H5M6S`, `P2W` -> [y, m, d, h, i, s, f].
 pub fn parse_fn(it: &Interp, a: &[Value]) -> R<Value> {
-    let text = String::from_utf8_lossy(&it.to_str(&arg(a, 0))?).into_owned();
+    let text = crate::pstr::lossy(&it.to_str(&arg(a, 0))?).into_owned();
     let b = text.as_bytes();
     if b.first() != Some(&b'P') || b.len() < 3 && !(b.len() == 2) {
         return Err(bad_format(it, &text));
@@ -166,7 +166,7 @@ pub fn parse_fn(it: &Interp, a: &[Value]) -> R<Value> {
 /// DateInterval::createFromDateString(): the relative part of a date
 /// string, or false.
 pub fn from_string_fn(it: &Interp, a: &[Value]) -> R<Value> {
-    let text = String::from_utf8_lossy(&it.to_str(&arg(a, 0))?).into_owned();
+    let text = crate::pstr::lossy(&it.to_str(&arg(a, 0))?).into_owned();
     match parse::parse(&text) {
         Ok(p) => {
             let r = &p.rel;

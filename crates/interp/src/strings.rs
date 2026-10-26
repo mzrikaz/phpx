@@ -589,7 +589,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::str(if std::str::from_utf8(&s(it, a, 0)?).is_ok() { "UTF-8" } else { "ISO-8859-1" }))
     });
     t.insert("mb_convert_encoding", |it, _, a| {
-        let to = String::from_utf8_lossy(&s(it, a, 1)?).to_ascii_uppercase();
+        let to = crate::pstr::lossy(&s(it, a, 1)?).to_ascii_uppercase();
         let st = s(it, a, 0)?;
         if to == "UTF-8" {
             return Ok(Value::str(&utf8(&st)));
@@ -1024,7 +1024,7 @@ fn build_query(it: &Interp, a: &PhpArray, prefix: Option<&str>, out: &mut Vec<St
     for (k, v) in a.iter() {
         let ks = match k {
             Key::Int(n) => n.to_string(),
-            Key::Str(s) => String::from_utf8_lossy(&s).into_owned(),
+            Key::Str(s) => crate::pstr::lossy(&s).into_owned(),
         };
         let name = match prefix {
             Some(p) => format!("{p}[{ks}]"),

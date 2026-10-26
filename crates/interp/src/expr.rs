@@ -462,12 +462,12 @@ impl Interp {
                             Value::Str(s) => {
                                 let mut o = crate::value::Out(vec![]);
                                 crate::value::var_export(&Value::Str(s.clone()), 0, &mut o);
-                                String::from_utf8_lossy(&o.0).into_owned()
+                                crate::pstr::lossy(&o.0).into_owned()
                             }
                             Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Null => {
                                 let mut o = crate::value::Out(vec![]);
                                 crate::value::var_export(&v, 0, &mut o);
-                                String::from_utf8_lossy(&o.0).into_owned()
+                                crate::pstr::lossy(&o.0).into_owned()
                             }
                             other => format!("of type {}", other.debug_type()),
                         };
@@ -485,7 +485,7 @@ impl Interp {
                     },
                     ast::ClassRef::Dynamic(d) => match self.eval(f, d)? {
                         Value::Object(c) => c.class.lname.clone(),
-                        Value::Str(s) => self.lower.get(String::from_utf8_lossy(&s).trim_start_matches('\\')),
+                        Value::Str(s) => self.lower.get(crate::pstr::lossy(&s).trim_start_matches('\\')),
                         _ => return Err(self.error("Error", "Class name must be a valid object or a string")),
                     },
                     ast::ClassRef::Anonymous(_) => return Ok(Value::Bool(false)),
@@ -514,7 +514,7 @@ impl Interp {
                         // swallows exceptions).
                         static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
                         if *TRACE.get_or_init(|| std::env::var_os("PHPX_TRACE_THROW").is_some()) {
-                            let p = |n: &str| o.get_prop(n).map(|v| String::from_utf8_lossy(&v.scalar_bytes().unwrap_or_default()).into_owned()).unwrap_or_default();
+                            let p = |n: &str| o.get_prop(n).map(|v| crate::pstr::lossy(&v.scalar_bytes().unwrap_or_default()).into_owned()).unwrap_or_default();
                             eprintln!("[throw] {}: {} at {}:{}", o.class.name, p("message"), p("file"), p("line"));
                         }
                         return Err(Ctrl::Throw(o));
@@ -547,7 +547,7 @@ impl Interp {
                 let p = self.to_str(&p)?;
                 // Back in this file afterwards (the included file moved it).
                 let saved = self.pos.get();
-                let r = self.include(f, *kind, &String::from_utf8_lossy(&p))?;
+                let r = self.include(f, *kind, &crate::pstr::lossy(&p))?;
                 self.pos.set(saved);
                 r
             }
@@ -977,7 +977,7 @@ impl Interp {
     pub fn method_name(&self, f: &mut Frame, n: &'static MemberName) -> R<Rc<str>> {
         match n {
             MemberName::Dynamic(e) => match self.eval(f, e)?.into_deref() {
-                Value::Str(b) => Ok(Rc::from(String::from_utf8_lossy(&b).as_ref())),
+                Value::Str(b) => Ok(Rc::from(crate::pstr::lossy(&b).as_ref())),
                 _ => Err(self.error("Error", "Method name must be a string")),
             },
             n => self.member_name(f, n),
@@ -990,7 +990,7 @@ impl Interp {
             MemberName::Dynamic(e) => {
                 let v = self.eval(f, e)?;
                 let b = self.to_str(&v)?;
-                Ok(Rc::from(String::from_utf8_lossy(&b).as_ref()))
+                Ok(Rc::from(crate::pstr::lossy(&b).as_ref()))
             }
         }
     }
@@ -1949,7 +1949,7 @@ fn cell_of(raw: &mut Value) -> Slot {
 pub fn key_repr(k: &Key) -> String {
     match k {
         Key::Int(n) => n.to_string(),
-        Key::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s)),
+        Key::Str(s) => format!("\"{}\"", crate::pstr::lossy(s)),
     }
 }
 

@@ -82,7 +82,7 @@ impl P<'_> {
         while self.cur() != 0 && !stop(self.cur()) {
             self.p += 1;
         }
-        String::from_utf8_lossy(&self.t[start..self.p]).to_ascii_lowercase()
+        crate::pstr::lossy(&self.t[start..self.p]).to_ascii_lowercase()
     }
 }
 

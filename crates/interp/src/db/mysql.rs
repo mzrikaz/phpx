@@ -364,9 +364,9 @@ impl Conn {
         let code = r.u16() as i64;
         let (state, msg) = if r.b.get(r.p) == Some(&b'#') {
             r.u8();
-            (String::from_utf8_lossy(r.bytes(5)).into_owned(), String::from_utf8_lossy(r.rest()).into_owned())
+            (crate::pstr::lossy(r.bytes(5)).into_owned(), crate::pstr::lossy(r.rest()).into_owned())
         } else {
-            ("HY000".to_string(), String::from_utf8_lossy(r.rest()).into_owned())
+            ("HY000".to_string(), crate::pstr::lossy(r.rest()).into_owned())
         };
         DbError::new(&state, code, msg)
     }
@@ -377,7 +377,7 @@ impl Conn {
         self.insert_id = r.lenenc().unwrap_or(0);
         self.status = r.u16();
         self.warnings = r.u16();
-        self.info = String::from_utf8_lossy(r.rest()).into_owned();
+        self.info = crate::pstr::lossy(r.rest()).into_owned();
         self.more = self.status & SERVER_MORE_RESULTS_EXISTS != 0;
     }
 
@@ -401,7 +401,7 @@ impl Conn {
         }
         let mut r = Reader::new(&p);
         let _proto = r.u8();
-        self.server_version = String::from_utf8_lossy(r.nul_str()).into_owned();
+        self.server_version = crate::pstr::lossy(r.nul_str()).into_owned();
         self.thread_id = r.u32();
         let mut scramble = r.bytes(8).to_vec();
         r.u8();
@@ -416,7 +416,7 @@ impl Conn {
             let part2 = r.bytes(n);
             scramble.extend_from_slice(&part2[..part2.len().saturating_sub(1)]);
         }
-        let plugin = if caps & CLIENT_PLUGIN_AUTH != 0 { String::from_utf8_lossy(r.nul_str()).into_owned() } else { "mysql_native_password".into() };
+        let plugin = if caps & CLIENT_PLUGIN_AUTH != 0 { crate::pstr::lossy(r.nul_str()).into_owned() } else { "mysql_native_password".into() };
 
         let mut want = CLIENT_LONG_PASSWORD
             | CLIENT_LONG_FLAG
@@ -509,7 +509,7 @@ impl Conn {
                 Some(0xFE) => {
                     // Auth switch request.
                     let mut r = Reader::new(&p[1..]);
-                    plugin = String::from_utf8_lossy(r.nul_str()).into_owned();
+                    plugin = crate::pstr::lossy(r.nul_str()).into_owned();
                     let data = r.rest();
                     scramble = data[..data.len().saturating_sub(1)].to_vec();
                     let auth = self.scramble_for(&plugin, o.pass.as_bytes(), &scramble);
@@ -529,7 +529,7 @@ impl Conn {
                             if key.first() == Some(&0xFF) {
                                 return Err(Self::err_packet(&key));
                             }
-                            let pem = String::from_utf8_lossy(&key[1..]).into_owned();
+                            let pem = crate::pstr::lossy(&key[1..]).into_owned();
                             let mut pw = o.pass.as_bytes().to_vec();
                             pw.push(0);
                             let data = xor(&pw, &scramble);
@@ -569,7 +569,7 @@ impl Conn {
         let kind = r.u8();
         let flags = r.u16();
         let decimals = r.u8();
-        let s = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+        let s = |b: &[u8]| crate::pstr::lossy(b).into_owned();
         Column { name: s(name), table: s(table), org_table: s(org_table), schema: s(schema), org_name: s(org_name), kind, flags, length, decimals, charset }
     }
 

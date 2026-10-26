@@ -200,7 +200,7 @@ fn ssl_options(it: &Interp, ctx: &Value) -> tls::Options {
     let Some(Value::Array(ssl)) = all.get(&Key::Str(crate::value::pstr("ssl"))) else { return o };
     let get = |k: &str| ssl.get(&Key::Str(crate::value::pstr(k)));
     let flag = |k: &str, d: bool| get(k).map_or(d, |v| v.truthy());
-    let text = |k: &str| get(k).filter(|v| !v.is_null()).and_then(|v| it.to_str(&v).ok()).map(|p| String::from_utf8_lossy(&p).into_owned());
+    let text = |k: &str| get(k).filter(|v| !v.is_null()).and_then(|v| it.to_str(&v).ok()).map(|p| crate::pstr::lossy(&p).into_owned());
     o.verify_peer = flag("verify_peer", true);
     o.verify_peer_name = flag("verify_peer_name", true);
     o.allow_self_signed = flag("allow_self_signed", false);
@@ -403,7 +403,7 @@ fn select(it: &Interp, a: &mut [Value]) -> R<Value> {
 pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     for name in ["fsockopen", "pfsockopen"] {
         t.insert(name, |it, _, a| {
-            let host = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+            let host = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
             let port = if has(a, 1) { crate::builtins::int(it, a, 1)? } else { -1 };
             let spec = if host.starts_with("unix://") || port < 0 { host } else { format!("{host}:{port}") };
             let timeout = float_opt(it, a, 4)?;
@@ -411,13 +411,13 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         });
     }
     t.insert("stream_socket_client", |it, _, a| {
-        let spec = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let spec = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         let timeout = float_opt(it, a, 3)?;
         let ctx = arg(a, 5);
         client(it, "stream_socket_client", &spec, timeout, &ctx, a, 1)
     });
     t.insert("stream_socket_server", |it, _, a| {
-        let spec = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let spec = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         let fail = |a: &mut [Value], code: i32, msg: &str| {
             it.warn(&format!("stream_socket_server(): Unable to connect to {spec} ({msg})"));
             if a.len() > 1 {

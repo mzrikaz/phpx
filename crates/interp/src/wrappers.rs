@@ -144,7 +144,7 @@ fn original(name: &str) -> BuiltinFn {
 }
 
 fn path_of(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&it.to_str(&arg(a, i))?).into_owned())
+    Ok(crate::pstr::lossy(&it.to_str(&arg(a, i))?).into_owned())
 }
 
 /// url_stat(): the stat array (numeric and named keys) or None.

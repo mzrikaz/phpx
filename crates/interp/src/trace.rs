@@ -222,9 +222,9 @@ fn arg_str(v: &Value, max: usize) -> String {
         Value::Int(n) => n.to_string(),
         Value::Float(f) => crate::value::fmt_float_repr(f),
         Value::Str(s) => {
-            let t = String::from_utf8_lossy(&s);
+            let t = crate::pstr::lossy(&s);
             if s.len() > max {
-                format!("'{}...'", String::from_utf8_lossy(&s[..max]))
+                format!("'{}...'", crate::pstr::lossy(&s[..max]))
             } else {
                 format!("'{t}'")
             }
@@ -244,7 +244,7 @@ pub fn trace_string(trace: &Value) -> String {
         for (_, e) in a.iter() {
             let Value::Array(e) = e else { continue };
             let get = |k: &str| e.get(&Key::Str(pstr(k)));
-            let s = |k: &str| get(k).and_then(|v| v.scalar_bytes()).map(|b| String::from_utf8_lossy(&b).into_owned());
+            let s = |k: &str| get(k).and_then(|v| v.scalar_bytes()).map(|b| crate::pstr::lossy(&b).into_owned());
             let place = match (s("file"), s("line")) {
                 (Some(f), Some(l)) => format!("{f}({l})"),
                 _ => "[internal function]".into(),

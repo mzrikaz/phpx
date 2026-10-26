@@ -101,7 +101,7 @@ pub fn default_zone(it: &Interp) -> Zone {
 }
 
 fn lossy(b: &[u8]) -> String {
-    String::from_utf8_lossy(b).into_owned()
+    crate::pstr::lossy(b).into_owned()
 }
 
 fn date_of(o: &Rc<Obj>) -> Option<DateState> {

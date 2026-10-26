@@ -286,7 +286,7 @@ fn libxml_error_object(it: &Interp, e: &(u8, i64, String, String, u32)) -> R<Val
 // ---- small helpers -------------------------------------------------------------
 
 pub fn text(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 pub fn opt_text(it: &Interp, a: &[Value], i: usize) -> R<Option<String>> {

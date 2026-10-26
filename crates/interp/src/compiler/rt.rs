@@ -894,7 +894,7 @@ pub unsafe extern "C" fn rt_instanceof_dyn(c: *mut Cx, v: *const Value, class: *
     let r = (|| -> R<Value> {
         let lname = match (*class).deref() {
             Value::Object(c) => c.class.lname.clone(),
-            Value::Str(s) => it.lower.get(String::from_utf8_lossy(&s).trim_start_matches('\\')),
+            Value::Str(s) => it.lower.get(crate::pstr::lossy(&s).trim_start_matches('\\')),
             _ => return Err(it.error("Error", "Class name must be a valid object or a string")),
         };
         Ok(Value::Bool(matches!((*v).deref(), Value::Object(o) if o.class.is_a(&lname))))
@@ -1979,7 +1979,7 @@ unsafe fn expand_args(it: &Interp, vals: Vec<Value>, meta: *const ast::Arg) -> R
                 Value::Array(arr) => {
                     for (k, v) in arr.iter() {
                         match k {
-                            Key::Str(s) => named.push((Rc::from(String::from_utf8_lossy(&s).as_ref()), v)),
+                            Key::Str(s) => named.push((Rc::from(crate::pstr::lossy(&s).as_ref()), v)),
                             Key::Int(_) => pos.push(v),
                         }
                     }
@@ -1987,7 +1987,7 @@ unsafe fn expand_args(it: &Interp, vals: Vec<Value>, meta: *const ast::Arg) -> R
                 Value::Object(o) if o.class.is_a("traversable") => {
                     for (k, v) in it.iterate(&o)? {
                         match k {
-                            Value::Str(s) => named.push((Rc::from(String::from_utf8_lossy(&s).as_ref()), v)),
+                            Value::Str(s) => named.push((Rc::from(crate::pstr::lossy(&s).as_ref()), v)),
                             _ => pos.push(v),
                         }
                     }
@@ -2877,7 +2877,7 @@ pub unsafe extern "C" fn rt_unhandled_match(c: *mut Cx, v: *const Value) -> u64 
         Value::Str(_) | Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::Null => {
             let mut o = crate::value::Out(vec![]);
             crate::value::var_export(v, 0, &mut o);
-            String::from_utf8_lossy(&o.0).into_owned()
+            crate::pstr::lossy(&o.0).into_owned()
         }
         other => format!("of type {}", other.debug_type()),
     };

@@ -362,7 +362,7 @@ fn int_arg(it: &Interp, a: &[Value], i: usize) -> R<i64> {
 }
 
 fn str_arg(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 fn construct(it: &Interp, o: &Rc<Obj>, a: &[Value], func: &str) -> R<bool> {
@@ -370,7 +370,7 @@ fn construct(it: &Interp, o: &Rc<Obj>, a: &[Value], func: &str) -> R<bool> {
     let style = int_arg(it, a, 1)?;
     let pattern = match arg(a, 2) {
         Value::Null => None,
-        v => Some(String::from_utf8_lossy(&it.to_str(&v)?).into_owned()),
+        v => Some(crate::pstr::lossy(&it.to_str(&v)?).into_owned()),
     };
     match new_fmt(it, func, &locale, style, pattern)? {
         Ok(f) => {
@@ -873,7 +873,7 @@ macro_rules! static_fn {
 pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     grapheme::register(t);
     t.insert("__phpx_intl_missing", |it, _, a| {
-        let m = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
+        let m = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
         Err(it.error("Error", &format!("{m}() is not supported by phpx yet")))
     });
     t.insert("intl_get_error_code", |_, _, _| Ok(Value::Int(LAST.with(|l| l.borrow().0))));

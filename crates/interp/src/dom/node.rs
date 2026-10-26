@@ -387,7 +387,7 @@ fn node_list_args(it: &Interp, doc: &DocRef, a: &[Value], func: &str) -> R<Vec<I
                 out.push(adopt(it, doc, &src, id, Some(&o))?);
             }
             v => {
-                let s = String::from_utf8_lossy(&it.to_str(&v)?).into_owned();
+                let s = crate::pstr::lossy(&it.to_str(&v)?).into_owned();
                 let t = doc.borrow_mut().add(Node::new(TEXT, "#text", &s));
                 out.push(t);
             }

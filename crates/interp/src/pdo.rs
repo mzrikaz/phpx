@@ -295,7 +295,7 @@ fn int_arg(it: &Interp, a: &[Value], i: usize, d: i64) -> R<i64> {
 }
 
 fn str_arg(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&it.to_str(&arg(a, i))?).into_owned())
+    Ok(crate::pstr::lossy(&it.to_str(&arg(a, i))?).into_owned())
 }
 
 // ---- DSN and connecting ----------------------------------------------------------------
@@ -388,14 +388,14 @@ fn pdo_construct(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Valu
                 opts.timeout = Some(std::time::Duration::from_secs(attrs.timeout.max(0) as u64));
             }
             ATTR_AUTOCOMMIT => attrs.autocommit = to_bool(v),
-            MYSQL_ATTR_INIT_COMMAND => opts.init_command = Some(String::from_utf8_lossy(&it.to_str(v)?).into_owned()),
+            MYSQL_ATTR_INIT_COMMAND => opts.init_command = Some(crate::pstr::lossy(&it.to_str(v)?).into_owned()),
             MYSQL_ATTR_FOUND_ROWS => opts.found_rows = to_bool(v),
             MYSQL_ATTR_MULTI_STATEMENTS => opts.multi_statements = to_bool(v),
             MYSQL_ATTR_LOCAL_INFILE => opts.local_infile = to_bool(v),
             MYSQL_ATTR_USE_BUFFERED_QUERY => attrs.buffered = to_bool(v),
             MYSQL_ATTR_SSL_CA | MYSQL_ATTR_SSL_CAPATH | MYSQL_ATTR_SSL_CERT | MYSQL_ATTR_SSL_KEY => {
                 let s = ssl.get_or_insert_with(Default::default);
-                let p = String::from_utf8_lossy(&it.to_str(v)?).into_owned();
+                let p = crate::pstr::lossy(&it.to_str(v)?).into_owned();
                 if *k == MYSQL_ATTR_SSL_CA {
                     s.cafile = Some(p.into());
                 } else if *k == MYSQL_ATTR_SSL_CAPATH {
@@ -816,7 +816,7 @@ fn pdo_set_attribute(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<
         MYSQL_ATTR_USE_BUFFERED_QUERY => d.attrs.buffered = v.truthy(),
         ATTR_STATEMENT_CLASS => {
             let Value::Array(arr) = v else { return Ok(Value::Bool(false)) };
-            let name = arr.get(&Key::Int(0)).map(|n| it.to_str(&n)).transpose()?.map(|n| String::from_utf8_lossy(&n).into_owned()).unwrap_or_default();
+            let name = arr.get(&Key::Int(0)).map(|n| it.to_str(&n)).transpose()?.map(|n| crate::pstr::lossy(&n).into_owned()).unwrap_or_default();
             let cls = it.lookup_class(&name)?;
             let args = match arr.get(&Key::Int(1)) {
                 Some(Value::Array(x)) => x.values().collect(),
@@ -840,7 +840,7 @@ fn pkey(it: &Interp, v: &Value) -> R<PKey> {
     Ok(match v {
         Value::Int(n) => PKey::Pos(*n as usize),
         other => {
-            let s = String::from_utf8_lossy(&it.to_str(other)?).into_owned();
+            let s = crate::pstr::lossy(&it.to_str(other)?).into_owned();
             PKey::Name(if s.starts_with(':') { s } else { format!(":{s}") })
         }
     })
@@ -909,7 +909,7 @@ fn stmt_execute(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value
             let key = match k {
                 Key::Int(n) => PKey::Pos(n as usize + 1),
                 Key::Str(n) => {
-                    let n = String::from_utf8_lossy(&n).into_owned();
+                    let n = crate::pstr::lossy(&n).into_owned();
                     PKey::Name(if n.starts_with(':') { n } else { format!(":{n}") })
                 }
             };
@@ -928,7 +928,7 @@ fn stmt_execute(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<Value
             let key = match &k {
                 Key::Int(n) => PKey::Pos(*n as usize),
                 Key::Str(n) => {
-                    let n = String::from_utf8_lossy(n).into_owned();
+                    let n = crate::pstr::lossy(n).into_owned();
                     PKey::Name(if n.starts_with(':') { n } else { format!(":{n}") })
                 }
             };
@@ -1052,7 +1052,7 @@ fn make_row(it: &Interp, s: &StmtState, row: &[Cell], fm: &FetchMode) -> R<Value
                 cols.iter().zip(vals()).map(|(c, v)| (column_name(c, &attrs), v)).collect(),
             );
             let (cls, skip_first) = if fm.mode & FETCH_CLASSTYPE != 0 && !values.is_empty() {
-                let name = String::from_utf8_lossy(&it.to_str(&values[0].1)?).into_owned();
+                let name = crate::pstr::lossy(&it.to_str(&values[0].1)?).into_owned();
                 (it.find_class(&name)?.unwrap_or(cls), true)
             } else {
                 (cls, false)
@@ -1402,7 +1402,7 @@ fn stmt_column_meta(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, a: Vec<V
 fn stmt_debug_dump(it: &Interp, this: Option<&Rc<Obj>>, _: &Rc<Class>, _: Vec<Value>) -> R<Value> {
     let st = stmt_of(it, this)?;
     let s = st.borrow();
-    let mut out = format!("SQL: [{}] {}\nParams:  {}\n", s.sql.len(), String::from_utf8_lossy(&s.sql), s.bound.len());
+    let mut out = format!("SQL: [{}] {}\nParams:  {}\n", s.sql.len(), crate::pstr::lossy(&s.sql), s.bound.len());
     let mut keys: Vec<&PKey> = s.bound.keys().collect();
     keys.sort_by_key(|k| format!("{k:?}"));
     for k in keys {

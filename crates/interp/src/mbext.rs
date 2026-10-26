@@ -17,7 +17,7 @@ pub fn reset() {
 }
 
 fn text(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 fn lower(s: &str) -> String {
@@ -284,7 +284,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                     if !(after_word && pre.trim().is_empty()) {
                         out.push_str(pre);
                     }
-                    out.push_str(&String::from_utf8_lossy(&decoded));
+                    out.push_str(&crate::pstr::lossy(&decoded));
                     rest = &parts[2][end + 2..];
                     after_word = true;
                     continue;

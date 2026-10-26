@@ -116,7 +116,7 @@ fn str_decrement(it: &Interp, a: &[Value]) -> R<Value> {
     if !st.iter().all(u8::is_ascii_alphanumeric) {
         return Err(it.error("ValueError", "str_decrement(): Argument #1 ($string) must be composed only of alphanumeric ASCII characters"));
     }
-    let out_of_range = || it.error("ValueError", &format!("str_decrement(): Argument #1 ($string) \"{}\" is out of decrement range", String::from_utf8_lossy(&st)));
+    let out_of_range = || it.error("ValueError", &format!("str_decrement(): Argument #1 ($string) \"{}\" is out of decrement range", crate::pstr::lossy(&st)));
     if st[0] == b'0' {
         return Err(out_of_range());
     }

@@ -83,7 +83,7 @@ fn rebind(it: &Interp, c: &Callable, new_this: Value, scope: Option<Value>) -> R
     let scope_cls = match scope {
         Some(Value::Object(o)) => Some(o.class.clone()),
         Some(Value::Str(s)) if &*s == b"static" => cd.scope.clone(),
-        Some(Value::Str(s)) => Some(it.lookup_class(&String::from_utf8_lossy(&s))?),
+        Some(Value::Str(s)) => Some(it.lookup_class(&crate::pstr::lossy(&s))?),
         _ => this.as_ref().map(|o| o.class.clone()).or_else(|| cd.scope.clone()),
     };
     let kind = match &cd.kind {
@@ -151,7 +151,7 @@ fn enum_from(it: &Interp, _: Option<&Rc<Obj>>, cls: &Rc<Class>, args: Vec<Value>
         Some(c) => Ok(c),
         None => {
             let shown = match &v {
-                Value::Str(s) => format!("\"{}\"", String::from_utf8_lossy(s)),
+                Value::Str(s) => format!("\"{}\"", crate::pstr::lossy(s)),
                 other => it.to_string_lossy(other)?,
             };
             Err(it.error("ValueError", &format!("{shown} is not a valid backing value for enum {}", cls.name)))

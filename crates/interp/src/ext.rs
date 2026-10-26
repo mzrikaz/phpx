@@ -76,7 +76,7 @@ fn ser_obj(it: &Interp, o: &Rc<Obj>, out: &mut Vec<u8>) -> R<()> {
     let cname = o.class.name.clone();
     if o.class.is_enum() {
         let case = match o.get_prop("name") {
-            Some(Value::Str(n)) => String::from_utf8_lossy(&n).into_owned(),
+            Some(Value::Str(n)) => crate::pstr::lossy(&n).into_owned(),
             _ => String::new(),
         };
         let body = format!("{cname}:{case}");
@@ -217,7 +217,7 @@ impl Unser<'_> {
             },
             b'd' => {
                 let Some(raw) = self.until(b';') else { return Ok(None) };
-                let raw = String::from_utf8_lossy(raw).into_owned();
+                let raw = crate::pstr::lossy(raw).into_owned();
                 Value::Float(match raw.as_str() {
                     "NAN" => f64::NAN,
                     "INF" => f64::INFINITY,
@@ -266,7 +266,7 @@ impl Unser<'_> {
                 if self.expect(b';').is_none() {
                     return Ok(None);
                 }
-                let s = String::from_utf8_lossy(&s).into_owned();
+                let s = crate::pstr::lossy(&s).into_owned();
                 let Some((cls, case)) = s.split_once(':') else { return Ok(None) };
                 let Some(c) = it.find_class(cls)? else { return Ok(None) };
                 match c.consts.borrow().get(case) {
@@ -279,7 +279,7 @@ impl Unser<'_> {
             }
             b'O' | b'C' => {
                 let Some(name) = self.string() else { return Ok(None) };
-                let name = String::from_utf8_lossy(&name).into_owned();
+                let name = crate::pstr::lossy(&name).into_owned();
                 if self.expect(b':').is_none() {
                     return Ok(None);
                 }
@@ -314,7 +314,7 @@ impl Unser<'_> {
                     }
                     for (k, v) in data.iter() {
                         let k = match k {
-                            Key::Str(s) => String::from_utf8_lossy(&s).into_owned(),
+                            Key::Str(s) => crate::pstr::lossy(&s).into_owned(),
                             Key::Int(i) => i.to_string(),
                         };
                         // Strip visibility mangling ("\0Class\0name" / "\0*\0name"),
@@ -507,7 +507,7 @@ fn unpack(it: &Interp, a: &[Value]) -> R<Value> {
                 }
             }
         }
-        let name = String::from_utf8_lossy(&part[i..]).into_owned();
+        let name = crate::pstr::lossy(&part[i..]).into_owned();
         let key = |idx: usize, n: usize| -> Key {
             if name.is_empty() {
                 Key::Int(idx as i64 + 1)
@@ -994,7 +994,7 @@ pub fn version_compare(a: &str, b: &str) -> i32 {
 // ---- helpers ---------------------------------------------------------------------------
 
 fn bstr(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 fn span_len(sub: &[u8], mask: &[u8], accept: bool) -> usize {
@@ -1391,7 +1391,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("utf8_decode", |it, _, a| {
         it.deprecated("Function utf8_decode() is deprecated since 8.2, visit the php.net documentation for various alternatives");
         let st = s(it, a, 0)?;
-        Ok(Value::bytes(String::from_utf8_lossy(&st).chars().map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }).collect()))
+        Ok(Value::bytes(crate::pstr::lossy(&st).chars().map(|c| if (c as u32) < 256 { c as u8 } else { b'?' }).collect()))
     });
     t.insert("quoted_printable_encode", |it, _, a| {
         let st = s(it, a, 0)?;

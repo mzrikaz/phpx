@@ -178,7 +178,7 @@ fn run(it: &Interp, f: &mut Filter, data: Vec<u8>, closing: bool) -> R<Vec<u8>> 
                 head.push(data[i]);
                 i += 1;
                 if head.ends_with(b"\n") {
-                    let line = String::from_utf8_lossy(head).trim().to_string();
+                    let line = crate::pstr::lossy(head).trim().to_string();
                     head.clear();
                     if line.is_empty() {
                         continue;

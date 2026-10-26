@@ -132,7 +132,7 @@ impl Conn {
     pub fn read(&mut self) -> Result<Reply, IoError> {
         let line = self.line()?;
         let (kind, rest) = line.split_first().ok_or_else(|| IoError("protocol error".into()))?;
-        let text = String::from_utf8_lossy(rest).into_owned();
+        let text = crate::pstr::lossy(rest).into_owned();
         let num = || text.parse::<i64>().map_err(|_| IoError("protocol error".into()));
         Ok(match kind {
             b'+' => Reply::Status(text),

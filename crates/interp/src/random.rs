@@ -691,7 +691,7 @@ pub fn natives() -> Vec<(&'static str, &'static str, NativeMethod)> {
             }
             let kind = match arg(&a, 2) {
                 Value::Object(b) => match b.get_prop("name") {
-                    Some(Value::Str(n)) => String::from_utf8_lossy(&n).into_owned(),
+                    Some(Value::Str(n)) => crate::pstr::lossy(&n).into_owned(),
                     _ => "ClosedOpen".into(),
                 },
                 _ => "ClosedOpen".into(),

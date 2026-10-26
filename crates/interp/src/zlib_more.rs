@@ -10,7 +10,7 @@ use crate::interp::{BuiltinFn, Interp, R};
 use crate::value::{Internal, Key, NativeData, Obj, PhpArray, Value};
 
 fn text(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 /// Decompressed contents of a gzip (or plain) file.

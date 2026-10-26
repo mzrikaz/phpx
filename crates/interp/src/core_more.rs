@@ -103,7 +103,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let c = it.clone_object(&o)?;
         if let Value::Array(with) = arg(a, 1) {
             for (k, v) in with.iter() {
-                let name = String::from_utf8_lossy(&k.to_value().scalar_bytes().unwrap_or_default()).into_owned();
+                let name = crate::pstr::lossy(&k.to_value().scalar_bytes().unwrap_or_default()).into_owned();
                 c.set_prop(&name, v);
             }
         }

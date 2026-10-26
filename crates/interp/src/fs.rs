@@ -9,7 +9,7 @@ use crate::interp::{BuiltinFn, Interp, R};
 use crate::value::{Key, PhpArray, Value};
 
 fn path(it: &Interp, a: &[Value], i: usize) -> R<String> {
-    Ok(String::from_utf8_lossy(&s(it, a, i)?).into_owned())
+    Ok(crate::pstr::lossy(&s(it, a, i)?).into_owned())
 }
 
 /// PHP dirname(): handles trailing slashes, "." for bare names, "/" for root.

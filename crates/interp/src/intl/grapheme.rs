@@ -160,7 +160,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         while (offset as usize) < bytes.len() && bytes[offset as usize] & 0xC0 == 0x80 {
             offset += 1;
         }
-        let rest = String::from_utf8_lossy(&bytes[offset as usize..]).into_owned();
+        let rest = crate::pstr::lossy(&bytes[offset as usize..]).into_owned();
         let mut out = String::new();
         let (mut count, mut chars) = (0i64, 0i64);
         for g in rest.graphemes(true) {
