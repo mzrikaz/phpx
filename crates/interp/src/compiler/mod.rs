@@ -776,8 +776,10 @@ impl Native {
         if let Some(vcode) = ctx.compiled_code().and_then(|c| c.vcode.as_ref()).filter(|_| dump) {
             eprintln!("[native] code of {}:\n{vcode}", t.display);
         }
+        let size = ctx.compiled_code().map_or(0, |c| c.code_info().total_size);
         self.module.finalize_definitions().map_err(|_| "finalize failed")?;
         let ptr = self.module.get_finalized_function(id);
+        perf_map(ptr, size, &t.display);
         self.consts.extend(consts);
         self.sites.extend(sites);
         self.specs.push(spec);
@@ -785,6 +787,23 @@ impl Native {
         // SAFETY: generated with exactly the Entry signature.
         Ok(unsafe { std::mem::transmute::<*const u8, Entry>(ptr) })
     }
+}
+
+/// PHPX_PERF_MAP=1: append each compiled function to /tmp/perf-PID.map,
+/// so `perf report` names generated code by its PHP function.
+fn perf_map(ptr: *const u8, size: u32, name: &str) {
+    use std::io::Write;
+    thread_local! {
+        static MAP: Option<std::cell::RefCell<std::fs::File>> = std::env::var("PHPX_PERF_MAP").is_ok().then(|| {
+            let path = format!("/tmp/perf-{}.map", std::process::id());
+            std::cell::RefCell::new(std::fs::OpenOptions::new().create(true).append(true).open(path).expect("perf map"))
+        });
+    }
+    MAP.with(|m| {
+        if let Some(f) = m {
+            let _ = writeln!(f.borrow_mut(), "{:x} {:x} php::{name}", ptr as usize, size);
+        }
+    });
 }
 
 fn thread_cpu() -> u64 {
