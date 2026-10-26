@@ -2469,9 +2469,22 @@ impl Interp {
         // REVALIDATE ago (opcache.revalidate_freq): no stat at all.
         let key = (if p.is_absolute() { usize::MAX } else { f.ctx.file }, path);
         if crate::server::sapi() != "cli" {
-            let hit = RESOLVED.with(|r| r.borrow().get(&key as &dyn ResolvedKey).filter(|e| e.1.elapsed() < REVALIDATE).map(|e| e.0.clone()));
-            if let Some(canon) = hit {
-                if let Some((id, file)) = self.parsed_file(&canon) {
+            let hit = RESOLVED.with(|r| r.borrow().get(&key as &dyn ResolvedKey).map(|e| (e.0.clone(), e.1.elapsed() < REVALIDATE)));
+            if let Some((canon, fresh)) = hit {
+                // Due for a check: one stat of the file found last time
+                // (reparsed if it changed; a vanished file is resolved anew).
+                let found = if fresh {
+                    self.parsed_file(&canon)
+                } else {
+                    match self.load_file(&canon, &canon) {
+                        Ok(Ok(found)) => {
+                            RESOLVED.with(|r| r.borrow_mut().insert((key.0, key.1.to_string()), (canon.clone(), std::time::Instant::now())));
+                            Some(found)
+                        }
+                        _ => None,
+                    }
+                };
+                if let Some((id, file)) = found {
                     if matches!(kind, IncludeOnce | RequireOnce) && self.included.borrow().contains(&canon) {
                         return Ok(Value::Bool(true));
                     }
