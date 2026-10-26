@@ -48,6 +48,8 @@ struct Task {
     notified: bool,
     /// Lowest usable address of the task's stack.
     stack_limit: usize,
+    /// The size its stack was allocated with.
+    stack_size: usize,
     /// The task's `task_word` while it isn't running.
     word: usize,
 }
@@ -66,7 +68,7 @@ struct Scheduler {
     io_waiters: HashMap<usize, TaskId>,
     /// fd -> (readable, writable) of the event that woke its waiter.
     io_fired: HashMap<usize, (bool, bool)>,
-    stack_pool: Vec<DefaultStack>,
+    stack_pool: Vec<(usize, DefaultStack)>,
 }
 
 thread_local! {
@@ -108,9 +110,9 @@ pub fn stack_remaining() -> Option<usize> {
 /// Set the stack size for tasks spawned from now on (e.g. a tree-walking
 /// interpreter needs far more than compiled code). Must be called while idle.
 pub fn set_stack_size(bytes: usize) {
+    // (Pooled stacks are kept with their size: a server's root task
+    // alternates between sizes on every request.)
     STACK_SIZE.set(bytes.max(16 * 1024));
-    // Pooled stacks have the old size.
-    with(|s| s.stack_pool.clear());
 }
 
 pub fn stack_size() -> usize {
@@ -124,9 +126,14 @@ fn with<R>(f: impl FnOnce(&mut Scheduler) -> R) -> R {
 
 /// Spawn a raw task. Higher layers (`Promise`) wrap this to carry results.
 pub fn spawn_task(f: impl FnOnce() + 'static) -> TaskId {
-    let stack = match with(|s| s.stack_pool.pop()) {
+    let size = STACK_SIZE.get();
+    let pooled = with(|s| {
+        let at = s.stack_pool.iter().rposition(|e| e.0 == size)?;
+        Some(s.stack_pool.swap_remove(at).1)
+    });
+    let stack = match pooled {
         Some(st) => st,
-        None => DefaultStack::new(STACK_SIZE.get()).expect("failed to allocate task stack"),
+        None => DefaultStack::new(size).expect("failed to allocate task stack"),
     };
     use corosensei::stack::Stack;
     let stack_limit = stack.limit().get();
@@ -139,7 +146,7 @@ pub fn spawn_task(f: impl FnOnce() + 'static) -> TaskId {
         s.next_task += 1;
         s.tasks.insert(
             id,
-            Task { co: Some(co), state: State::Ready, cancelled: false, notified: false, stack_limit, word: 0 },
+            Task { co: Some(co), state: State::Ready, cancelled: false, notified: false, stack_limit, stack_size: size, word: 0 },
         );
         s.ready.push_back(id);
         id
@@ -450,16 +457,16 @@ fn run_task(id: TaskId) {
                 None
             }
             CoroutineResult::Return(()) => {
-                s.tasks.remove(&id);
-                Some(co)
+                let t = s.tasks.remove(&id);
+                Some((co, t.map_or(0, |t| t.stack_size)))
             }
         }
     });
-    if let Some(co) = finished {
+    if let Some((co, size)) = finished {
         let stack = co.into_stack();
         with(|s| {
             if s.stack_pool.len() < STACK_POOL_MAX {
-                s.stack_pool.push(stack);
+                s.stack_pool.push((size, stack));
             }
         });
     }
