@@ -2324,7 +2324,7 @@ impl Interp {
             }
         }
         // Native methods: per class, plus the shared enum helpers.
-        for ((cl, m), fun) in &self.natives {
+        for ((cl, m), fun) in self.natives.iter() {
             let applies = **cl == *lname || (*cl == "*enum" && c.kind == ClassKind::Enum);
             if applies {
                 let (is_static, mname) = match m.strip_prefix("static ") {

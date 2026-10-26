@@ -666,7 +666,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("get_defined_constants", |it, _, a| {
         thread_local! {
-            static BUILTIN: std::collections::HashSet<String> = constants().into_keys().collect();
+            static BUILTIN: std::collections::HashSet<String> = constants().into_keys().chain(["STDIN", "STDOUT", "STDERR"].map(String::from)).collect();
         }
         let categorize = has(a, 0) && arg(a, 0).truthy();
         let consts = it.constants.borrow();
@@ -676,7 +676,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         BUILTIN.with(|b| {
             for n in names {
                 let target = if b.contains(n) { &mut core } else { &mut user };
-                target.insert(Key::Str(crate::value::pstr(n)), consts[n].clone());
+                target.insert(Key::Str(crate::value::pstr(n)), consts.get(n).cloned().unwrap_or(Value::Null));
             }
         });
         if !categorize {

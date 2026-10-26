@@ -651,10 +651,14 @@ pub fn io_msg(e: &std::io::Error) -> &'static str {
 }
 
 /// STDIN / STDOUT / STDERR (resources 1..3).
-pub fn std_constants(add: &mut dyn FnMut(&str, Value)) {
+/// STDIN, STDOUT and STDERR: new resources for every request.
+pub fn std_streams(add: &mut dyn FnMut(&str, Value)) {
     add("STDIN", Resource::new("stream", Box::new(Stream::new(Backend::Stdin, "r", "php://stdin", "PHP"))));
     add("STDOUT", Resource::new("stream", Box::new(Stream::new(Backend::Stdout, "w", "php://stdout", "PHP"))));
     add("STDERR", Resource::new("stream", Box::new(Stream::new(Backend::Stderr, "w", "php://stderr", "PHP"))));
+}
+
+pub fn std_constants(add: &mut dyn FnMut(&str, Value)) {
     for (k, v) in [
         ("SEEK_SET", 0),
         ("SEEK_CUR", 1),

@@ -149,6 +149,18 @@ thread_local! {
     static PARSE_GEN: Cell<u64> = const { Cell::new(0) };
 }
 
+/// The built-in functions (the same for every interpreter: built once).
+fn builtin_table() -> &'static FxHashMap<&'static str, BuiltinFn> {
+    static T: std::sync::OnceLock<FxHashMap<&'static str, BuiltinFn>> = std::sync::OnceLock::new();
+    T.get_or_init(|| crate::builtins::table().into_iter().collect())
+}
+
+/// Natively implemented methods of built-in classes (built once).
+fn native_table() -> &'static FxHashMap<(&'static str, &'static str), NativeMethod> {
+    static T: std::sync::OnceLock<FxHashMap<(&'static str, &'static str), NativeMethod>> = std::sync::OnceLock::new();
+    T.get_or_init(|| crate::native::table().into_iter().collect())
+}
+
 /// See PARSE_GEN.
 pub(crate) fn parse_gen() -> u64 {
     PARSE_GEN.with(|g| g.get())
@@ -368,14 +380,14 @@ impl Frame {
 pub struct Interp {
     pub files: RefCell<Vec<FileInfo>>,
     pub functions: RefCell<FxHashMap<Rc<str>, Rc<UserFn>>>,
-    pub builtins: FxHashMap<&'static str, BuiltinFn>,
+    pub builtins: &'static FxHashMap<&'static str, BuiltinFn>,
     /// Functions found for string callables ('strlen', 'App\\helper').
     pub str_callables: RefCell<FxHashMap<Box<[u8]>, Callable>>,
     /// Named-argument names from the source, shared (keyed by address).
     arg_names: RefCell<FxHashMap<usize, Rc<str>>>,
-    pub natives: HashMap<(&'static str, &'static str), NativeMethod>,
+    pub natives: &'static FxHashMap<(&'static str, &'static str), NativeMethod>,
     pub classes: RefCell<FxHashMap<Rc<str>, Rc<Class>>>,
-    pub constants: RefCell<HashMap<String, Value>>,
+    pub constants: RefCell<crate::consts::Constants>,
     /// Function `static $x` slots, keyed by declaration address + class.
     pub statics: RefCell<HashMap<(usize, Rc<str>), HashMap<Rc<str>, Slot>>>,
     /// Output buffer stack; index 0 is flushed to `writer`.
@@ -473,10 +485,10 @@ impl Interp {
             functions: RefCell::new(FxHashMap::default()),
             str_callables: RefCell::new(FxHashMap::default()),
             arg_names: RefCell::new(FxHashMap::default()),
-            builtins: crate::builtins::table().into_iter().collect(),
-            natives: crate::native::table().into_iter().collect(),
+            builtins: builtin_table(),
+            natives: native_table(),
             classes: RefCell::new(FxHashMap::default()),
-            constants: RefCell::new(crate::builtins::constants().into_iter().collect()),
+            constants: RefCell::new(crate::consts::Constants::new()),
             statics: RefCell::new(HashMap::default()),
             out: RefCell::new(vec![vec![]]),
             writer: RefCell::new(writer),
