@@ -529,8 +529,14 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("base64_decode", |it, _, a| Ok(base64_decode(&s(it, a, 0)?).map(Value::bytes).unwrap_or(Value::Bool(false))));
     t.insert("urlencode", |it, _, a| Ok(Value::str(&url_encode(&s(it, a, 0)?, true))));
     t.insert("rawurlencode", |it, _, a| Ok(Value::str(&url_encode(&s(it, a, 0)?, false))));
-    t.insert("urldecode", |it, _, a| b(url_decode(&s(it, a, 0)?, true)));
-    t.insert("rawurldecode", |it, _, a| b(url_decode(&s(it, a, 0)?, false)));
+    t.insert("urldecode", |it, _, a| match arg(a, 0) {
+        Value::Str(v) if !url_encoded(&v, true) => Ok(Value::Str(v)),
+        _ => b(url_decode(&s(it, a, 0)?, true)),
+    });
+    t.insert("rawurldecode", |it, _, a| match arg(a, 0) {
+        Value::Str(v) if !url_encoded(&v, false) => Ok(Value::Str(v)),
+        _ => b(url_decode(&s(it, a, 0)?, false)),
+    });
     t.insert("http_build_query", |it, _, a| {
         let Value::Array(x) = arg(a, 0) else { return Ok(Value::str("")) };
         let mut parts = vec![];
@@ -1029,26 +1035,35 @@ fn url_encode(s: &[u8], plus: bool) -> String {
 }
 
 fn url_decode(s: &[u8], plus: bool) -> Vec<u8> {
-    let mut out = vec![];
+    let hex = |c: u8| match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
+    };
+    let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {
         match s[i] {
             b'+' if plus => out.push(b' '),
-            b'%' if i + 2 < s.len() => {
-                match std::str::from_utf8(&s[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                    Some(b) => {
-                        out.push(b);
-                        i += 3;
-                        continue;
-                    }
-                    None => out.push(b'%'),
+            b'%' if i + 2 < s.len() => match (hex(s[i + 1]), hex(s[i + 2])) {
+                (Some(h), Some(l)) => {
+                    out.push(h << 4 | l);
+                    i += 3;
+                    continue;
                 }
-            }
+                _ => out.push(b'%'),
+            },
             c => out.push(c),
         }
         i += 1;
     }
     out
+}
+
+/// Whether url_decode would change `s` (else the string is returned as is).
+fn url_encoded(s: &[u8], plus: bool) -> bool {
+    s.iter().any(|&c| c == b'%' || (plus && c == b'+'))
 }
 
 fn build_query(it: &Interp, a: &PhpArray, prefix: Option<&str>, out: &mut Vec<String>) -> R<()> {
