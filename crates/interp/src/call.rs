@@ -497,7 +497,25 @@ impl Interp {
             }
             "extract" => return self.extract(f, args),
             "eval" => return self.eval_code(f, args),
-            "func_get_args" => return Ok(Value::array(PhpArray::from_list(f.args.clone()))),
+            "func_get_args" => {
+                // Parameters as they are now, extra arguments as passed.
+                let rec = unsafe { crate::trace::top().as_ref() };
+                let params: &[ast::Param] = match rec {
+                    Some(r) if !r.params.is_null() && std::ptr::eq(r.frame, f) => unsafe { std::slice::from_raw_parts(r.params, r.nparams) },
+                    _ => &[],
+                };
+                let fixed = params.iter().position(|p| p.variadic).unwrap_or(params.len());
+                let vals: Vec<Value> = f
+                    .args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| match params.get(i).filter(|_| i < fixed).and_then(|p| f.vars.get(&p.name.name)) {
+                        Some(s) => s.borrow().deref(),
+                        None => a.clone(),
+                    })
+                    .collect();
+                return Ok(Value::array(PhpArray::from_list(vals)));
+            }
             "get_defined_vars" => {
                 let mut out = PhpArray::new();
                 for (name, s) in f.vars.iter() {
