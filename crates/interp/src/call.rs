@@ -1077,6 +1077,7 @@ impl Interp {
     /// whole call (and every PHP call nested in it), so everything not
     /// needed while the body runs lives in separate non-inlined helpers.
     fn invoke(&self, inv: Invoke, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
+        crate::phpprof::count(0);
         if phpx_runtime::stack_remaining().is_some_and(|r| r < STACK_RESERVE) {
             return Err(self.stack_overflow());
         }

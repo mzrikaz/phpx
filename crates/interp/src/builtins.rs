@@ -59,6 +59,7 @@ pub fn reserve(it: &Interp, bytes: usize) -> R<()> {
 /// (when it has one), then run it guarded.
 pub fn invoke(it: &Interp, name: &str, spec: Option<&crate::arginfo::Spec>, fun: crate::interp::BuiltinFn, f: &mut crate::interp::Frame, args: &mut [Value]) -> R<Value> {
     if crate::phpprof::timing() {
+        crate::phpprof::count(1);
         let t = std::time::Instant::now();
         let r = invoke_inner(it, name, spec, fun, f, args);
         crate::phpprof::record_builtin(name, t.elapsed().as_nanos() as u64);

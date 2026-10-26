@@ -165,6 +165,7 @@ pub fn finish() {
     };
     show("self", &own);
     show("inclusive", &incl);
+    eprintln!("--- calls: generic {}, built-in {}", COUNTS[0].load(Ordering::Relaxed), COUNTS[1].load(Ordering::Relaxed));
     (|| {
         let b = BUILTINS.lock().ok()?;
         let b = b.as_ref()?;
@@ -178,4 +179,15 @@ pub fn finish() {
     })();
     let out: String = folded.iter().map(|(k, v)| format!("{k} {v}\n")).collect();
     let _ = std::fs::write(path, out);
+}
+
+/// Event counters (PHPX_PROFILE_PHP): generic calls, builtin calls,
+/// compiled-to-compiled calls.
+pub static COUNTS: [AtomicUsize; 4] = [const { AtomicUsize::new(0) }; 4];
+
+#[inline(always)]
+pub fn count(i: usize) {
+    if timing() {
+        COUNTS[i].fetch_add(1, Ordering::Relaxed);
+    }
 }
