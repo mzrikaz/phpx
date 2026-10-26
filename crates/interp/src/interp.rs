@@ -1330,6 +1330,16 @@ impl Interp {
         self.init_props(&o, &cls).ok();
         o.set_prop("message", Value::str(msg));
         self.set_throw_site(&o);
+        static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *TRACE.get_or_init(|| std::env::var_os("PHPX_TRACE_THROW").is_some()) {
+            let (file, line) = self.here();
+            eprintln!("[throw] {class}: {msg} at {file}:{line}");
+            if std::env::var("PHPX_TRACE_THROW").as_deref() == Ok("2") {
+                for e in crate::trace::entries(self, false, 0).iter().take(12) {
+                    eprintln!("    {}:{} {}", e.file.as_deref().unwrap_or("[internal]"), e.line, e.function);
+                }
+            }
+        }
         Ctrl::Throw(o)
     }
 

@@ -505,7 +505,16 @@ impl Interp {
             Throw(x) => {
                 let v = self.eval(f, x)?;
                 match v {
-                    Value::Object(o) if o.class.is_a("throwable") => return Err(Ctrl::Throw(o)),
+                    Value::Object(o) if o.class.is_a("throwable") => {
+                        // PHPX_TRACE_THROW=1: log every throw (debugging code that
+                        // swallows exceptions).
+                        static TRACE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                        if *TRACE.get_or_init(|| std::env::var_os("PHPX_TRACE_THROW").is_some()) {
+                            let p = |n: &str| o.get_prop(n).map(|v| String::from_utf8_lossy(&v.scalar_bytes().unwrap_or_default()).into_owned()).unwrap_or_default();
+                            eprintln!("[throw] {}: {} at {}:{}", o.class.name, p("message"), p("file"), p("line"));
+                        }
+                        return Err(Ctrl::Throw(o));
+                    }
                     _ => return Err(self.error("Error", "Can only throw objects")),
                 }
             }
