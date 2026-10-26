@@ -178,7 +178,7 @@ fn free_leftovers() {
             for sp in cls.static_props.values() {
                 held.push(Box::new(sp.value.borrow_mut().take()));
             }
-            held.push(Box::new(std::mem::take(&mut *cls.consts.borrow_mut())));
+            held.push(Box::new(cls.consts.replace(cls.consts_init.clone())));
             c = cls.parent.clone();
         }
     }

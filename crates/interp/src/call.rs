@@ -9,6 +9,35 @@ use crate::class::{Class, ConstSlot, Method, MethodBody, PropDecl, PropDefault, 
 use crate::interp::{qualify, slot, Callable, ClosureKind, Ctrl, Flow, Frame, Interp, NsCtx, UserFn, R};
 use crate::value::{Internal, Key, Obj, PhpArray, Value};
 
+thread_local! {
+    /// Classes this thread's earlier requests built, by declaration (like
+    /// opcache's immutable classes): declaring one again reuses it when
+    /// nothing it was built from changed.
+    static BUILT: std::cell::RefCell<rustc_hash::FxHashMap<usize, Rc<Class>>> = Default::default();
+    /// Classes the current request declared.
+    static IN_USE: std::cell::RefCell<Vec<Rc<Class>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A new request: the classes the last one declared go back to their
+/// state as built (constants unevaluated, static properties unset).
+/// Destructors queued by what they held are dropped, as PHP runs none
+/// after shutdown.
+pub(crate) fn reset_classes() {
+    let used = IN_USE.with(|u| std::mem::take(&mut *u.borrow_mut()));
+    let mut held: Vec<Box<dyn std::any::Any>> = vec![];
+    for cls in &used {
+        held.push(Box::new(cls.consts.replace(cls.consts_init.clone())));
+        for sp in cls.static_props.values() {
+            if *sp.declaring == *cls.lname {
+                held.push(Box::new(sp.value.borrow_mut().take()));
+            }
+        }
+        held.push(Box::new(cls.prop_template.borrow_mut().take()));
+    }
+    drop(held);
+    drop(crate::value::DESTRUCT_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut())));
+}
+
 /// By-reference parameter positions not in the arginfo table (variadic
 /// ones expanded, and phpx-only built-ins).
 const BY_REF: &[(&str, usize)] = &[
@@ -1817,9 +1846,52 @@ impl Interp {
     }
 
     pub fn declare_class(&self, c: &'static ast::Class, ctx: &Rc<NsCtx>) -> R<Rc<Class>> {
-        let cls = self.build_class(c, ctx, None)?;
-        self.declared.borrow_mut().insert(c as *const _ as usize);
+        let key = c as *const _ as usize;
+        let cached = BUILT.with(|b| b.borrow().get(&key).cloned());
+        let cls = match cached {
+            Some(cls) if self.can_reuse(&cls, c, ctx)? => {
+                self.classes.borrow_mut().insert(cls.lname.clone(), cls.clone());
+                cls
+            }
+            _ => {
+                let cls = self.build_class(c, ctx, None)?;
+                BUILT.with(|b| b.borrow_mut().insert(key, cls.clone()));
+                cls
+            }
+        };
+        IN_USE.with(|u| u.borrow_mut().push(cls.clone()));
+        self.declared.borrow_mut().insert(key);
         Ok(cls)
+    }
+
+    /// Whether a class an earlier request built from this declaration is
+    /// what building it now would give: same names in scope, and its
+    /// parent, interfaces and traits resolve to the very classes it was
+    /// built with (looked up in the order building does, so autoloading
+    /// and its errors happen the same way).
+    fn can_reuse(&self, cls: &Rc<Class>, c: &'static ast::Class, ctx: &Rc<NsCtx>) -> R<bool> {
+        if self.classes.borrow().contains_key(&*cls.lname) || !(Rc::ptr_eq(&cls.decl_ctx, ctx) || *cls.decl_ctx == **ctx) {
+            return Ok(false);
+        }
+        let (parent, ifaces) = match c.kind {
+            ClassKind::Interface => (None, &c.extends[..]),
+            _ => (c.extends.first(), &c.implements[..]),
+        };
+        if let Some(p) = parent {
+            let pc = self.lookup_class(&self.resolve_class_name(ctx, p))?;
+            if !cls.parent.as_ref().is_some_and(|q| Rc::ptr_eq(q, &pc)) {
+                return Ok(false);
+            }
+        }
+        let traits = c.members.iter().filter_map(|m| if let Member::TraitUse { traits, .. } = m { Some(traits) } else { None }).flatten();
+        let mut deps = cls.deps.iter();
+        for n in ifaces.iter().chain(traits) {
+            let d = self.lookup_class(&self.resolve_class_name(ctx, n))?;
+            if !deps.next().is_some_and(|q| Rc::ptr_eq(q, &d)) {
+                return Ok(false);
+            }
+        }
+        Ok(deps.next().is_none())
     }
 
     /// `anon_at`: an anonymous class's declaration site (`file:line$n`).
@@ -1870,6 +1942,8 @@ impl Interp {
         let decl_name: Rc<str> = anon_name.clone().unwrap_or_else(|| display.clone());
         let mut ancestors: Vec<Rc<str>> = vec![lname.clone()];
         let mut consts: crate::value::FxIndexMap<Rc<str>, ConstSlot> = Default::default();
+        let mut consts_init: crate::value::FxIndexMap<Rc<str>, ConstSlot> = Default::default();
+        let mut deps: Vec<Rc<Class>> = vec![];
         let mut methods: crate::value::FxIndexMap<Rc<str>, Rc<Method>> = Default::default();
         let mut used_traits: Vec<Rc<str>> = vec![];
         let mut shadowed: Vec<(Rc<str>, Rc<str>, Rc<str>)> = parent.as_ref().map(|p| p.shadowed.clone()).unwrap_or_default();
@@ -1880,6 +1954,7 @@ impl Interp {
         if let Some(p) = &parent {
             ancestors.extend(p.ancestors.iter().cloned());
             consts.extend(p.consts.borrow().iter().map(|(k, v)| (k.clone(), v.clone())));
+            consts_init.extend(p.consts_init.iter().map(|(k, v)| (k.clone(), v.clone())));
             methods.extend(p.methods.iter().map(|(k, v)| (k.clone(), v.clone())));
             props.extend(p.props.iter().cloned());
             static_props.extend(p.static_props.iter().map(|(k, v)| (k.clone(), v.clone())));
@@ -1893,6 +1968,10 @@ impl Interp {
             for (k, v) in iface.consts.borrow().iter() {
                 consts.entry(k.clone()).or_insert_with(|| v.clone());
             }
+            for (k, v) in &iface.consts_init {
+                consts_init.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+            deps.push(iface.clone());
             for (k, v) in &iface.methods {
                 methods.entry(k.clone()).or_insert_with(|| v.clone());
             }
@@ -1917,6 +1996,7 @@ impl Interp {
                             return Err(self.error("Error", &format!("{name} cannot use {} - it is not a trait", tc.name)));
                         }
                         used_traits.push(tc.name.clone());
+                        deps.push(tc.clone());
                         let excluded = |mname: &str| {
                             adaptations.iter().any(|a| match a {
                                 ast::TraitAdaptation::Insteadof { trait_, method, instead_of } => {
@@ -1986,12 +2066,17 @@ impl Interp {
                         for (k, v) in tc.consts.borrow().iter() {
                             consts.entry(k.clone()).or_insert_with(|| v.clone());
                         }
+                        for (k, v) in &tc.consts_init {
+                            consts_init.entry(k.clone()).or_insert_with(|| v.clone());
+                        }
                     }
                 }
                 Member::Const { items, attrs, .. } => {
                     let deprecated = attrs.iter().find(|a| self.resolve_class_name(ctx, &a.name).eq_ignore_ascii_case("Deprecated"));
                     for (n, e) in items {
-                        consts.insert(Rc::from(&*n.name), ConstSlot::Pending { expr: e, declaring: lname.clone(), ctx: ctx.clone() });
+                        let slot = ConstSlot::Pending { expr: e, declaring: lname.clone(), ctx: ctx.clone() };
+                        consts_init.insert(Rc::from(&*n.name), slot.clone());
+                        consts.insert(Rc::from(&*n.name), slot);
                         deprecated_consts.retain(|d| *d.0 != *n.name);
                         if let Some(a) = deprecated {
                             deprecated_consts.push((Rc::from(&*n.name), display.clone(), a, ctx.clone()));
@@ -2149,6 +2234,11 @@ impl Interp {
         let ctor = methods.get("__construct").cloned();
         let magic = crate::expr::MAGIC_NAMES.map(|n| methods.get(n).cloned());
         let plain_new = c.kind == ClassKind::Class && !is_abstract && !ancestors.iter().any(|a| &**a == "throwable");
+        for (cn, ve) in case_values {
+            let slot = ConstSlot::EnumCase { name: cn.clone(), value: ve, ctx: ctx.clone() };
+            consts_init.insert(cn.clone(), slot.clone());
+            consts.insert(cn, slot);
+        }
         let cls = Rc::new(Class {
             name: display.clone(),
             lname: lname.clone(),
@@ -2157,6 +2247,8 @@ impl Interp {
             ancestors,
             is_abstract,
             consts: std::cell::RefCell::new(consts),
+            consts_init,
+            deps,
             deprecated_consts,
             static_props,
             props,
@@ -2179,9 +2271,6 @@ impl Interp {
         // Anonymous classes too, under their unique internal name: methods
         // find their scope through it.
         self.classes.borrow_mut().insert(lname.clone(), cls.clone());
-        for (cn, ve) in case_values {
-            cls.consts.borrow_mut().insert(cn.clone(), ConstSlot::EnumCase { name: cn, value: ve, ctx: ctx.clone() });
-        }
         Ok(cls)
     }
 

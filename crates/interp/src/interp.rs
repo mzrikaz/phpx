@@ -59,6 +59,7 @@ pub struct Pos {
 }
 
 /// Name-resolution context of one `namespace` block in one file.
+#[derive(PartialEq)]
 pub struct NsCtx {
     pub ns: String,
     /// Lowercase alias -> full class/namespace name.
@@ -445,6 +446,7 @@ impl Interp {
         // nothing of the last one's request may show through. (The native
         // compiler's caches go first: they can hold that request's objects.)
         let native = crate::compiler::for_new_interp();
+        crate::call::reset_classes();
         crate::gc::new_request();
         crate::reset_request_state();
         crate::value::builtin_shadowed().store(false, std::sync::atomic::Ordering::Relaxed);

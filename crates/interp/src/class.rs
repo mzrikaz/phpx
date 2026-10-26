@@ -125,6 +125,12 @@ pub struct Class {
     pub ancestors: Vec<Rc<str>>,
     pub is_abstract: bool,
     pub consts: RefCell<crate::value::FxIndexMap<Rc<str>, ConstSlot>>,
+    /// The constants before any was evaluated (a class reused by a later
+    /// request starts from these).
+    pub consts_init: crate::value::FxIndexMap<Rc<str>, ConstSlot>,
+    /// The interfaces and traits it was built with, as resolved: a later
+    /// request reuses the class only when they resolve the same.
+    pub deps: Vec<Rc<Class>>,
     /// Constants marked `#[\Deprecated]`: name -> (declaring class name,
     /// the attribute, its namespace context).
     pub deprecated_consts: Vec<(Rc<str>, Rc<str>, &'static ast::Attribute, Rc<NsCtx>)>,
