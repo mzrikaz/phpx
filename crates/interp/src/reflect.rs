@@ -78,40 +78,52 @@ struct AttrReg {
 }
 
 thread_local! {
-    static FNS: RefCell<(Vec<FnReg>, HashMap<usize, usize>)> = RefCell::new((vec![], HashMap::new()));
-    static ATTRS: RefCell<(Vec<AttrReg>, HashMap<usize, usize>)> = RefCell::new((vec![], HashMap::new()));
-    /// Descriptors per class (classes never change once declared): kind
-    /// (class, properties, defaults) -> class -> descriptor.
-    static DESCS: RefCell<[HashMap<usize, (Rc<Class>, Value)>; 3]> = Default::default();
+    /// Registered by (declaration, class): a trait's methods and
+    /// attributes are registered once per class using them.
+    static FNS: RefCell<(Vec<FnReg>, HashMap<(usize, Option<Rc<str>>), usize>)> = RefCell::new((vec![], HashMap::new()));
+    static ATTRS: RefCell<(Vec<AttrReg>, HashMap<(usize, Option<Rc<str>>), usize>)> = RefCell::new((vec![], HashMap::new()));
+    /// Descriptors per class (classes never change once declared, and a
+    /// server worker reuses them across requests): kind (class,
+    /// properties, defaults, methods) -> class -> descriptor.
+    static DESCS: RefCell<[HashMap<usize, (Rc<Class>, Value)>; 4]> = Default::default();
+    /// Method descriptors by (class, method).
+    static METHODS: RefCell<HashMap<(usize, usize), (Rc<Class>, Rc<crate::class::Method>, Value)>> = Default::default();
+    /// Function descriptors by (registered id, name).
+    static SRCS: RefCell<HashMap<(i64, String), Value>> = Default::default();
 }
 
-/// `make(cls)`, computed once per class.
+const DEFAULTS: usize = 2;
+
+/// `make(cls)`, computed once per class. (Not for anonymous classes: each
+/// request declares new ones.)
 fn cached(kind: usize, cls: &Rc<Class>, make: impl FnOnce() -> R<Value>) -> R<Value> {
     let key = Rc::as_ptr(cls) as usize;
     if let Some(v) = DESCS.with(|d| d.borrow()[kind].get(&key).map(|e| e.1.clone())) {
         return Ok(v);
     }
     let v = make()?;
-    DESCS.with(|d| d.borrow_mut()[kind].insert(key, (cls.clone(), v.clone())));
+    if cls.anon_name.is_none() {
+        DESCS.with(|d| d.borrow_mut()[kind].insert(key, (cls.clone(), v.clone())));
+    }
     Ok(v)
 }
 
-/// Registries hold one interpreter's contexts (server workers).
+/// A new request: descriptors stay (they describe declarations, which a
+/// worker keeps), except default values, which are evaluated.
 pub fn reset() {
-    FNS.with(|r| *r.borrow_mut() = (vec![], HashMap::new()));
-    ATTRS.with(|r| *r.borrow_mut() = (vec![], HashMap::new()));
-    DESCS.with(|d| *d.borrow_mut() = Default::default());
+    DESCS.with(|d| d.borrow_mut()[DEFAULTS].clear());
 }
 
 fn fn_id(src: Src, ctx: &Rc<NsCtx>, class: Option<Rc<str>>) -> i64 {
     FNS.with(|r| {
         let mut r = r.borrow_mut();
-        if let Some(&i) = r.1.get(&src.key()) {
+        let key = (src.key(), class);
+        if let Some(&i) = r.1.get(&key) {
             return i as i64;
         }
         let i = r.0.len();
-        r.0.push(FnReg { src, ctx: ctx.clone(), class });
-        r.1.insert(src.key(), i);
+        r.0.push(FnReg { src, ctx: ctx.clone(), class: key.1.clone() });
+        r.1.insert(key, i);
         i as i64
     })
 }
@@ -239,7 +251,7 @@ fn attrs_desc(it: &Interp, attrs: &'static [ast::Attribute], ctx: &Rc<NsCtx>, cl
     for a in attrs {
         let id = ATTRS.with(|r| {
             let mut r = r.borrow_mut();
-            let key = a as *const _ as usize;
+            let key = (a as *const _ as usize, class.clone());
             if let Some(&i) = r.1.get(&key) {
                 return i;
             }
@@ -339,6 +351,16 @@ fn default_const(it: &Interp, ctx: &NsCtx, e: Option<&ast::Expr>) -> Value {
 
 /// Description of a user function / closure / method body.
 fn src_desc(it: &Interp, id: i64, name: &str) -> Value {
+    let key = (id, name.to_string());
+    if let Some(v) = SRCS.with(|c| c.borrow().get(&key).cloned()) {
+        return v;
+    }
+    let v = src_desc_uncached(it, id, name);
+    SRCS.with(|c| c.borrow_mut().insert(key, v.clone()));
+    v
+}
+
+fn src_desc_uncached(it: &Interp, id: i64, name: &str) -> Value {
     let Some((src, ctx)) = fn_reg(id, |r| (r.src, r.ctx.clone())) else { return Value::Null };
     let class = fn_reg(id, |r| r.class.clone()).flatten();
     let (doc, by_ref, generator, is_static, end) = match src {
@@ -408,7 +430,19 @@ fn builtin_desc(name: &str) -> Value {
     ])
 }
 
-fn method_desc(it: &Interp, cls: &Rc<Class>, m: &crate::class::Method) -> Value {
+fn method_desc(it: &Interp, cls: &Rc<Class>, m: &Rc<crate::class::Method>) -> Value {
+    let key = (Rc::as_ptr(cls) as usize, Rc::as_ptr(m) as usize);
+    if let Some(v) = METHODS.with(|c| c.borrow().get(&key).map(|e| e.2.clone())) {
+        return v;
+    }
+    let v = method_desc_uncached(it, cls, m);
+    if cls.anon_name.is_none() {
+        METHODS.with(|c| c.borrow_mut().insert(key, (cls.clone(), m.clone(), v.clone())));
+    }
+    v
+}
+
+fn method_desc_uncached(it: &Interp, cls: &Rc<Class>, m: &crate::class::Method) -> Value {
     let declaring = class_by_lname(it, &m.declaring).map(|c| c.php_name().to_string()).unwrap_or_else(|| cls.php_name().to_string());
     let fid = match &m.body {
         MethodBody::User(f) => fn_id(Src::Func(f), &m.ctx, Some(m.declaring.clone())),
@@ -802,7 +836,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     }));
     t.insert("__phpx_refl_methods", |it, _, a| {
         let Some(c) = class_arg(it, &arg(a, 0))? else { return Ok(list(vec![])) };
-        Ok(list(method_order(&c).iter().map(|m| method_desc(it, &c, m)).collect()))
+        cached(3, &c, || Ok(list(method_order(&c).iter().map(|m| method_desc(it, &c, m)).collect())))
     });
     t.insert("__phpx_refl_method", |it, _, a| {
         let Some(c) = class_arg(it, &arg(a, 0))? else { return Ok(Value::Null) };
@@ -816,7 +850,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     // ReflectionClass::getDefaultProperties().
     t.insert("__phpx_refl_default_props", |it, _, a| {
         let Some(c) = class_arg(it, &arg(a, 0))? else { return Ok(Value::array(PhpArray::new())) };
-        cached(2, &c, || {
+        cached(DEFAULTS, &c, || {
             let mut out = PhpArray::new();
             let Value::Array(props) = cached(1, &c, || Ok(props_desc(it, &c)))? else { return Ok(Value::array(out)) };
             for (_, p) in props.iter() {
