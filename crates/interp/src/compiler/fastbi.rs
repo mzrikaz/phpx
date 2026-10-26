@@ -45,6 +45,7 @@ pub fn lookup(name: &str, nargs: usize) -> Option<&'static str> {
         ("ucfirst", 1) => "rt_fast_ucfirst",
         ("lcfirst", 1) => "rt_fast_lcfirst",
         ("str_repeat", 2) => "rt_fast_str_repeat",
+        ("get_class", 1) => "rt_fast_get_class",
         _ => return None,
     })
 }
@@ -135,6 +136,12 @@ pub unsafe extern "C" fn rt_fast_in_array(args: *mut Value, n: u64, dst: *mut Va
         },
     });
     done(args, n, dst, Value::Bool(found))
+}
+
+pub unsafe extern "C" fn rt_fast_get_class(args: *mut Value, n: u64, dst: *mut Value) -> u64 {
+    let Value::Object(o) = arg(args, 0) else { return DECLINE };
+    let name = o.class.name_str.get_or_init(|| PStr::from_bytes(o.class.php_name().as_bytes())).clone();
+    done(args, n, dst, Value::Str(name))
 }
 
 /// Both arguments strings.

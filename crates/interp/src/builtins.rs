@@ -517,7 +517,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
 
     // classes & functions
     t.insert("get_class", |it, _, a| match arg(a, 0) {
-        Value::Object(o) => Ok(Value::str(o.class.php_name())),
+        Value::Object(o) => Ok(Value::Str(o.class.name_str.get_or_init(|| crate::value::PStr::from_bytes(o.class.php_name().as_bytes())).clone())),
         other => Err(it.error(
             "TypeError",
             &format!("get_class(): Argument #1 ($object) must be of type object, {} given", other.type_name()),

@@ -125,6 +125,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_fast_ucfirst: 3 => true,
     rt_fast_lcfirst: 3 => true,
     rt_fast_str_repeat: 3 => true,
+    rt_fast_get_class: 3 => true,
     rt_store_locals: 3 => false,
     rt_bind_slots: 5 => true,
     rt_unbind_slots: 4 => false,

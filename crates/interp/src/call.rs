@@ -2310,6 +2310,7 @@ impl Interp {
             has_destruct: methods.contains_key("__destruct"),
             traits: used_traits,
             prop_template: Default::default(),
+            name_str: Default::default(),
             ctor,
             plain_new,
             shadowed,
