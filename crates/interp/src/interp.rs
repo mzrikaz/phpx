@@ -144,6 +144,14 @@ thread_local! {
     /// any one interpreter on this thread).
     /// The stamp (see `file_stamp`) is what an include last saw on disk.
     static PARSED: RefCell<HashMap<PathBuf, (Option<FileStamp>, &'static str, &'static ast::File)>> = RefCell::new(HashMap::default());
+    /// Bumped whenever PARSED gets a new syntax tree: what an include
+    /// remembered of a file is still current while this is unchanged.
+    static PARSE_GEN: Cell<u64> = const { Cell::new(0) };
+}
+
+/// See PARSE_GEN.
+pub(crate) fn parse_gen() -> u64 {
+    PARSE_GEN.with(|g| g.get())
 }
 
 /// A file's modification time, size and inode: unchanged means the same
@@ -742,6 +750,7 @@ impl Interp {
         }
         let file: &'static ast::File = Box::leak(Box::new(file));
         PARSED.with(|p| p.borrow_mut().insert(path.to_path_buf(), (None, src, file)));
+        PARSE_GEN.with(|g| g.set(g.get() + 1));
         Ok((id, file))
     }
 
@@ -775,6 +784,13 @@ impl Interp {
 
     /// The id of `path` with source `src`: the same file included again
     /// keeps its id (and everything cached per file id).
+    /// Make file ids registered by other interpreters on this thread known.
+    pub(crate) fn file_known(&self, id: usize) {
+        if self.files.borrow().len() <= id {
+            self.sync_files();
+        }
+    }
+
     fn file_id(&self, path: &Path, src: &'static str) -> usize {
         let known = FILE_REG.with(|r| {
             let r = r.borrow();

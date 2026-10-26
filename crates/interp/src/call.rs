@@ -25,8 +25,21 @@ const REVALIDATE: std::time::Duration = std::time::Duration::from_secs(2);
 thread_local! {
     /// Server workers: (including file id, or MAX for an absolute path;
     /// the path as written) -> the file it led to, and when that was
-    /// checked on disk.
-    static RESOLVED: std::cell::RefCell<HashMap<(usize, String), (std::path::PathBuf, std::time::Instant)>> = Default::default();
+    /// checked on disk; and its file id and syntax tree as of parse
+    /// generation `gen` (see `crate::interp::parse_gen`).
+    static RESOLVED: std::cell::RefCell<HashMap<(usize, String), Resolved>> = Default::default();
+}
+
+struct Resolved {
+    canon: std::path::PathBuf,
+    checked: std::time::Instant,
+    file: (usize, &'static ast::File, u64),
+}
+
+impl Resolved {
+    fn new(canon: std::path::PathBuf, found: (usize, &'static ast::File)) -> Self {
+        Resolved { canon, checked: std::time::Instant::now(), file: (found.0, found.1, crate::interp::parse_gen()) }
+    }
 }
 
 /// Lets RESOLVED be searched with a borrowed path.
@@ -2584,27 +2597,34 @@ impl Interp {
         // REVALIDATE ago (opcache.revalidate_freq): no stat at all.
         let key = (if p.is_absolute() { usize::MAX } else { f.ctx.file }, path);
         if crate::server::sapi() != "cli" {
-            let hit = RESOLVED.with(|r| r.borrow().get(&key as &dyn ResolvedKey).map(|e| (e.0.clone(), e.1.elapsed() < REVALIDATE)));
-            if let Some((canon, fresh)) = hit {
+            let hit = RESOLVED.with(|r| {
+                r.borrow().get(&key as &dyn ResolvedKey).map(|e| {
+                    let fresh = e.checked.elapsed() < REVALIDATE;
+                    let tree = (fresh && e.file.2 == crate::interp::parse_gen()).then_some((e.file.0, e.file.1));
+                    (e.canon.clone(), fresh, tree)
+                })
+            });
+            if let Some((canon, fresh, tree)) = hit {
                 // Due for a check: one stat of the file found last time
                 // (reparsed if it changed; a vanished file is resolved anew).
-                let found = if fresh {
+                let found = if let Some((id, file)) = tree {
+                    self.file_known(id);
+                    Some((id, file))
+                } else if fresh {
                     self.parsed_file(&canon)
                 } else {
                     match self.load_file(&canon, &canon) {
                         Ok(Ok(found)) => {
-                            RESOLVED.with(|r| r.borrow_mut().insert((key.0, key.1.to_string()), (canon.clone(), std::time::Instant::now())));
+                            RESOLVED.with(|r| r.borrow_mut().insert((key.0, key.1.to_string()), Resolved::new(canon.clone(), found)));
                             Some(found)
                         }
                         _ => None,
                     }
                 };
                 if let Some((id, file)) = found {
-                    if matches!(kind, IncludeOnce | RequireOnce) && self.included.borrow().contains(&canon) {
+                    if !self.included.borrow_mut().insert(canon) && matches!(kind, IncludeOnce | RequireOnce) {
                         return Ok(Value::Bool(true));
                     }
-                    self.included.borrow_mut().insert(canon);
-                    self.register_strict(id, file);
                     return self.run_file_in(f, file, id);
                 }
             }
@@ -2642,9 +2662,8 @@ impl Interp {
         match self.load_file(&found, &canon).map_err(|e| self.error("Error", &e.to_string()))? {
             Ok((id, file)) => {
                 if crate::server::sapi() != "cli" {
-                    RESOLVED.with(|r| r.borrow_mut().insert((key.0, key.1.to_string()), (canon, std::time::Instant::now())));
+                    RESOLVED.with(|r| r.borrow_mut().insert((key.0, key.1.to_string()), Resolved::new(canon, (id, file))));
                 }
-                self.register_strict(id, file);
                 self.run_file_in(f, file, id)
             }
             Err(msg) => {
