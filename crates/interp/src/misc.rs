@@ -1136,16 +1136,22 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("get_class_vars", |it, f, a| {
         let n = bstr(it, a, 0)?;
         let Some(cls) = it.find_class(&n)? else { return Ok(Value::Bool(false)) };
+        // Instance properties, then static ones, each in reflection order.
+        let order = crate::reflect::ordered_props(it, &cls);
         let mut m = PhpArray::new();
-        for p in &cls.props {
-            if it.member_visible(f.class.as_deref(), p.vis, &p.declaring) {
-                let v = it.prop_default(&cls, p)?;
-                m.insert(Key::Str(pstr(&p.name)), v.unwrap_or(Value::Null));
+        for (name, _, _, _) in order.iter().filter(|p| !p.1) {
+            if let Some(p) = cls.props.iter().find(|p| p.name == *name) {
+                if it.member_visible(f.class.as_deref(), p.vis, &p.declaring) {
+                    let v = it.prop_default(&cls, p)?;
+                    m.insert(Key::Str(pstr(&p.name)), v.unwrap_or(Value::Null));
+                }
             }
         }
-        for (name, sp) in &cls.static_props {
-            if it.member_visible(f.class.as_deref(), sp.vis, &sp.declaring) {
-                m.insert(Key::Str(pstr(name)), it.static_prop_slot(sp)?);
+        for (name, _, _, _) in order.iter().filter(|p| p.1) {
+            if let Some(sp) = cls.static_props.get(name) {
+                if it.member_visible(f.class.as_deref(), sp.vis, &sp.declaring) {
+                    m.insert(Key::Str(pstr(name)), it.static_prop_slot(sp)?);
+                }
             }
         }
         Ok(Value::array(m))

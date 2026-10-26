@@ -439,30 +439,74 @@ fn find_prop_ast(it: &Interp, decl: &'static ast::Class, ctx: &Rc<NsCtx>, name: 
     None
 }
 
-fn props_desc(it: &Interp, cls: &Rc<Class>) -> Value {
-    // PHP's order: declared here (in source order), from traits, inherited.
-    let rank = |name: &str, declaring: &Rc<Class>| -> (usize, usize) {
-        if !Rc::ptr_eq(declaring, cls) {
-            return (2, 0);
+/// Declared properties in PHP's order: the class's own (source order,
+/// then those from its traits), then each ancestor's, leaving out
+/// ancestors' private ones. (name, static, declaring class, visibility).
+pub(crate) fn ordered_props(it: &Interp, cls: &Rc<Class>) -> Vec<(Rc<str>, bool, Rc<Class>, Vis)> {
+    let depth_of = |d: &Rc<Class>| {
+        let mut c = Some(cls.clone());
+        let mut i = 0;
+        while let Some(x) = c {
+            if x.lname == d.lname {
+                return i;
+            }
+            c = x.parent.clone();
+            i += 1;
         }
-        let pos = cls.decl.members.iter().position(|m| match m {
-            Member::Property { items, .. } => items.iter().any(|(n, _)| n.name == name),
-            Member::Method { func, .. } => func.name.name.eq_ignore_ascii_case("__construct") && func.params.iter().any(|p| p.promote.is_some() && p.name.name == name),
-            _ => false,
-        });
-        pos.map_or((1, 0), |p| (0, p))
+        usize::MAX
     };
-    let mut out: Vec<((usize, usize), Value)> = vec![];
-    let mut push = |name: &str, declaring: Rc<Class>, vis: Vis, is_static: bool, has_default: bool| {
-        let ast = find_prop_ast(it, declaring.decl, &declaring.decl_ctx, name);
+    let pos_in = |d: &Rc<Class>, name: &str| {
+        d.decl.members.iter().enumerate().find_map(|(mi, m)| match m {
+            Member::Property { items, .. } => items.iter().position(|(n, _)| n.name == name).map(|ii| (mi, ii)),
+            Member::Method { func, .. } if func.name.name.eq_ignore_ascii_case("__construct") => {
+                func.params.iter().position(|p| p.promote.is_some() && p.name.name == name).map(|ii| (mi, ii))
+            }
+            _ => None,
+        })
+    };
+    let mut out: Vec<((usize, usize, usize, usize), (Rc<str>, bool, Rc<Class>, Vis))> = vec![];
+    let mut seq = 0;
+    let mut add = |name: &Rc<str>, declaring: Rc<Class>, vis: Vis, is_static: bool| {
+        let depth = depth_of(&declaring);
+        if depth > 0 && vis == Vis::Private {
+            return;
+        }
+        seq += 1;
+        let key = match pos_in(&declaring, name) {
+            Some((mi, ii)) => (depth, 0, mi * 1000 + ii, 0),
+            None => (depth, 1, 0, seq),
+        };
+        out.push((key, (name.clone(), is_static, declaring, vis)));
+    };
+    for p in &cls.props {
+        let declaring = class_by_lname(it, &p.declaring).unwrap_or_else(|| cls.clone());
+        add(&p.name, declaring, p.vis, false);
+    }
+    for (name, sp) in &cls.static_props {
+        let declaring = class_by_lname(it, &sp.declaring).unwrap_or_else(|| cls.clone());
+        add(name, declaring, sp.vis, true);
+    }
+    out.sort_by_key(|x| x.0);
+    out.into_iter().map(|x| x.1).collect()
+}
+
+fn props_desc(it: &Interp, cls: &Rc<Class>) -> Value {
+    let mut out: Vec<Value> = vec![];
+    for (name, is_static, declaring, vis) in ordered_props(it, cls) {
+        let has_default = if is_static {
+            let typed = find_prop_ast(it, declaring.decl, &declaring.decl_ctx, &name).is_some_and(|a| a.1.is_some());
+            cls.static_props.get(&name).is_some_and(|sp| sp.init.is_some()) || !typed
+        } else {
+            cls.props.iter().find(|p| p.name == name).is_some_and(|p| !matches!(p.default, PropDefault::Uninit))
+        };
+        let ast = find_prop_ast(it, declaring.decl, &declaring.decl_ctx, &name);
         let (modifiers, ty, doc, attrs, promoted, ctx) = match &ast {
             Some((m, t, d, a, p, c)) => (Some(*m), *t, *d, *a, *p, c.clone()),
             None => (None, None, None, &[][..], false, declaring.decl_ctx.clone()),
         };
         let readonly = modifiers.is_some_and(|m| m.readonly) || declaring.decl.modifiers.readonly;
-        let r = rank(name, &declaring);
-        out.push((r, assoc(vec![
-            ("name", Value::str(name)),
+        out.push(assoc(vec![
+            ("name", Value::str(&name)),
             ("class", Value::str(declaring.php_name())),
             ("vis", Value::Int(vis_flag(vis))),
             ("static", Value::Bool(is_static)),
@@ -472,19 +516,9 @@ fn props_desc(it: &Interp, cls: &Rc<Class>) -> Value {
             ("doc", opt_str(doc)),
             ("attrs", attrs_desc(it, attrs, &ctx, Some(declaring.lname.clone()))),
             ("promoted", Value::Bool(promoted)),
-        ])));
-    };
-    for p in &cls.props {
-        let declaring = class_by_lname(it, &p.declaring).unwrap_or_else(|| cls.clone());
-        push(&p.name, declaring, p.vis, false, !matches!(p.default, PropDefault::Uninit));
+        ]));
     }
-    for (name, sp) in &cls.static_props {
-        let declaring = class_by_lname(it, &sp.declaring).unwrap_or_else(|| cls.clone());
-        let typed = find_prop_ast(it, declaring.decl, &declaring.decl_ctx, name).is_some_and(|a| a.1.is_some());
-        push(name, declaring, sp.vis, true, sp.init.is_some() || !typed);
-    }
-    out.sort_by_key(|x| x.0);
-    list(out.into_iter().map(|x| x.1).collect())
+    list(out)
 }
 
 /// The class (cls or an ancestor) whose declaration has constant `name`,

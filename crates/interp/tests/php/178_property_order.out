@@ -1,0 +1,24 @@
+A: a1,apriv,as,a2,t2a
+B: b1,bs,a1,t1a,t1b,as,a2,t2a
+C: c1,b1,bs,a1,t1a,t1b,as,a2,t2a
+c1,b1,bs,a1,t1a,a2,t2a
+c1,b1,a1,t1a,a2,t2a,bs
+a1,a2,t2a,b1,t1a,c1
+object(C)#8 (8) {
+  ["a1"]=>
+  NULL
+  ["apriv":"A":private]=>
+  NULL
+  ["a2"]=>
+  NULL
+  ["t2a"]=>
+  NULL
+  ["b1"]=>
+  NULL
+  ["t1a"]=>
+  NULL
+  ["t1b":protected]=>
+  NULL
+  ["c1"]=>
+  NULL
+}

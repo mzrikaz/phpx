@@ -1709,6 +1709,8 @@ impl Interp {
 
         let mut cases = vec![];
         let mut case_values: Vec<(Rc<str>, Option<&'static ast::Expr>)> = vec![];
+        let mut trait_props: Vec<PropDecl> = vec![];
+        let mut trait_statics: Vec<(Rc<str>, Rc<StaticProp>)> = vec![];
         for m in &c.members {
             match m {
                 Member::TraitUse { traits, adaptations, .. } => {
@@ -1766,13 +1768,14 @@ impl Interp {
                                 methods.insert(key, Rc::new(nm));
                             }
                         }
+                        // Bound after the class's own properties, as PHP does.
                         for p in &tc.props {
                             let mut np = p.clone();
                             np.declaring = decl_name.clone();
-                            upsert_prop(&mut props, np, &mut shadowed);
+                            trait_props.push(np);
                         }
                         for (k, sp) in &tc.static_props {
-                            static_props.insert(
+                            trait_statics.push((
                                 k.clone(),
                                 Rc::new(StaticProp {
                                     value: std::cell::RefCell::new(None),
@@ -1781,7 +1784,7 @@ impl Interp {
                                     declaring: lname.clone(),
                                     ctx: sp.ctx.clone(),
                                 }),
-                            );
+                            ));
                         }
                         for (k, v) in tc.consts.borrow().iter() {
                             consts.entry(k.clone()).or_insert_with(|| v.clone());
@@ -1872,6 +1875,17 @@ impl Interp {
                     cases.push(Rc::from(&*cn.name));
                     case_values.push((Rc::from(&*cn.name), value.as_ref()));
                 }
+            }
+        }
+        // Trait properties: a class's own declaration of the same one wins.
+        for np in trait_props {
+            if !props.iter().any(|q| q.name == np.name && *q.declaring == *decl_name) {
+                upsert_prop(&mut props, np, &mut shadowed);
+            }
+        }
+        for (k, sp) in trait_statics {
+            if !static_props.get(&k).is_some_and(|own| *own.declaring == *lname) {
+                static_props.insert(k, sp);
             }
         }
         // Trait methods list after the class's own (get_class_methods order).
