@@ -705,6 +705,7 @@ pub fn serve(addr: &str, docroot: Option<&Path>, router: Option<&Path>) -> i32 {
     let _ = PID_PREFIX.set(workers > 1);
     let (tx, rx) = std::sync::mpsc::channel::<TcpStream>();
     let rx = Arc::new(std::sync::Mutex::new(rx));
+    let mut threads = vec![];
     for _ in 0..workers {
         let (rx, cfg) = (rx.clone(), cfg.clone());
         let spawned = std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(move || loop {
@@ -713,17 +714,31 @@ pub fn serve(addr: &str, docroot: Option<&Path>, router: Option<&Path>) -> i32 {
             handle(stream, cfg.clone());
             crate::reset_request_state();
         });
-        if spawned.is_err() {
-            eprintln!("phpx: could not start a server worker thread");
-            return 1;
+        match spawned {
+            Ok(t) => threads.push(t),
+            Err(_) => {
+                eprintln!("phpx: could not start a server worker thread");
+                return 1;
+            }
         }
     }
     log(&format!("PHP 8.5.10 Development Server (http://{addr}) started"));
-    for conn in listener.incoming() {
+    // PHPX_SERVE_MAX_REQUESTS=n: stop after n connections (benchmarks and
+    // profiling, which report when the process ends).
+    let max = std::env::var("PHPX_SERVE_MAX_REQUESTS").ok().and_then(|v| v.parse::<usize>().ok());
+    for (n, conn) in listener.incoming().enumerate() {
         let Ok(stream) = conn else { continue };
         if tx.send(stream).is_err() {
             return 1;
         }
+        if max.is_some_and(|m| n + 1 >= m) {
+            break;
+        }
     }
+    drop(tx);
+    for t in threads {
+        let _ = t.join();
+    }
+    crate::phpprof::finish();
     0
 }

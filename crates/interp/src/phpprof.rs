@@ -10,10 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::trace::CallRec;
 
-thread_local! {
-    /// Per built-in function: (calls, nanoseconds inclusive).
-    static BUILTINS: std::cell::RefCell<Option<std::collections::HashMap<String, (u64, u64)>>> = const { std::cell::RefCell::new(None) };
-}
+/// Per built-in function: (calls, nanoseconds inclusive), all threads.
+static BUILTINS: std::sync::Mutex<Option<std::collections::HashMap<String, (u64, u64)>>> = std::sync::Mutex::new(None);
 
 static ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -25,12 +23,11 @@ pub fn timing() -> bool {
 
 /// Record one built-in call (PHPX_PROFILE_PHP only).
 pub fn record_builtin(name: &str, ns: u64) {
-    BUILTINS.with(|b| {
-        let mut b = b.borrow_mut();
+    if let Ok(mut b) = BUILTINS.lock() {
         let e = b.get_or_insert_with(Default::default).entry(name.to_string()).or_default();
         e.0 += 1;
         e.1 += ns;
-    });
+    }
 }
 
 const BUF: usize = 128 << 20;
@@ -111,9 +108,10 @@ fn timer(usec: libc::suseconds_t) {
     unsafe { libc::setitimer(libc::ITIMER_PROF, &it, std::ptr::null_mut()) };
 }
 
-/// Starts sampling when PHPX_PROFILE_PHP is set.
+/// Starts sampling when PHPX_PROFILE_PHP is set (once per process: a
+/// server's requests add up).
 pub fn start() {
-    if std::env::var_os("PHPX_PROFILE_PHP").is_none() {
+    if std::env::var_os("PHPX_PROFILE_PHP").is_none() || ON.load(Ordering::Relaxed) {
         return;
     }
     unsafe {
@@ -167,15 +165,17 @@ pub fn finish() {
     };
     show("self", &own);
     show("inclusive", &incl);
-    BUILTINS.with(|b| {
-        let Some(b) = &*b.borrow() else { return };
+    (|| {
+        let b = BUILTINS.lock().ok()?;
+        let b = b.as_ref()?;
         let mut v: Vec<_> = b.iter().collect();
         v.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
         eprintln!("--- built-ins (inclusive time, calls)");
         for (n, (c, ns)) in v.into_iter().take(40) {
             eprintln!("{:8.1} ms {:9} {n}", *ns as f64 / 1e6, c);
         }
-    });
+    Some(())
+    })();
     let out: String = folded.iter().map(|(k, v)| format!("{k} {v}\n")).collect();
     let _ = std::fs::write(path, out);
 }

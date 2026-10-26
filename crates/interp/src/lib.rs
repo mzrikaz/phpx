@@ -268,7 +268,10 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
         Ok((code, returned_false))
     });
     it.flush();
-    phpprof::finish();
+    // (A server reports once, when it stops.)
+    if server::sapi() == "cli" {
+        phpprof::finish();
+    }
     match code {
         Ok(c) => c,
         Err(e) => {

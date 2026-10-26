@@ -133,7 +133,13 @@ fn php_cli(args: &[String]) -> ExitCode {
     }
     phpx_interp::set_ini_options(no_ini, overrides);
     if let Some(addr) = server {
+        #[cfg(feature = "profile")]
+        let guard = std::env::var("PHPX_PROFILE").ok().map(|_| pprof::ProfilerGuard::new(997).expect("profiler"));
         let code = phpx_interp::server::serve(&addr, docroot.as_deref().map(std::path::Path::new), script.as_deref().map(std::path::Path::new));
+        #[cfg(feature = "profile")]
+        if let Some(g) = guard {
+            report(g);
+        }
         return ExitCode::from(code.clamp(0, 255) as u8);
     }
     let rest: Vec<String> = args.get(i..).map(|r| r.to_vec()).unwrap_or_default();
