@@ -326,7 +326,7 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
                         nv
                     }
                     Ok(None) => {
-                        *it.pending.borrow_mut() = Some(it.param_type_error(&spec.display, i, p, ty, &v, spec.ctx.file));
+                        *it.pending.borrow_mut() = Some(it.param_type_error(&spec.display, i, p, ty, &v, &spec.ctx));
                         return 1;
                     }
                     Err(e) => {

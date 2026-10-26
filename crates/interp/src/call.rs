@@ -235,6 +235,11 @@ fn is_ref_target(e: &ast::Expr) -> bool {
 /// members in PHP's order (classes first as written, then static,
 /// callable, object, array, string, int, float, bool, ..., null).
 pub fn type_str(t: &Type) -> String {
+    type_str_by(t, &|n: &str| n.to_string())
+}
+
+/// A declared type as PHP prints it, class names resolved by `class`.
+pub fn type_str_by(t: &Type, class: &dyn Fn(&str) -> String) -> String {
     const ORDER: &[&str] = &["static", "callable", "object", "array", "string", "int", "float", "bool", "false", "true", "void", "never", "mixed", "null"];
     let named = |n: &str| {
         let n = n.trim_start_matches('\\');
@@ -242,12 +247,12 @@ pub fn type_str(t: &Type) -> String {
         match ORDER.iter().position(|t| *t == l) {
             Some(r) => (r + 1, l),
             None if l == "iterable" => (0, l),
-            None => (0, n.to_string()),
+            None => (0, class(n)),
         }
     };
     match t {
         Type::Named(n) => named(n).1,
-        Type::Nullable(t) => format!("?{}", type_str(t)),
+        Type::Nullable(t) => format!("?{}", type_str_by(t, class)),
         Type::Union(ts) => {
             let mut parts: Vec<(usize, usize, String)> = ts
                 .iter()
@@ -257,19 +262,33 @@ pub fn type_str(t: &Type) -> String {
                         let (r, s) = named(n);
                         (r, i, s)
                     }
-                    Type::Intersection(_) => (0, i, format!("({})", type_str(t))),
-                    t => (0, i, type_str(t)),
+                    Type::Intersection(_) => (0, i, format!("({})", type_str_by(t, class))),
+                    t => (0, i, type_str_by(t, class)),
                 })
                 .collect();
             parts.sort();
             parts.into_iter().map(|p| p.2).collect::<Vec<_>>().join("|")
         }
-        Type::Intersection(ts) => ts.iter().map(type_str).collect::<Vec<_>>().join("&"),
+        Type::Intersection(ts) => ts.iter().map(|t| type_str_by(t, class)).collect::<Vec<_>>().join("&"),
     }
 }
 
 impl Interp {
     // ---- name resolution ---------------------------------------------------
+
+    /// A declared type as PHP prints it in errors: class names resolved
+    /// in the declaration's context.
+    /// `self` and `parent` name `class` and its parent, as PHP shows them.
+    pub fn type_str_in(&self, t: &Type, ctx: &NsCtx, class: Option<&str>) -> String {
+        type_str_by(t, &|n| {
+            let cls = || class.and_then(|c| self.classes.borrow().get(&*c.to_ascii_lowercase()).cloned());
+            match &*n.to_ascii_lowercase() {
+                "self" => class.map_or_else(|| n.to_string(), str::to_string),
+                "parent" => cls().and_then(|c| c.parent.as_ref().map(|p| p.name.to_string())).unwrap_or_else(|| n.to_string()),
+                _ => self.resolve_class_name(ctx, n),
+            }
+        })
+    }
 
     pub fn resolve_class_name(&self, ctx: &NsCtx, name: &str) -> String {
         if let Some(rest) = name.strip_prefix('\\') {
@@ -1586,7 +1605,7 @@ impl Interp {
                 Some(v) => Ok(v),
                 None => Err(self.error(
                     "TypeError",
-                    &format!("{display}(): Return value must be of type {}, {} returned", type_str(ty), result.debug_type()),
+                    &format!("{display}(): Return value must be of type {}, {} returned", self.type_str_in(ty, ctx, class.map(|c| &*c.name)), result.debug_type()),
                 )),
             },
         }
@@ -1595,7 +1614,7 @@ impl Interp {
     fn check_param(&self, inv: &Invoke, i: usize, p: &ast::Param, ty: &Type, v: Value, strict: bool) -> R<Value> {
         match self.coerce(v.clone(), ty, &inv.ctx, inv.class.as_ref(), inv.static_class.as_ref(), strict)? {
             Some(v) => Ok(v),
-            None => Err(self.param_type_error(&inv.display, i, p, ty, &v, inv.ctx.file)),
+            None => Err(self.param_type_error(&inv.display, i, p, ty, &v, &inv.ctx)),
         }
     }
 
@@ -1603,10 +1622,13 @@ impl Interp {
     /// parameter's declaration, naming the call site when user code made
     /// the call (not a built-in calling back). `pos` must still be the
     /// call site.
-    pub fn param_type_error(&self, display: &str, i: usize, p: &ast::Param, ty: &Type, v: &Value, file: usize) -> Ctrl {
+    pub fn param_type_error(&self, display: &str, i: usize, p: &ast::Param, ty: &Type, v: &Value, ctx: &NsCtx) -> Ctrl {
+        let file = ctx.file;
         // A variadic parameter's arguments are numbered, not named.
         let which = if p.variadic { format!("#{}", i + 1) } else { format!("#{} (${})", i + 1, p.name.name) };
-        let mut msg = format!("{display}(): Argument {which} must be of type {}, {} given", type_str(ty), v.debug_type());
+        // (A method's display name starts with its declaring class.)
+        let class = display.split_once("::").map(|c| c.0).filter(|c| !c.starts_with('{'));
+        let mut msg = format!("{display}(): Argument {which} must be of type {}, {} given", self.type_str_in(ty, ctx, class), v.debug_type());
         if file == crate::interp::PRELUDE_FILE {
             // A built-in class's method: reported at the call, like PHP.
             return self.error("TypeError", &msg);

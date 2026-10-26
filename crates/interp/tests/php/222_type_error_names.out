@@ -1,0 +1,4 @@
+Cannot assign int to property App\P::$p of type ?Illuminate\Http\Request
+App\P::m(): Return value must be of type Illuminate\Http\Request, int returned
+App\P::s(): Argument #1 ($x) must be of type App\P, int given
+App\g(): Argument #1 ($x) must be of type Illuminate\Http\Request|int, array given

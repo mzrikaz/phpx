@@ -1873,7 +1873,7 @@ impl Interp {
                 let cname = crate::class::display_name(&d.declaring);
                 Err(self.error(
                     "TypeError",
-                    &format!("Value of type {} returned from {cname}::__get() must be compatible with unset property {cname}::${name} of type {}", v.type_name(), crate::call::type_str(ty)),
+                    &format!("Value of type {} returned from {cname}::__get() must be compatible with unset property {cname}::${name} of type {}", v.type_name(), self.type_str_in(ty, &d.ctx, Some(&cname))),
                 ))
             }
         }
@@ -1948,7 +1948,7 @@ impl Interp {
                                         "Cannot assign {} to property {}::${name} of type {}",
                                         v.debug_type(),
                                         o.class.name,
-                                        crate::call::type_str(ty)
+                                        self.type_str_in(ty, &d.ctx, Some(&crate::class::display_name(&d.declaring)))
                                     ),
                                 ))
                             }
