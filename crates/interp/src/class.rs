@@ -4,7 +4,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use indexmap::IndexMap;
 use phpx_syntax::ast;
 
 use crate::interp::{NativeMethod, NsCtx};
@@ -125,12 +124,12 @@ pub struct Class {
     /// Lowercase names of this class, every ancestor and every interface.
     pub ancestors: Vec<Rc<str>>,
     pub is_abstract: bool,
-    pub consts: RefCell<IndexMap<Rc<str>, ConstSlot>>,
+    pub consts: RefCell<crate::value::FxIndexMap<Rc<str>, ConstSlot>>,
     /// Constants marked `#[\Deprecated]`: name -> (declaring class name,
     /// the attribute, its namespace context).
     pub deprecated_consts: Vec<(Rc<str>, Rc<str>, &'static ast::Attribute, Rc<NsCtx>)>,
     /// Shared with the parent unless redeclared (PHP semantics).
-    pub static_props: IndexMap<Rc<str>, Rc<StaticProp>>,
+    pub static_props: crate::value::FxIndexMap<Rc<str>, Rc<StaticProp>>,
     pub props: Vec<PropDecl>,
     pub methods: crate::value::FxIndexMap<Rc<str>, Rc<Method>>,
     /// Enum case names in declaration order.
@@ -158,6 +157,8 @@ pub struct Class {
     /// An anonymous class's real name, `Base@anonymous\0file:line$n`
     /// (get_class(), ::class); `name` is what messages and dumps show.
     pub anon_name: Option<Rc<str>>,
+    /// `php_name()` as a PHP string (::class, get_class()).
+    pub name_value: crate::value::Value,
 }
 
 /// A class name as messages and dumps show it: an anonymous class's real

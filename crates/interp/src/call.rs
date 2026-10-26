@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use indexmap::IndexMap;
 use phpx_syntax::ast::{self, ClassKind, Member, Stmt, Type};
 
 use crate::class::{Class, ConstSlot, Method, MethodBody, PropDecl, PropDefault, StaticProp, Vis};
@@ -269,7 +268,7 @@ impl Interp {
     /// `$x::class`.
     pub fn class_name_of_value(&self, v: &Value) -> R<Value> {
         match v {
-            Value::Object(o) => Ok(Value::str(o.class.php_name())),
+            Value::Object(o) => Ok(o.class.name_value.clone()),
             v => Err(self.error("TypeError", &format!("Cannot use \"::class\" on {}", v.type_name()))),
         }
     }
@@ -1487,7 +1486,7 @@ impl Interp {
                 return self.class_name_of_value(&v);
             }
             let cls = self.class_ref(f, cref)?;
-            return Ok(Value::str(cls.php_name()));
+            return Ok(cls.name_value.clone());
         }
         let cls = self.class_ref(f, cref)?;
         let v = self.get_class_const(&cls, name)?;
@@ -1778,13 +1777,13 @@ impl Interp {
         // differs from its display name).
         let decl_name: Rc<str> = anon_name.clone().unwrap_or_else(|| display.clone());
         let mut ancestors: Vec<Rc<str>> = vec![lname.clone()];
-        let mut consts: IndexMap<Rc<str>, ConstSlot> = IndexMap::new();
+        let mut consts: crate::value::FxIndexMap<Rc<str>, ConstSlot> = Default::default();
         let mut methods: crate::value::FxIndexMap<Rc<str>, Rc<Method>> = Default::default();
         let mut used_traits: Vec<Rc<str>> = vec![];
         let mut shadowed: Vec<(Rc<str>, Rc<str>, Rc<str>)> = parent.as_ref().map(|p| p.shadowed.clone()).unwrap_or_default();
         let mut trait_keys: Vec<Rc<str>> = vec![];
         let mut props: Vec<PropDecl> = vec![];
-        let mut static_props: IndexMap<Rc<str>, Rc<StaticProp>> = IndexMap::new();
+        let mut static_props: crate::value::FxIndexMap<Rc<str>, Rc<StaticProp>> = Default::default();
         let mut deprecated_consts = parent.as_ref().map(|p| p.deprecated_consts.clone()).unwrap_or_default();
         if let Some(p) = &parent {
             ancestors.extend(p.ancestors.iter().cloned());
@@ -2080,6 +2079,7 @@ impl Interp {
             enum_backed: c.enum_type.is_some(),
             decl: c,
             decl_ctx: ctx.clone(),
+            name_value: Value::str(anon_name.as_deref().unwrap_or(&display)),
             anon_name,
         });
         // Anonymous classes too, under their unique internal name: methods
