@@ -77,7 +77,7 @@ pub struct FileInfo {
     pub path: PathBuf,
     pub src: &'static str,
     /// Byte offsets where lines start, built on first use (line numbers
-    /// for traces and errors).
+    /// for traces and errors), and kept by the thread's later requests.
     lines: std::cell::OnceCell<Vec<u32>>,
 }
 
@@ -137,7 +137,7 @@ thread_local! {
     /// Every file this thread's interpreters ran, by id: ids stay the same
     /// from one request's interpreter to the next, so code compiled for
     /// one still points at the right file in the next.
-    static FILE_REG: RefCell<(Vec<(PathBuf, &'static str)>, HashMap<PathBuf, usize>)> = RefCell::new((vec![], HashMap::default()));
+    static FILE_REG: RefCell<(Vec<Rc<FileInfo>>, HashMap<PathBuf, usize>)> = RefCell::new((vec![], HashMap::default()));
     static PRELUDE: std::cell::OnceCell<(&'static str, &'static ast::File)> = const { std::cell::OnceCell::new() };
     static EMPTY_NAME: Rc<str> = Rc::from("");
     /// Parsed files by path (syntax trees are immutable, so they outlive
@@ -378,7 +378,7 @@ impl Frame {
 }
 
 pub struct Interp {
-    pub files: RefCell<Vec<FileInfo>>,
+    pub files: RefCell<Vec<Rc<FileInfo>>>,
     pub functions: RefCell<FxHashMap<Rc<str>, Rc<UserFn>>>,
     pub builtins: &'static FxHashMap<&'static str, BuiltinFn>,
     /// Functions found for string callables ('strlen', 'App\\helper').
@@ -481,7 +481,7 @@ impl Interp {
         crate::reset_request_state();
         crate::value::builtin_shadowed().store(false, std::sync::atomic::Ordering::Relaxed);
         let it = Rc::new(Interp {
-            files: RefCell::new(FILE_REG.with(|r| r.borrow().0.iter().map(|(path, src)| FileInfo { path: path.clone(), src, lines: Default::default() }).collect())),
+            files: RefCell::new(FILE_REG.with(|r| r.borrow().0.clone())),
             functions: RefCell::new(FxHashMap::default()),
             str_callables: RefCell::new(FxHashMap::default()),
             arg_names: RefCell::new(FxHashMap::default()),
@@ -626,12 +626,13 @@ impl Interp {
     pub fn add_file(&self, path: PathBuf, src: &'static str) -> usize {
         self.sync_files();
         let mut files = self.files.borrow_mut();
+        let info = Rc::new(FileInfo { path: path.clone(), src, lines: Default::default() });
         FILE_REG.with(|r| {
             let mut r = r.borrow_mut();
-            r.0.push((path.clone(), src));
-            r.1.insert(path.clone(), files.len());
+            r.0.push(info.clone());
+            r.1.insert(path, files.len());
         });
-        files.push(FileInfo { path, src, lines: Default::default() });
+        files.push(info);
         files.len() - 1
     }
 
@@ -641,7 +642,7 @@ impl Interp {
         FILE_REG.with(|r| {
             let r = r.borrow();
             if r.0.len() > have {
-                self.files.borrow_mut().extend(r.0[have..].iter().map(|(path, src)| FileInfo { path: path.clone(), src, lines: Default::default() }));
+                self.files.borrow_mut().extend(r.0[have..].iter().cloned());
             }
         });
     }
@@ -853,7 +854,7 @@ impl Interp {
     fn file_id(&self, path: &Path, src: &'static str) -> usize {
         let known = FILE_REG.with(|r| {
             let r = r.borrow();
-            r.1.get(path).copied().filter(|&id| std::ptr::eq(r.0[id].1, src))
+            r.1.get(path).copied().filter(|&id| std::ptr::eq(r.0[id].src, src))
         });
         if let Some(id) = known {
             self.sync_files();
