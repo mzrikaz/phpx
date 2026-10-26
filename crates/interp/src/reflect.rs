@@ -678,7 +678,13 @@ fn closure_desc(it: &Interp, c: &Callable, closure_name: Option<&str>) -> Value 
             };
             let mut d = src_desc(it, fid, &method.name);
             if let Value::Array(a) = &mut d {
-                std::rc::Rc::make_mut(a).insert(Key::Str(pstr("method_class")), Value::str(&class.name));
+                let a = std::rc::Rc::make_mut(a);
+                a.insert(Key::Str(pstr("method_class")), Value::str(&class.name));
+                // A closure of a method (Closure::fromCallable, $o->m(...))
+                // is bound to the object and scoped to the method's class.
+                a.insert(Key::Str(pstr("this")), this.clone().map(Value::Object).unwrap_or(Value::Null));
+                let scope = class_by_lname(it, &method.declaring).map(|c| Value::str(c.php_name())).unwrap_or(Value::Null);
+                a.insert(Key::Str(pstr("scope")), scope);
             }
             d
         }

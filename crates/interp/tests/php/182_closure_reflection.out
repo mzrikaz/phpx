@@ -1,0 +1,6 @@
+0 true M toBeTrue M
+1 true M toBeTrue M
+2 false M s M
+3 false null {closure} null
+4 true M {closure} M
+5 false null strlen null
