@@ -1463,8 +1463,20 @@ impl<'a> Lower<'a> {
                 self.b.switch_to_block(cont);
                 v
             }
+            // Negative number literals (-1, -0.5): constants, not a negation.
+            Unary { op: UnOp::Neg, expr } if matches!(expr.kind, Int(n) if n != i64::MIN) => {
+                let Int(n) = expr.kind else { unreachable!() };
+                Op::Int(self.iconst(-n))
+            }
+            Unary { op: UnOp::Neg, expr } if matches!(expr.kind, Float(_)) => {
+                let Float(x) = expr.kind else { unreachable!() };
+                Op::Float(self.b.ins().f64const(-x))
+            }
             Unary { op, expr } => {
                 let v = self.expr(expr)?;
+                if let (UnOp::Neg, Op::Float(x)) = (op, &v) {
+                    return Ok(Op::Float(self.b.ins().fneg(*x)));
+                }
                 match op {
                     UnOp::Not => {
                         let t = self.truthy(v);
