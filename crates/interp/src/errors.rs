@@ -8,6 +8,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::interp::{BuiltinFn, Callable, Ctrl, Frame, Interp, R};
 use crate::value::{Obj, PhpArray, Value};
@@ -32,13 +33,17 @@ struct Handler {
     levels: i64,
 }
 
+/// Threads with a `RAISED` exception: `take()` runs after nearly every
+/// operation, and a plain load is cheaper than a thread-local access
+/// (a function call on macOS).
+static ANY_RAISED: AtomicUsize = AtomicUsize::new(0);
+
 thread_local! {
     static ERROR_HANDLERS: RefCell<Vec<Handler>> = const { RefCell::new(Vec::new()) };
     static EXCEPTION_HANDLERS: RefCell<Vec<(Value, Option<Callable>)>> = const { RefCell::new(Vec::new()) };
     static LAST: RefCell<Option<(i64, String, String, i64)>> = const { RefCell::new(None) };
     /// An exception a handler threw, waiting to surface.
     static RAISED: RefCell<Option<Ctrl>> = const { RefCell::new(None) };
-    static ANY_RAISED: Cell<bool> = const { Cell::new(false) };
     static IN_HANDLER: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -58,8 +63,9 @@ pub fn reset() {
     ERROR_HANDLERS.with(|h| h.borrow_mut().clear());
     EXCEPTION_HANDLERS.with(|h| h.borrow_mut().clear());
     LAST.with(|l| *l.borrow_mut() = None);
-    RAISED.with(|r| *r.borrow_mut() = None);
-    ANY_RAISED.with(|a| a.set(false));
+    if RAISED.with(|r| r.borrow_mut().take()).is_some() {
+        ANY_RAISED.fetch_sub(1, Ordering::Relaxed);
+    }
     IN_HANDLER.with(|h| h.set(false));
 }
 
@@ -111,7 +117,7 @@ pub fn defer(e: Ctrl) {
         let mut r = r.borrow_mut();
         if r.is_none() {
             *r = Some(e);
-            ANY_RAISED.with(|a| a.set(true));
+            ANY_RAISED.fetch_add(1, Ordering::Relaxed);
         }
     });
 }
@@ -119,11 +125,14 @@ pub fn defer(e: Ctrl) {
 /// The exception an error handler threw, if any.
 #[inline]
 pub fn take() -> Option<Ctrl> {
-    if !ANY_RAISED.with(|a| a.get()) {
+    if ANY_RAISED.load(Ordering::Relaxed) == 0 {
         return None;
     }
-    ANY_RAISED.with(|a| a.set(false));
-    RAISED.with(|r| r.borrow_mut().take())
+    let e = RAISED.with(|r| r.borrow_mut().take());
+    if e.is_some() {
+        ANY_RAISED.fetch_sub(1, Ordering::Relaxed);
+    }
+    e
 }
 
 /// `r`, unless an error handler threw meanwhile.
