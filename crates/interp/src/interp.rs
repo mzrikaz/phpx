@@ -124,6 +124,9 @@ pub enum Callable {
     Builtin(&'static str, BuiltinFn),
     Closure(Rc<ClosureData>),
     Method { this: Option<Rc<Obj>>, class: Rc<Class>, method: Rc<crate::class::Method>, static_class: Rc<Class> },
+    /// `[$obj, 'name']` / `'C::name'` for a method only __call or
+    /// __callStatic answers.
+    Magic { this: Option<Rc<Obj>>, class: Rc<Class>, name: Rc<str> },
 }
 
 thread_local! {

@@ -1,0 +1,12 @@
+string(19) "call:safeEmail(1,2)"
+string(4) "real"
+string(13) "static:foo(3)"
+string(12) "static:bar()"
+array(1) {
+  [0]=>
+  string(10) "call:up(a)"
+}
+string(13) "call:magic(x)"
+bool(true)
+bool(true)
+string(10) "inst:thing"

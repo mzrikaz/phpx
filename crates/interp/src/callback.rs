@@ -141,7 +141,7 @@ impl Callback<'_> {
                 let this = if method.is_static { None } else { this.clone() };
                 Some(Prepared { entry, frame, kind: Kind::Method(this) })
             }
-            Callable::Builtin(..) => None,
+            Callable::Builtin(..) | Callable::Magic { .. } => None,
         }
     }
 }

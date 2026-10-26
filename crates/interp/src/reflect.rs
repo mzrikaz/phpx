@@ -671,7 +671,8 @@ fn closure_desc(it: &Interp, c: &Callable, closure_name: Option<&str>) -> Value 
     match c {
         Callable::User(u) => src_desc(it, fn_id(Src::Func(u.decl), &u.ctx, None), &u.name),
         Callable::Builtin(n, _) => builtin_desc(n),
-        Callable::Method { class, method, .. } => {
+        Callable::Magic { name, .. } => builtin_desc(name),
+        Callable::Method { this, class, method, .. } => {
             let fid = match &method.body {
                 MethodBody::User(f) => fn_id(Src::Func(f), &method.ctx, Some(method.declaring.clone())),
                 MethodBody::Native(_) => return builtin_desc(&method.name),

@@ -86,7 +86,7 @@ pub fn callable_params(c: &Callable) -> Option<&'static [ast::Param]> {
             ClosureKind::Wrap(w) => callable_params(w),
         },
         Callable::Method { method, .. } => method_params(method),
-        Callable::Builtin(..) => None,
+        Callable::Builtin(..) | Callable::Magic { .. } => None,
     }
 }
 
@@ -778,7 +778,16 @@ impl Interp {
                 let static_class = this.as_ref().map(|o| o.class.clone()).unwrap_or_else(|| class.clone());
                 Ok(Callable::Method { this, class: class.clone(), method: method.clone(), static_class })
             }
-            None => Err(self.error("Error", &format!("Call to undefined method {}::{m}()", class.name))),
+            // Answered by __call (on an object, or a static call from a
+            // fitting $this) or __callStatic.
+            None => {
+                let this = this.or_else(|| f.this.clone().filter(|t| t.class.is_subclass_of(class)));
+                let magic = if this.is_some() { "__call" } else { "__callstatic" };
+                if class.find_method(magic).is_some() {
+                    return Ok(Callable::Magic { this, class: class.clone(), name: Rc::from(m.as_str()) });
+                }
+                Err(self.error("Error", &format!("Call to undefined method {}::{m}()", class.name)))
+            }
         }
     }
 
@@ -845,6 +854,11 @@ impl Interp {
             Callable::Closure(cd) => self.call_closure(cd, pos, named),
             Callable::Method { this, method, static_class, .. } => {
                 self.invoke_method(this.clone(), method, static_class.clone(), pos, named)
+            }
+            Callable::Magic { this: Some(o), name, .. } => self.magic_call(o, name, pos, named),
+            Callable::Magic { this: None, class, name } => {
+                let m = class.find_method("__callstatic").cloned().ok_or_else(|| self.error("Error", &format!("Call to undefined method {}::{name}()", class.name)))?;
+                self.invoke_method(None, &m, class.clone(), vec![Value::str(name), magic_args(pos, named)], vec![])
             }
         }
     }

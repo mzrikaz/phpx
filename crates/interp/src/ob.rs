@@ -55,6 +55,7 @@ fn callable_name(c: &Callable) -> String {
         Callable::Builtin(n, _) => n.to_string(),
         Callable::Closure(c) => c.name.to_string(),
         Callable::Method { class, method, .. } => format!("{}::{}", class.name, method.name),
+        Callable::Magic { class, name, .. } => format!("{}::{}", class.name, name),
     }
 }
 
