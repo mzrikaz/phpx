@@ -1323,18 +1323,7 @@ impl<'a> Lower<'a> {
                     };
                     ops.push(op);
                 }
-                let pslot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, (ops.len().max(1) * 8) as u32, 3));
-                for (i, op) in ops.iter().enumerate() {
-                    let a = self.addr(*op).unwrap();
-                    self.b.ins().stack_store(types::I64, a, pslot, (i * 8) as i32);
-                }
-                let pa = self.b.ins().stack_addr(types::I64, pslot, 0);
-                let n = self.iconst(ops.len() as i64);
-                let r = self.helper_value("rt_interp", |l| vec![l.cx, pa, n])?;
-                for op in ops {
-                    self.release(op);
-                }
-                r
+                self.join_strings(ops)?
             }
             Name(n) => self.helper_value("rt_const", |l| {
                 let p = l.iconst(n as *const String as i64);
@@ -1424,6 +1413,31 @@ impl<'a> Lower<'a> {
                 self.b.switch_to_block(merge);
                 let ta = self.temp_addr(t);
                 Op::Ptr(ta, Some(t))
+            }
+            Binary { op: BinOp::Concat, .. } => {
+                // `a . b . c`: evaluate the operands, then build the string
+                // once. Only operands that can't run code join a chain
+                // (string conversions keep PHP's order).
+                let mut parts = vec![];
+                let mut cur = e;
+                while let Binary { op: BinOp::Concat, left, right } = &cur.kind {
+                    parts.push(&**right);
+                    let simple = |x: &Expr| matches!(x.kind, Str(_) | Bytes(_) | Int(_) | Var(_));
+                    if !simple(right) || !matches!(&left.kind, Binary { op: BinOp::Concat, .. }) {
+                        cur = left;
+                        break;
+                    }
+                    cur = left;
+                }
+                parts.push(cur);
+                parts.reverse();
+                let mut ops = vec![];
+                for p in parts {
+                    let v = self.expr(p)?;
+                    let v = self.own(v);
+                    ops.push(self.materialize(v));
+                }
+                self.join_strings(ops)?
             }
             Binary { op, left, right } => {
                 let a = self.expr(left)?;
@@ -3059,6 +3073,22 @@ impl<'a> Lower<'a> {
     }
 
     // ---- binary operators -------------------------------------------------------------
+
+    /// The string made of `ops` (materialized values) in one allocation.
+    fn join_strings(&mut self, ops: Vec<Op>) -> L<Op> {
+        let pslot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, (ops.len().max(1) * 8) as u32, 3));
+        for (i, op) in ops.iter().enumerate() {
+            let a = self.addr(*op).unwrap();
+            self.b.ins().stack_store(types::I64, a, pslot, (i * 8) as i32);
+        }
+        let pa = self.b.ins().stack_addr(types::I64, pslot, 0);
+        let n = self.iconst(ops.len() as i64);
+        let r = self.helper_value("rt_interp", |l| vec![l.cx, pa, n])?;
+        for op in ops {
+            self.release(op);
+        }
+        Ok(r)
+    }
 
     fn binary(&mut self, op: BinOp, a: Op, b: Op) -> L<Op> {
         use BinOp::*;

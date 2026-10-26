@@ -1,0 +1,58 @@
+a71.51
+[conv 1][conv 2]T1T2
+[f x][conv 1][f y]xT1y
+getNameAttribute
+a7! a
+Arrayz
+-0|1.0E+100|9223372036854775807
+a71.51
+[conv 1][conv 2]T1T2
+[f x][conv 1][f y]xT1y
+getNameAttribute
+a7! a
+Arrayz
+-0|1.0E+100|9223372036854775807
+a71.51
+[conv 1][conv 2]T1T2
+[f x][conv 1][f y]xT1y
+getNameAttribute
+a7! a
+Arrayz
+-0|1.0E+100|9223372036854775807
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(false)
+bool(false)
+bool(true)
+bool(true)
+string(1) "T"
+string(11) "ArrayObject"
