@@ -1417,6 +1417,14 @@ impl Interp {
                         *cell.borrow_mut() = nv;
                     }
                 }
+                if p.promote.is_some() {
+                    if let Some(o) = &inv.this {
+                        // `private array &$x` promotes the reference: the
+                        // property and the caller's variable share the cell.
+                        let key = self.prop_key(&f, o, pname);
+                        o.props.borrow_mut().insert(Rc::from(&*key), Value::Ref(cell.clone()));
+                    }
+                }
                 f.vars.insert(pname, cell);
                 continue;
             }
