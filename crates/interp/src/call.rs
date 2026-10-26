@@ -234,12 +234,43 @@ impl Interp {
                 }
                 Ok(c)
             }
-            ast::ClassRef::Dynamic(e) => match self.eval(f, e)? {
-                Value::Object(o) => Ok(o.class.clone()),
-                Value::Str(s) => self.lookup_class(&String::from_utf8_lossy(&s)),
-                _ => Err(self.error("Error", "Cannot use value as class name")),
-            },
+            ast::ClassRef::Dynamic(e) => {
+                let v = self.eval(f, e)?;
+                self.class_of_value(&v)
+            }
             ast::ClassRef::Anonymous(c) => self.declare_anon_class(f, c),
+        }
+    }
+
+    /// A class reference that resolves to `cls` (through the per-node
+    /// class cache). Its name starts with \x01, so it can't collide with a
+    /// name from source and call sites keep it out of their per-site caches.
+    pub fn dyn_class_ref(&self, cls: &Rc<Class>) -> &'static ast::ClassRef {
+        let key = Rc::as_ptr(cls) as usize;
+        if let Some(r) = self.dyn_class_refs.borrow().get(&key) {
+            return r;
+        }
+        let r: &'static ast::ClassRef = Box::leak(Box::new(ast::ClassRef::Name(format!("\x01{}", cls.name))));
+        let ast::ClassRef::Name(n) = r else { unreachable!() };
+        self.class_cache.borrow_mut().insert(n.as_ptr() as usize, cls.clone());
+        self.dyn_class_refs.borrow_mut().insert(key, r);
+        r
+    }
+
+    /// The class a runtime value names (`$x::...`, `new $x`).
+    pub fn class_of_value(&self, v: &Value) -> R<Rc<Class>> {
+        match v {
+            Value::Object(o) => Ok(o.class.clone()),
+            Value::Str(s) => self.lookup_class(&String::from_utf8_lossy(s)),
+            _ => Err(self.error("Error", "Class name must be a valid object or a string")),
+        }
+    }
+
+    /// `$x::class`.
+    pub fn class_name_of_value(&self, v: &Value) -> R<Value> {
+        match v {
+            Value::Object(o) => Ok(Value::str(o.class.php_name())),
+            v => Err(self.error("TypeError", &format!("Cannot use \"::class\" on {}", v.type_name()))),
         }
     }
 
@@ -1452,10 +1483,8 @@ impl Interp {
                 }
             }
             if let ast::ClassRef::Dynamic(e) = cref {
-                return match self.eval(f, e)? {
-                    Value::Object(o) => Ok(Value::str(o.class.php_name())),
-                    _ => Err(self.error("TypeError", "Cannot use \"::class\" on non-object")),
-                };
+                let v = self.eval(f, e)?;
+                return self.class_name_of_value(&v);
             }
             let cls = self.class_ref(f, cref)?;
             return Ok(Value::str(cls.php_name()));
