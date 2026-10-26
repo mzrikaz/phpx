@@ -19,6 +19,12 @@ thread_local! {
     static DISABLED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
+/// A new request: user wrappers registered by the last one are gone.
+pub fn reset() {
+    WRAPPERS.with(|w| w.borrow_mut().clear());
+    DISABLED.with(|d| d.borrow_mut().clear());
+}
+
 const BUILTIN: &[&str] = &["https", "ftps", "compress.zlib", "php", "file", "glob", "data", "http", "ftp"];
 
 fn scheme(path: &str) -> Option<String> {

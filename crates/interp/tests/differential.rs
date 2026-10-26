@@ -32,3 +32,43 @@ fn matches_php_output() {
     }
     assert!(failures.is_empty(), "{} of {} files differ from PHP:\n{}", failures.len(), files.len(), failures.join("\n"));
 }
+
+/// Like a server worker: every file runs twice, one interpreter after
+/// another on the same thread, which keeps parsed files and compiled code
+/// between them (inline caches start over). Each run must still print
+/// what PHP printed.
+#[test]
+fn matches_php_output_on_one_thread() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/php");
+    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "php")).collect();
+    files.sort();
+    let filter = std::env::var("PHPX_TEST").unwrap_or_default();
+    let files: Vec<_> = files.into_iter().filter(|p| p.file_name().unwrap().to_string_lossy().contains(&filter)).collect();
+    let failures = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(move || {
+            let mut failures = vec![];
+            for round in 0..2 {
+                for php in &files {
+                    let name = php.file_name().unwrap().to_string_lossy().into_owned();
+                    let want = std::fs::read_to_string(php.with_extension("out")).unwrap();
+                    let want_code: i32 = std::fs::read_to_string(php.with_extension("exit")).map(|s| s.trim().parse().unwrap()).unwrap_or(0);
+                    let (got, code) = phpx_interp::run_capture(&std::fs::read_to_string(php).unwrap());
+                    if got != want || code != want_code {
+                        let line = want.lines().zip(got.lines()).position(|(a, b)| a != b).unwrap_or(want.lines().count().min(got.lines().count()));
+                        failures.push(format!(
+                            "{name} (round {round}): exit {code} (want {want_code}); first difference at line {}:\n  want: {:?}\n  got:  {:?}",
+                            line + 1,
+                            want.lines().nth(line).unwrap_or("<eof>"),
+                            got.lines().nth(line).unwrap_or("<eof>")
+                        ));
+                    }
+                }
+            }
+            failures
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(failures.is_empty(), "{} runs differ from PHP:\n{}", failures.len(), failures.join("\n"));
+}

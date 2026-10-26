@@ -158,7 +158,7 @@ pub fn entries(it: &Interp, want_args: bool, limit: usize) -> Vec<Entry> {
             let caller_internal = rec.prev.as_ref().is_some_and(|p| p.internal);
             if !(rec.internal && caller_internal) && !rec.frame.is_null() {
                 let f = &*rec.frame;
-                let file = if rec.pos.file as usize == PRELUDE_FILE { None } else { Some(it.files.borrow()[rec.pos.file as usize].path.display().to_string()) };
+                let file = if rec.pos.file as usize == PRELUDE_FILE { None } else { Some(it.file_path(rec.pos.file as usize)) };
                 let line = if file.is_some() { it.line_of(rec.pos.file as usize, rec.pos.off) } else { 0 };
                 let class = match &f.class {
                     Some(c) => Some(c.name.clone()),

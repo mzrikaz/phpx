@@ -130,6 +130,11 @@ pub enum Callable {
 }
 
 thread_local! {
+    /// Every file this thread's interpreters ran, by id: ids stay the same
+    /// from one request's interpreter to the next, so code compiled for
+    /// one still points at the right file in the next.
+    static FILE_REG: RefCell<(Vec<(PathBuf, &'static str)>, HashMap<PathBuf, usize>)> = RefCell::new((vec![], HashMap::new()));
+    static PRELUDE: std::cell::OnceCell<(&'static str, &'static ast::File)> = const { std::cell::OnceCell::new() };
     static EMPTY_NAME: Rc<str> = Rc::from("");
     /// Parsed files by path (syntax trees are immutable, so they outlive
     /// any one interpreter on this thread).
@@ -339,8 +344,6 @@ impl Frame {
 
 pub struct Interp {
     pub files: RefCell<Vec<FileInfo>>,
-    /// Current id of each file path.
-    file_ids: RefCell<FxHashMap<PathBuf, usize>>,
     /// Namespace segments of a file's top level, by file id.
     segments: RefCell<FxHashMap<usize, Rc<Vec<(&'static [Stmt], Rc<NsCtx>)>>>>,
     pub functions: RefCell<FxHashMap<Rc<str>, Rc<UserFn>>>,
@@ -369,7 +372,8 @@ pub struct Interp {
     /// `$obj->name()` call sites (by the name's AST address): the method
     /// last found for (class, calling scope), visible from there.
     pub method_sites: RefCell<FxHashMap<usize, (usize, usize, Rc<crate::class::Method>)>>,
-    pub included: RefCell<HashSet<PathBuf>>,
+    /// Files included so far, in inclusion order (the main script first).
+    pub included: RefCell<indexmap::IndexSet<PathBuf>>,
     /// Declared classes per AST node, so hoisted declarations aren't redone.
     pub declared: RefCell<HashSet<usize>>,
     /// (file, byte offset) of the statement running now, for error lines.
@@ -426,7 +430,7 @@ pub struct Interp {
     /// See `file_ctx`.
     pub file_ctxs: RefCell<Vec<Option<Rc<NsCtx>>>>,
     /// Native compiler for whole functions (None when disabled).
-    pub native: RefCell<Option<crate::compiler::Native>>,
+    pub native: Rc<RefCell<Option<crate::compiler::Native>>>,
     /// Native compiler for hot numeric functions (None when disabled).
     pub jit: RefCell<Option<phpx_jit::Jit>>,
     /// Function AST -> its namespace context (for the JIT's name lookups).
@@ -437,11 +441,17 @@ pub struct Interp {
 
 impl Interp {
     pub fn new(writer: Box<dyn Write>) -> Rc<Interp> {
+        // A thread runs one interpreter after another (server workers):
+        // nothing of the last one's request may show through. (The native
+        // compiler's caches go first: they can hold that request's objects.)
+        let native = crate::compiler::for_new_interp();
+        crate::gc::new_request();
+        crate::reset_request_state();
+        crate::value::builtin_shadowed().store(false, std::sync::atomic::Ordering::Relaxed);
         let it = Rc::new(Interp {
-            files: RefCell::new(vec![]),
+            files: RefCell::new(FILE_REG.with(|r| r.borrow().0.iter().map(|(path, src)| FileInfo { path: path.clone(), src, lines: Default::default() }).collect())),
             functions: RefCell::new(FxHashMap::default()),
             str_callables: RefCell::new(FxHashMap::default()),
-            file_ids: RefCell::new(FxHashMap::default()),
             segments: RefCell::new(FxHashMap::default()),
             arg_names: RefCell::new(FxHashMap::default()),
             builtins: crate::builtins::table().into_iter().collect(),
@@ -458,7 +468,7 @@ impl Interp {
             composer: RefCell::new(None),
             generators: RefCell::new(vec![]),
             autoloading: RefCell::new(HashSet::new()),
-            included: RefCell::new(HashSet::new()),
+            included: RefCell::new(indexmap::IndexSet::new()),
             declared: RefCell::new(HashSet::new()),
             pos: Cell::new(Pos { file: 0, off: 0 }),
             globals: Cell::new(std::ptr::null_mut()),
@@ -492,7 +502,7 @@ impl Interp {
             ref_return_depth: Cell::new(usize::MAX),
             magic_guards: RefCell::new(Vec::new()),
             file_ctxs: RefCell::new(vec![]),
-            native: RefCell::new(crate::compiler::Native::from_env()),
+            native,
             decl_ctx: RefCell::new(FxHashMap::default()),
         });
         *it.me.borrow_mut() = Rc::downgrade(&it);
@@ -501,26 +511,62 @@ impl Interp {
     }
 
     fn load_prelude(&self) {
-        assert_eq!(self.files.borrow().len(), PRELUDE_FILE, "the prelude must be the first file");
-        let src = concat!(include_str!("prelude.php"), include_str!("prelude_spl.php"), include_str!("prelude_reflection.php"), include_str!("prelude_date.php"), include_str!("prelude_splfs.php"), include_str!("prelude_tokenizer.php"), include_str!("prelude_dom.php"), include_str!("prelude_redis.php"), include_str!("prelude_pdo.php"), include_str!("prelude_random.php"), include_str!("prelude_intl.php"));
-        let (file, diags) = phpx_syntax::check(src);
-        assert!(!diags.iter().any(|d| d.is_error()), "prelude has errors: {diags:?}");
-        let file: &'static ast::File = Box::leak(Box::new(file));
-        let id = self.add_file(PathBuf::from("[prelude]"), src);
+        // Parsed once per thread (each request's interpreter declares it).
+        let (src, file) = PRELUDE.with(|p| *p.get_or_init(|| {
+            let (src, file) = prelude_source();
+            let id = self.add_file(PathBuf::from("[prelude]"), src);
+            assert_eq!(id, PRELUDE_FILE, "the prelude must be the first file");
+            (src, file)
+        }));
+        let _ = src;
+        let id = PRELUDE_FILE;
         let mut frame = Frame::new(self.top_ctx(id, false), 0);
         if self.run_stmts_top(&mut frame, &file.stmts, id).is_err() {
             panic!("prelude failed to load");
         }
     }
+}
+
+/// The prelude's source and syntax tree.
+fn prelude_source() -> (&'static str, &'static ast::File) {
+    {
+        let src = concat!(include_str!("prelude.php"), include_str!("prelude_spl.php"), include_str!("prelude_reflection.php"), include_str!("prelude_date.php"), include_str!("prelude_splfs.php"), include_str!("prelude_tokenizer.php"), include_str!("prelude_dom.php"), include_str!("prelude_redis.php"), include_str!("prelude_pdo.php"), include_str!("prelude_random.php"), include_str!("prelude_intl.php"));
+        let (file, diags) = phpx_syntax::check(src);
+        assert!(!diags.iter().any(|d| d.is_error()), "prelude has errors: {diags:?}");
+        (src, Box::leak(Box::new(file)))
+    }
+}
+
+impl Interp {
 
     pub fn rc(&self) -> Rc<Interp> {
         self.me.borrow().upgrade().expect("interpreter dropped")
     }
 
+    /// Register a file: its id is its place in the thread's registry
+    /// (this interpreter's list catches up first if another one added
+    /// files meanwhile).
     pub fn add_file(&self, path: PathBuf, src: &'static str) -> usize {
+        self.sync_files();
         let mut files = self.files.borrow_mut();
+        FILE_REG.with(|r| {
+            let mut r = r.borrow_mut();
+            r.0.push((path.clone(), src));
+            r.1.insert(path.clone(), files.len());
+        });
         files.push(FileInfo { path, src, lines: Default::default() });
         files.len() - 1
+    }
+
+    /// Bring this interpreter's file list up to the thread's registry.
+    fn sync_files(&self) {
+        let have = self.files.borrow().len();
+        FILE_REG.with(|r| {
+            let r = r.borrow();
+            if r.0.len() > have {
+                self.files.borrow_mut().extend(r.0[have..].iter().map(|(path, src)| FileInfo { path: path.clone(), src, lines: Default::default() }));
+            }
+        });
     }
 
     /// Global-namespace context for `file`, shared (built once per file).
@@ -548,7 +594,16 @@ impl Interp {
         })
     }
 
+    /// (A file another interpreter on this thread registered since this
+    /// one started is fetched from the registry.)
+    fn have_file(&self, file: usize) {
+        if file >= self.files.borrow().len() {
+            self.sync_files();
+        }
+    }
+
     pub fn file_path(&self, file: usize) -> String {
+        self.have_file(file);
         self.files.borrow()[file].path.display().to_string()
     }
 
@@ -556,12 +611,14 @@ impl Interp {
     pub fn here(&self) -> (String, usize) {
         let Pos { file, off } = self.pos.get();
         let file = file as usize;
+        self.have_file(file);
         let files = self.files.borrow();
         let f = &files[file.min(files.len() - 1)];
         (f.path.display().to_string(), f.line(off as usize))
     }
 
     pub fn line_of(&self, file: usize, off: u32) -> usize {
+        self.have_file(file);
         let files = self.files.borrow();
         files[file].line(off as usize)
     }
@@ -702,14 +759,15 @@ impl Interp {
     /// The id of `path` with source `src`: the same file included again
     /// keeps its id (and everything cached per file id).
     fn file_id(&self, path: &Path, src: &'static str) -> usize {
-        if let Some(&id) = self.file_ids.borrow().get(path) {
-            if self.files.borrow().get(id).is_some_and(|f| std::ptr::eq(f.src, src)) {
-                return id;
-            }
+        let known = FILE_REG.with(|r| {
+            let r = r.borrow();
+            r.1.get(path).copied().filter(|&id| std::ptr::eq(r.0[id].1, src))
+        });
+        if let Some(id) = known {
+            self.sync_files();
+            return id;
         }
-        let id = self.add_file(path.to_path_buf(), src);
-        self.file_ids.borrow_mut().insert(path.to_path_buf(), id);
-        id
+        self.add_file(path.to_path_buf(), src)
     }
 
     /// Execute a file's top level in `frame` (shared scope, like `include`).

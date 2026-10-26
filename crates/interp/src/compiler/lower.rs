@@ -79,7 +79,7 @@ pub struct Lower<'a> {
     pub unwind: Block,
     pub cx: CValue,
     pub out: CValue,
-    pos_addr: i64,
+    pos_addr: CValue,
     file: u32,
     terminated: bool,
     /// Constant Values (strings, null) referenced by address; kept alive by the caller.
@@ -206,7 +206,7 @@ impl<'a> Lower<'a> {
         unwind: Block,
         cx: CValue,
         out: CValue,
-        pos_addr: i64,
+        pos_addr: CValue,
         file: u32,
         consts: &'a mut Vec<Box<Value>>,
         sites: &'a mut Vec<Box<CallSite>>,
@@ -588,7 +588,7 @@ impl<'a> Lower<'a> {
             // Built-in classes: positions stay at the caller.
             return;
         }
-        let p = self.iconst(self.pos_addr);
+        let p = self.pos_addr;
         let file = self.b.ins().iconst(types::I32, self.file as i64);
         let off = self.b.ins().iconst(types::I32, off as i64);
         self.b.ins().store(flags(), file, p, 0);
@@ -2101,7 +2101,7 @@ impl<'a> Lower<'a> {
         self.b.ins().stack_store(types::I64, it, cx2, 0);
         self.b.ins().stack_store(types::I64, frame, cx2, lay.cx_frame);
         let cx2a = self.b.ins().stack_addr(types::I64, cx2, 0);
-        let pa = self.iconst(self.pos_addr);
+        let pa = self.pos_addr;
         let saved = self.b.ins().load(types::I64, flags(), pa, 0);
         let mut sig = self.module.make_signature();
         for _ in 0..4 {

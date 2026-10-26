@@ -55,6 +55,10 @@ thread_local! {
     static REFS: RefCell<HashMap<usize, (Weak<Obj>, Weak<Obj>)>> = RefCell::new(HashMap::new());
 }
 
+pub fn reset() {
+    REFS.with(|r| r.borrow_mut().clear());
+}
+
 fn weakref_create(it: &Interp, _: Option<&Rc<Obj>>, cls: &Rc<Class>, a: Vec<Value>) -> R<Value> {
     let Some(Value::Object(target)) = a.first().map(Value::deref) else {
         return Err(it.error("TypeError", "WeakReference::create(): Argument #1 ($object) must be of type object"));

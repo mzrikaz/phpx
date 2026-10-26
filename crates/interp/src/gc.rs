@@ -115,6 +115,77 @@ pub fn track(make: impl FnOnce(u32) -> Rc<Obj>) -> Rc<Obj> {
     })
 }
 
+/// A new request's interpreter: handles start over from 1, like PHP's
+/// object store at request start. (Free handles are relinked lowest first
+/// when objects of an earlier request still live.)
+pub fn new_request() {
+    free_leftovers();
+    let _ = ST.try_with(|st| {
+        let store = st.store();
+        if st.live.get() == 0 {
+            store.clear();
+            st.free_head.set(0);
+        } else {
+            let mut head = 0;
+            for id in (1..store.len()).rev() {
+                if store[id] & 1 == 1 {
+                    store[id] = head << 1 | 1;
+                    head = id;
+                }
+            }
+            st.free_head.set(head);
+        }
+        st.since.set(0);
+        st.threshold.set(MIN_THRESHOLD);
+        st.due.set(false);
+        st.enabled.set(true);
+        st.runs.set(0);
+        st.collected.set(0);
+    });
+}
+
+/// Objects an earlier request's interpreter left alive (reference cycles:
+/// PHP frees its whole heap at request end, phpx frees by reference
+/// count). Their destructors ran at that request's shutdown; what they,
+/// their classes' static properties and constants hold is released so the
+/// cycles fall apart.
+fn free_leftovers() {
+    let live: Vec<Rc<Obj>> = ST
+        .try_with(|st| {
+            if st.live.get() == 0 {
+                return vec![];
+            }
+            st.store()
+                .iter()
+                .filter(|&&p| p != 0 && p & 1 == 0)
+                .map(|&p| unsafe {
+                    Rc::increment_strong_count(p as *const Obj);
+                    Rc::from_raw(p as *const Obj)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if live.is_empty() {
+        return;
+    }
+    let mut held: Vec<Box<dyn std::any::Any>> = vec![];
+    for o in &live {
+        o.set_destructed();
+        held.push(Box::new(std::mem::take(&mut *o.props.borrow_mut())));
+        held.push(Box::new(o.take_internal()));
+        let mut c = Some(o.class.clone());
+        while let Some(cls) = c {
+            for sp in cls.static_props.values() {
+                held.push(Box::new(sp.value.borrow_mut().take()));
+            }
+            held.push(Box::new(std::mem::take(&mut *cls.consts.borrow_mut())));
+            c = cls.parent.clone();
+        }
+    }
+    drop(held);
+    drop(live);
+}
+
 /// Object freed: give back its registry slot and (unless `keep_id`) its
 /// handle.
 pub fn release(o: &Obj, keep_id: bool) {

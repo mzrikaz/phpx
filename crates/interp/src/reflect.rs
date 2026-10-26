@@ -257,7 +257,7 @@ fn file_of(it: &Interp, ctx: &NsCtx) -> Value {
     if ctx.file == PRELUDE_FILE {
         return Value::Bool(false);
     }
-    let path = it.files.borrow()[ctx.file].path.display().to_string();
+    let path = it.file_path(ctx.file);
     Value::str(&path)
 }
 

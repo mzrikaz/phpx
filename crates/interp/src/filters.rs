@@ -40,6 +40,11 @@ thread_local! {
     static USER: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// A new request: user filters registered by the last one are gone.
+pub fn reset() {
+    USER.with(|u| u.borrow_mut().clear());
+}
+
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn b64_encode(data: &[u8]) -> Vec<u8> {

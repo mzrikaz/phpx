@@ -171,6 +171,12 @@ pub(crate) fn reset_request_state() {
     reflect::reset();
     random::reset();
     intl::reset();
+    wrappers::reset();
+    filters::reset();
+    weak::reset();
+    date::reset();
+    session::reset();
+    ext_more::reset();
 }
 
 /// Sets up a script's globals once its interpreter exists.

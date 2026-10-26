@@ -343,7 +343,35 @@ fn rc_layout_ok() -> bool {
     before == 1 && after == 2 && raw as usize == payload + 2 * std::mem::size_of::<usize>()
 }
 
+thread_local! {
+    /// The thread's compiled code: kept from one request's interpreter to
+    /// the next (functions are keyed by their syntax tree, which the
+    /// thread's parse cache keeps), so a server worker compiles a hot
+    /// function once, not once per request.
+    static THREAD_NATIVE: std::rc::Rc<std::cell::RefCell<Option<Native>>> = std::rc::Rc::new(std::cell::RefCell::new(Native::from_env()));
+}
+
+/// The thread's native compiler, its inline caches emptied for a new
+/// interpreter (they point at the previous one's classes and functions).
+pub fn for_new_interp() -> std::rc::Rc<std::cell::RefCell<Option<Native>>> {
+    THREAD_NATIVE.with(|n| {
+        if let Ok(mut g) = n.try_borrow_mut() {
+            if let Some(n) = g.as_mut() {
+                n.reset_caches();
+            }
+        }
+        n.clone()
+    })
+}
+
 impl Native {
+    fn reset_caches(&mut self) {
+        self.sites.iter().for_each(|s| s.reset());
+        self.msites.iter().for_each(|s| s.reset());
+        self.psites.iter().for_each(|s| s.reset());
+        self.csites.iter().for_each(|s| s.reset());
+    }
+
     pub fn from_env() -> Option<Native> {
         let mode = std::env::var("PHPX_NATIVE").unwrap_or_default();
         let threshold = match mode.as_str() {
@@ -462,7 +490,7 @@ impl Native {
         crate::alloc::uncharged(|| self.compile_mode_inner(it, t, top_level, osr))
     }
 
-    fn compile_mode_inner(&mut self, it: &Interp, t: &Target, top_level: bool, osr: Option<usize>) -> Result<Entry, &'static str> {
+    fn compile_mode_inner(&mut self, _it: &Interp, t: &Target, top_level: bool, osr: Option<usize>) -> Result<Entry, &'static str> {
         if self.skip.iter().any(|s| t.display.contains(s.as_str())) || self.max.is_some_and(|m| self.count >= m) {
             return Err("excluded (PHPX_NATIVE_MAX / PHPX_NATIVE_SKIP)");
         }
@@ -503,7 +531,6 @@ impl Native {
         ctx.func.signature = sig;
         let mut fctx = FunctionBuilderContext::new();
         let cfg = self.module.target_config();
-        let pos_addr = &it.pos as *const _ as i64;
         let mut consts = vec![];
         let mut sites = vec![];
         {
@@ -523,6 +550,10 @@ impl Native {
             // the entry block first in the layout, as Cranelift requires.
             let init = b.create_block();
             b.switch_to_block(entry);
+            // The running interpreter's position (diagnostics): found
+            // through cx, so the code serves every request's interpreter.
+            let itp = b.ins().load(types::I64, cranelift_codegen::ir::MemFlagsData::trusted(), cxv, std::mem::offset_of!(rt::Cx, it) as i32);
+            let pos_addr = b.ins().iadd_imm_s(itp, std::mem::offset_of!(Interp, pos) as i64);
             b.ins().jump(init, &[]);
             b.switch_to_block(start);
             let mut l = lower::Lower::new(

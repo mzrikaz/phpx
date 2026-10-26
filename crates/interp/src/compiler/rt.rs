@@ -1501,6 +1501,7 @@ impl SiteFrame {
                 }
             } else {
                 *slot = None;
+                (*self.retired.get()).clear();
             }
         }
     }
@@ -2818,6 +2819,46 @@ pub unsafe extern "C" fn rt_unhandled_match(c: *mut Cx, v: *const Value) -> u64 
     };
     *it.pending.borrow_mut() = Some(it.error("UnhandledMatchError", &format!("Unhandled match case {repr}")));
     1
+}
+
+impl CallSite {
+    /// Forget everything cached (a new request: its functions are new).
+    pub fn reset(&self) {
+        self.direct.set(0);
+        self.frame.invalidate();
+        self.cached.set(None);
+        self.builtin.set(None);
+        self.bspec.set(None);
+        self.builtin_ref.set(None);
+        self.jit.set(None);
+    }
+}
+
+impl MethodSite {
+    pub fn reset(&self) {
+        self.direct.set(0);
+        self.direct_class.set(0);
+        self.direct_scope.set(0);
+        self.frame.invalidate();
+        self.cached.set(None);
+        *self.interp.borrow_mut() = None;
+    }
+}
+
+impl PropSite {
+    pub fn reset(&self) {
+        for c in [&self.shape, &self.slot, &self.scope, &self.wshape, &self.wslot, &self.wscope] {
+            c.set(0);
+        }
+    }
+}
+
+impl ClassSite {
+    pub fn reset(&self) {
+        self.key.set([0; 3]);
+        *self.sp.borrow_mut() = None;
+        *self.cv.borrow_mut() = None;
+    }
 }
 
 impl SiteFrame {

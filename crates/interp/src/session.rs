@@ -37,6 +37,11 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State { status: NONE, id: String::new(), handler: Handler::Files, slot: None, read: vec![], cookie: None });
 }
 
+/// A new request: no session yet, the default handler.
+pub fn reset() {
+    STATE.with(|s| *s.borrow_mut() = State { status: NONE, id: String::new(), handler: Handler::Files, slot: None, read: vec![], cookie: None });
+}
+
 fn ini(it: &Interp, k: &str) -> String {
     it.ini_get(k).unwrap_or_default()
 }

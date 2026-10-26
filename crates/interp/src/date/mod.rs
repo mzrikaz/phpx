@@ -353,6 +353,10 @@ thread_local! {
     static LAST_ERRORS: std::cell::RefCell<Option<Value>> = const { std::cell::RefCell::new(None) };
 }
 
+pub fn reset() {
+    LAST_ERRORS.with(|l| *l.borrow_mut() = None);
+}
+
 /// The warning_count/warnings/error_count/errors entries of a parse.
 pub(crate) fn errors_array(warnings: &[(usize, String)], errors: &[(usize, String)], out: &mut PhpArray) {
     let list = |v: &[(usize, String)]| {

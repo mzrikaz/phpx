@@ -134,6 +134,10 @@ thread_local! {
     static AUTOLOAD_EXTS: RefCell<String> = RefCell::new(".inc,.php".into());
 }
 
+pub fn reset() {
+    AUTOLOAD_EXTS.with(|x| *x.borrow_mut() = ".inc,.php".to_string());
+}
+
 const SPL_CLASSES: &[&str] = &[
     "AppendIterator", "ArrayIterator", "ArrayObject", "BadFunctionCallException", "BadMethodCallException", "CachingIterator", "CallbackFilterIterator", "DirectoryIterator", "DomainException",
     "EmptyIterator", "FilesystemIterator", "FilterIterator", "GlobIterator", "InfiniteIterator", "InvalidArgumentException", "IteratorIterator", "LengthException", "LimitIterator", "LogicException",

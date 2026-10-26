@@ -661,6 +661,15 @@ impl Obj {
         self.gc.get() & DESTRUCTED != 0
     }
 
+    /// Remove the native state (closures, generators, ...), for freeing an
+    /// object's cycles.
+    pub fn take_internal(&self) -> Option<Box<RefCell<Internal>>> {
+        if self.gc.get() & HAS_INTERNAL == 0 {
+            return None;
+        }
+        INTERNALS.try_with(|m| m.borrow_mut().remove(&self.id)).ok().flatten()
+    }
+
     pub fn set_destructed(&self) {
         self.gc.set(self.gc.get() | DESTRUCTED);
     }

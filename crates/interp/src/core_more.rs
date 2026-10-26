@@ -25,14 +25,7 @@ fn declared(it: &Interp, kinds: &[ClassKind]) -> Value {
 
 fn included_files(it: &Interp) -> Value {
     let included = it.included.borrow();
-    let files = it.files.borrow();
-    let mut out = vec![];
-    for f in files.iter().skip(1) {
-        if included.contains(&f.path) && !out.contains(&f.path) {
-            out.push(f.path.clone());
-        }
-    }
-    Value::array(PhpArray::from_list(out.iter().map(|p| Value::str(&p.to_string_lossy())).collect::<Vec<_>>()))
+    Value::array(PhpArray::from_list(included.iter().map(|p| Value::str(&p.to_string_lossy())).collect::<Vec<_>>()))
 }
 
 fn mangled_vars(it: &Interp, a: &[Value]) -> R<Value> {
