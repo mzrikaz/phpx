@@ -155,6 +155,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_magic: 3 => true,
     rt_class_const: 5 => true,
     rt_static_prop_get: 5 => true,
+    rt_called_class: 2 => true,
     rt_instanceof: 3 => true,
     rt_place_assign: 9 => true,
     rt_place_update: 9 => true,

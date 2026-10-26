@@ -651,6 +651,16 @@ pub unsafe extern "C" fn rt_static_prop_get(c: *mut Cx, cref: *const ast::ClassR
     status(it, r, |v| put(dst, v))
 }
 
+/// get_called_class().
+pub unsafe extern "C" fn rt_called_class(c: *mut Cx, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    let r = match &f.static_class {
+        Some(c) => Ok(Value::str(&c.name)),
+        None => Err(it.error("Error", "get_called_class() must be called from within a class")),
+    };
+    status(it, r, |v| put(dst, v))
+}
+
 pub unsafe extern "C" fn rt_instanceof(c: *mut Cx, v: *const Value, cref: *const ast::ClassRef) -> u64 {
     let (it, f) = cx(c);
     let Value::Object(o) = &*v else { return 0 };
@@ -706,10 +716,7 @@ pub unsafe extern "C" fn rt_place_assign(
                 it.finish_pending(p)?;
             }
         } else {
-            let Value::Object(o) = &*root else {
-                return Err(it.error("Error", &format!("Attempt to assign property \"{}\" on {}", name_of(name, len), (*root).type_name())));
-            };
-            let place = crate::expr::Place { root: crate::expr::Root::Prop(o.clone(), it.prop_key_rc(f, o, Rc::from(name_of(name, len)))), path };
+            let place = root_place(it, f, root, name, len, path)?;
             it.place_set(f, &place, v.clone())?;
         }
         Ok(())
@@ -865,6 +872,24 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
     status(it, r, |_| put(dst, v))
 }
 
+/// Flag on a place's name length: the root is a class reference and the
+/// name a static property of that class.
+pub const STATIC_ROOT: u64 = 1 << 63;
+
+/// The non-local root of a write: property `name` of the object at `root`,
+/// or (with STATIC_ROOT) static property `name` of the class at `root`.
+unsafe fn root_place(it: &Interp, f: &mut Frame, root: *mut Value, name: *const u8, len: u64, path: Vec<Option<crate::expr::Off>>) -> R<crate::expr::Place> {
+    if len & STATIC_ROOT != 0 {
+        let sp = it.find_static_prop(f, &*(root as *const ast::ClassRef), name_of(name, len & !STATIC_ROOT))?;
+        it.static_prop_slot(&sp)?;
+        return Ok(crate::expr::Place { root: crate::expr::Root::Static(sp), path });
+    }
+    match &*root {
+        Value::Object(o) => Ok(place_for(it, f, Some(o.clone()), name_of(name, len), path)),
+        other => Err(it.error("Error", &format!("Attempt to assign property \"{}\" on {}", name_of(name, len), other.type_name()))),
+    }
+}
+
 fn place_for(it: &Interp, f: &Frame, root_obj: Option<Rc<Obj>>, name: &'static str, path: Vec<Option<crate::expr::Off>>) -> crate::expr::Place {
     let o = root_obj.unwrap();
     let key = it.prop_key_rc(f, &o, Rc::from(name));
@@ -888,14 +913,7 @@ pub unsafe extern "C" fn rt_place_update(
     let (it, f) = cx(c);
     let r = (|| -> R<Value> {
         let path = keys_of(it, keys, n, 0)?;
-        let obj = if name.is_null() {
-            None
-        } else {
-            match &*root {
-                Value::Object(o) => Some(o.clone()),
-                other => return Err(it.error("Error", &format!("Attempt to assign property \"{}\" on {}", name_of(name, len), other.type_name()))),
-            }
-        };
+        let obj = if name.is_null() { None } else { Some(root_place(it, f, root, name, len, path.clone())?) };
         let read = |it: &Interp, f: &mut Frame| -> R<Option<Value>> {
             match &obj {
                 None => {
@@ -914,7 +932,7 @@ pub unsafe extern "C" fn rt_place_update(
                     }
                     Ok(Some(cur))
                 }
-                Some(o) => it.place_get(f, &place_for(it, f, Some(o.clone()), name_of(name, len), path.clone())),
+                Some(p) => it.place_get(f, p),
             }
         };
         let cur = read(it, f)?;
@@ -955,7 +973,7 @@ pub unsafe extern "C" fn rt_place_update(
                     it.finish_pending(p)?;
                 }
             }
-            Some(o) => it.place_set(f, &place_for(it, f, Some(o.clone()), name_of(name, len), path), new)?,
+            Some(p) => it.place_set(f, p, new)?,
         }
         Ok(result)
     })();
@@ -971,6 +989,17 @@ pub unsafe extern "C" fn rt_unset_place(c: *mut Cx, root: *mut Value, name: *con
     let (it, f) = cx(c);
     let r = (|| -> R<()> {
         let path = keys_of(it, keys, n, 0)?;
+        if len & STATIC_ROOT != 0 {
+            let place = root_place(it, f, root, name, len, vec![])?;
+            let crate::expr::Root::Static(sp) = &place.root else { unreachable!() };
+            if path.is_empty() {
+                return Err(it.error("Error", "Attempt to unset static property"));
+            }
+            let mut cur = sp.value.borrow_mut().take().unwrap_or_default();
+            let r = remove_path(it, &mut cur, &path);
+            *sp.value.borrow_mut() = Some(cur);
+            return r;
+        }
         if !name.is_null() {
             let Value::Object(o) = &*root else { return Ok(()) };
             let pkey = it.prop_key(f, o, name_of(name, len));

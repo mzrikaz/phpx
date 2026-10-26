@@ -1,0 +1,122 @@
+array(2) {
+  ["k0"]=>
+  int(0)
+  ["C"]=>
+  array(1) {
+    ["k0"]=>
+    int(0)
+  }
+}
+int(5)
+string(3) "ak0"
+array(2) {
+  [0]=>
+  array(1) {
+    ["C"]=>
+    array(1) {
+      ["k0"]=>
+      int(0)
+    }
+  }
+  [1]=>
+  array(1) {
+    ["x"]=>
+    array(0) {
+    }
+  }
+}
+array(1) {
+  ["x"]=>
+  array(1) {
+    [0]=>
+    int(0)
+  }
+}
+array(2) {
+  ["C"]=>
+  array(2) {
+    ["k0"]=>
+    int(0)
+    ["k1"]=>
+    int(2)
+  }
+  ["k1"]=>
+  int(1)
+}
+int(10)
+string(5) "ak0k1"
+array(2) {
+  [0]=>
+  array(1) {
+    ["C"]=>
+    array(2) {
+      ["k0"]=>
+      int(0)
+      ["k1"]=>
+      int(2)
+    }
+  }
+  [1]=>
+  array(1) {
+    ["x"]=>
+    array(0) {
+    }
+  }
+}
+array(1) {
+  ["x"]=>
+  array(1) {
+    [0]=>
+    int(0)
+  }
+}
+array(2) {
+  ["C"]=>
+  array(3) {
+    ["k0"]=>
+    int(0)
+    ["k1"]=>
+    int(2)
+    ["k2"]=>
+    int(4)
+  }
+  ["k2"]=>
+  int(2)
+}
+int(15)
+string(7) "ak0k1k2"
+array(2) {
+  [0]=>
+  array(1) {
+    ["C"]=>
+    array(3) {
+      ["k0"]=>
+      int(0)
+      ["k1"]=>
+      int(2)
+      ["k2"]=>
+      int(4)
+    }
+  }
+  [1]=>
+  array(1) {
+    ["x"]=>
+    array(0) {
+    }
+  }
+}
+array(1) {
+  ["x"]=>
+  array(1) {
+    [0]=>
+    int(0)
+  }
+}
+array(1) {
+  ["reset"]=>
+  bool(true)
+}
+Cannot access private property D::$p
+Access to undeclared static property D::$zz
+Cannot access private property D::$p
+Access to undeclared static property D::$zz

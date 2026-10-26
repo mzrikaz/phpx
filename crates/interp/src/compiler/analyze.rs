@@ -39,7 +39,7 @@ pub struct Analysis {
 }
 
 /// Scope-reading built-ins: they need named variables.
-const SCOPE_FNS: &[&str] = &["compact", "eval", "get_defined_vars", "func_get_args", "func_num_args", "extract", "get_called_class"];
+const SCOPE_FNS: &[&str] = &["compact", "eval", "get_defined_vars", "func_get_args", "func_num_args", "extract"];
 
 pub fn analyze_mode(params: &'static [ast::Param], captured: &[&'static str], body: Body, top_level: bool) -> Result<Analysis, Reject> {
     let mut a = Analysis { locals: Locals::default(), uses_this: false, top_level };
@@ -237,6 +237,7 @@ impl Analysis {
                 self.expr(object)?;
                 self.member(name)
             }
+            ExprKind::StaticProp { class, .. } => self.class_ref(class),
             _ => Err("write target"),
         }
     }
@@ -311,7 +312,7 @@ impl Analysis {
                             self.target(&it.value)?;
                         }
                     }
-                    StaticProp { .. } => return Err("static property write"),
+                    StaticProp { .. } => self.place_base(target)?,
                     _ => return Err("assignment target"),
                 }
                 self.expr(value)
@@ -322,7 +323,7 @@ impl Analysis {
                     Var(n) if n != "this" => {
                         self.locals.slot(n);
                     }
-                    Index { .. } | Prop { nullsafe: false, .. } => self.place_base(target)?,
+                    Index { .. } | Prop { nullsafe: false, .. } | StaticProp { .. } => self.place_base(target)?,
                     _ => return Err("compound assignment target"),
                 }
                 self.expr(value)
@@ -332,7 +333,7 @@ impl Analysis {
                     self.locals.slot(n);
                     Ok(())
                 }
-                Index { .. } | Prop { nullsafe: false, .. } => self.place_base(expr),
+                Index { .. } | Prop { nullsafe: false, .. } | StaticProp { .. } => self.place_base(expr),
                 _ => Err("++/-- target"),
             },
             Binary { left, right, .. } => {

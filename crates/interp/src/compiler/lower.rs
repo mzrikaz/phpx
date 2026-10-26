@@ -132,19 +132,11 @@ impl ByRef {
     }
 }
 
-/// `C::$p` or an element path under it.
-fn rooted_at_static_prop(e: &Expr) -> bool {
-    match &e.kind {
-        ExprKind::StaticProp { .. } => true,
-        ExprKind::Index { base, .. } => rooted_at_static_prop(base),
-        _ => false,
-    }
-}
-
 /// A write target that can be evaluated again without side effects.
 fn pure_place(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Var(_) => true,
+        ExprKind::StaticProp { class: ClassRef::Name(_), .. } => true,
         ExprKind::Prop { object, name: MemberName::Ident(_), nullsafe: false } => pure_operand(object),
         ExprKind::Index { base, index: Some(i) } => pure_place(base) && pure_operand(i),
         _ => false,
@@ -1551,6 +1543,9 @@ impl<'a> Lower<'a> {
                 self.release(cv);
                 r
             }
+            Call { callee, args } if args.is_empty() && matches!(&callee.kind, ExprKind::Name(n) if n.trim_start_matches('\\').eq_ignore_ascii_case("get_called_class")) => {
+                self.helper_value("rt_called_class", |l| vec![l.cx])?
+            }
             Call { callee, args } if intrinsic_kind(callee, args).is_some() => {
                 let ExprKind::Name(n) = &callee.kind else { unreachable!() };
                 self.intrinsic(intrinsic_kind(callee, args).unwrap(), n, args)?
@@ -2302,11 +2297,7 @@ impl<'a> Lower<'a> {
         }
         let mut wbs = vec![];
         for (i, a) in args.iter().enumerate() {
-            if by_ref.may_be_ref(i) && rooted_at_static_prop(&a.value) {
-                // No write-back path for static properties: interpret.
-                return Err("by-reference static property argument");
-            }
-            let place = !a.spread && a.name.is_none() && matches!(a.value.kind, ExprKind::Prop { .. } | ExprKind::Index { .. });
+            let place = !a.spread && a.name.is_none() && matches!(a.value.kind, ExprKind::Prop { .. } | ExprKind::Index { .. } | ExprKind::StaticProp { .. });
             let wb = if place && by_ref.may_be_ref(i) && i < 64 {
                 if !pure_place(&a.value) {
                     if let ByRef::Builtin(_) = by_ref {
@@ -2655,6 +2646,12 @@ impl<'a> Lower<'a> {
                 let oa = self.addr(o).unwrap();
                 let np = self.name_parts(name);
                 (Root { addr: oa, temp: Some(o) }, np)
+            }
+            ExprKind::StaticProp { class, name } => {
+                let cr = self.iconst(class as *const ClassRef as i64);
+                let (np, nl) = self.name_parts(&name.name);
+                let nl = self.b.ins().bor_imm_s(nl, super::rt::STATIC_ROOT as i64);
+                (Root { addr: cr, temp: None }, (np, nl))
             }
             _ => return Err("write target"),
         };
