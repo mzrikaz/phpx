@@ -1024,6 +1024,7 @@ dependencies = [
  "flate2",
  "ghash",
  "gost94",
+ "hashbrown 0.17.1",
  "hmac",
  "indexmap",
  "libc",

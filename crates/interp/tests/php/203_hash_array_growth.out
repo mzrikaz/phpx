@@ -1,0 +1,104 @@
+0,k1,k2,30,k4,k5,k6,60,k7,k8,k9,k10,k11,k12,120,k13,k14,k15,150,k16,k17,k18,180,k3
+bool(true)
+bool(true)
+int(1)
+bool(true)
+bool(true)
+string(4) "back"
+bool(false)
+bool(false)
+string(1) "-"
+bool(true)
+bool(true)
+int(18)
+bool(true)
+bool(true)
+string(2) "n0"
+bool(true)
+bool(true)
+string(2) "n3"
+bool(false)
+bool(false)
+string(1) "-"
+bool(true)
+bool(true)
+string(2) "n3"
+bool(false)
+bool(false)
+string(1) "-"
+back 23 180
+181
+1 changed
+array(3) {
+  ["k18"]=>
+  int(18)
+  [180]=>
+  string(3) "n18"
+  [181]=>
+  string(4) "next"
+}
+y
+y 2
+100 100
+array(3) {
+  ["id"]=>
+  string(6) "string"
+  ["a"]=>
+  string(4) "bool"
+  [0]=>
+  string(4) "five"
+}
+9 13
+bcdefghijkl 11
+0,k1,k2,30,k4,k5,k6,60,k7,k8,k9,k10,k11,k12,120,k13,k14,k15,150,k16,k17,k18,180,k3
+bool(true)
+bool(true)
+int(1)
+bool(true)
+bool(true)
+string(4) "back"
+bool(false)
+bool(false)
+string(1) "-"
+bool(true)
+bool(true)
+int(18)
+bool(true)
+bool(true)
+string(2) "n0"
+bool(true)
+bool(true)
+string(2) "n3"
+bool(false)
+bool(false)
+string(1) "-"
+bool(true)
+bool(true)
+string(2) "n3"
+bool(false)
+bool(false)
+string(1) "-"
+back 23 180
+181
+1 changed
+array(3) {
+  ["k18"]=>
+  int(18)
+  [180]=>
+  string(3) "n18"
+  [181]=>
+  string(4) "next"
+}
+y
+y 2
+100 100
+array(3) {
+  ["id"]=>
+  string(6) "string"
+  ["a"]=>
+  string(4) "bool"
+  [0]=>
+  string(4) "five"
+}
+9 13
+bcdefghijkl 11

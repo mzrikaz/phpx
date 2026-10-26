@@ -208,9 +208,6 @@ fn canonical_int(b: &[u8]) -> Option<i64> {
     std::str::from_utf8(b).ok()?.parse().ok()
 }
 
-/// Hash arrays up to this size are searched linearly.
-const SCAN_MAX: usize = 8;
-
 /// Insertion-ordered map with a fast (non-cryptographic) hasher; PHP
 /// arrays and property tables don't need DoS-resistant hashing per lookup.
 pub type FxIndexMap<K, V> = IndexMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
@@ -237,7 +234,7 @@ pub struct PhpArray {
 
 enum Store {
     Packed(Vec<Value>),
-    Hash(FxIndexMap<Key, Value>),
+    Hash(crate::hmap::HMap),
 }
 
 /// One of two iterator types (packed or hash storage).
@@ -366,9 +363,9 @@ impl PhpArray {
         self.len() == 0
     }
 
-    fn to_hash(&mut self) -> &mut FxIndexMap<Key, Value> {
+    fn to_hash(&mut self) -> &mut crate::hmap::HMap {
         if let Store::Packed(v) = &mut self.store {
-            let m: FxIndexMap<Key, Value> = std::mem::take(v).into_iter().enumerate().map(|(i, x)| (Key::Int(i as i64), x)).collect();
+            let m = crate::hmap::HMap::from_unique(std::mem::take(v).into_iter().enumerate().map(|(i, x)| (Key::Int(i as i64), x)).collect());
             self.store = Store::Hash(m);
         }
         match &mut self.store {
@@ -401,7 +398,7 @@ impl PhpArray {
                 KeyRef::Int(n) if n >= 0 && (n as usize) < v.len() => Some(v[n as usize].deref()),
                 _ => None,
             },
-            Store::Hash(m) => Self::hash_find(m, k).map(|i| m[i].deref()),
+            Store::Hash(m) => m.find(k).map(|i| m[i].deref()),
         }
     }
 
@@ -410,23 +407,8 @@ impl PhpArray {
     pub fn contains_ref(&self, k: KeyRef) -> bool {
         match &self.store {
             Store::Packed(v) => matches!(k, KeyRef::Int(n) if n >= 0 && (n as usize) < v.len()),
-            Store::Hash(m) => Self::hash_find(m, k).is_some(),
+            Store::Hash(m) => m.find(k).is_some(),
         }
-    }
-
-    /// Index of a key in hash storage. Small maps (most PHP arrays: options,
-    /// attributes, rows) are scanned: comparing a few keys is cheaper than
-    /// hashing one.
-    #[inline]
-    fn hash_find(m: &FxIndexMap<Key, Value>, k: KeyRef) -> Option<usize> {
-        if m.len() <= SCAN_MAX {
-            let keys = m.as_slice().keys();
-            return match k {
-                KeyRef::Int(n) => keys.into_iter().position(|e| matches!(e, Key::Int(x) if *x == n)),
-                KeyRef::Str(b) => keys.into_iter().position(|e| matches!(e, Key::Str(x) if x.len() == b.len() && **x == *b)),
-            };
-        }
-        m.get_index_of(&k)
     }
 
     pub fn contains(&self, k: &Key) -> bool {
@@ -576,7 +558,7 @@ impl PhpArray {
                 _ => {}
             }
         }
-        self.to_hash().entry(k).or_default()
+        self.to_hash().entry_or_default(k)
     }
 
     pub fn remove(&mut self, k: &Key) -> Option<Value> {
@@ -607,7 +589,7 @@ impl PhpArray {
 
     /// Raw storage, references included (for var_dump's `&` marker).
     /// Stored values (references not dereferenced), for the cycle collector.
-    pub fn raw_values(&self) -> Either<std::slice::Iter<'_, Value>, indexmap::map::Values<'_, Key, Value>> {
+    pub fn raw_values(&self) -> Either<std::slice::Iter<'_, Value>, crate::hmap::Values<'_>> {
         match &self.store {
             Store::Packed(v) => Either::L(v.iter()),
             Store::Hash(m) => Either::R(m.values()),
@@ -637,7 +619,7 @@ impl PhpArray {
 
     /// Empty hash-stored array with room for `n` elements.
     pub fn with_hash_capacity(n: usize) -> Self {
-        PhpArray::make(Store::Hash(FxIndexMap::with_capacity_and_hasher(n, Default::default())), i64::MIN, 0)
+        PhpArray::make(Store::Hash(crate::hmap::HMap::with_capacity(n)), i64::MIN, 0)
     }
 
     /// Whether any key is an int.

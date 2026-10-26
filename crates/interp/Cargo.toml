@@ -10,6 +10,7 @@ phpx-syntax = { path = "../syntax" }
 phpx-runtime = { path = "../runtime" }
 phpx-jit = { path = "../jit" }
 indexmap = "2"
+hashbrown = { version = "0.17", default-features = false }
 rustc-hash = "2"
 cranelift-codegen = "0.137"
 cranelift-frontend = "0.137"

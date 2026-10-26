@@ -32,6 +32,7 @@ mod expr;
 mod ext;
 mod fs;
 mod gc;
+mod hmap;
 mod generator;
 mod ini;
 pub mod interp;
