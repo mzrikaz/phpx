@@ -1298,6 +1298,9 @@ pub fn loose_eq(a: &Value, b: &Value) -> bool {
             Rc::ptr_eq(x, y)
                 || (x.len() == y.len() && !stack_low() && x.iter().all(|(k, v)| y.get(&k).is_some_and(|w| loose_eq(&v, &w))))
         }
+        // A string starting above '9' is never numeric (PHP's
+        // zend_fast_equal_strings): compare the bytes.
+        (Value::Str(x), Value::Str(y)) if x.as_slice().first().is_some_and(|&c| c > b'9') || y.as_slice().first().is_some_and(|&c| c > b'9') => x.as_slice() == y.as_slice(),
         _ => compare(a, b) == Some(Ordering::Equal),
     }
 }
