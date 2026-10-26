@@ -1,0 +1,22 @@
+array(4) {
+  [0]=>
+  array(1) {
+    [0]=>
+    int(2999)
+  }
+  [1]=>
+  int(2998)
+  [2]=>
+  int(2999)
+  [3]=>
+  int(2999)
+}
+Cannot assign string to property P::$n of type int
+int(7)
+int(1999)
+__set x
+Value of type string returned from M::__get() must be compatible with unset property M::$x of type int
+int(42)
+string(1) "7"
+bool(false)
+Typed property M::$x must not be accessed before initialization

@@ -1860,6 +1860,25 @@ impl Interp {
         o.props.borrow().is_uninit(name)
     }
 
+    /// What __get() returned for an unset() typed property must fit its
+    /// type (coerced in the mode of __get's file), like PHP.
+    fn magic_get_typed(&self, o: &Rc<Obj>, name: &str, v: Value) -> R<Value> {
+        let Some(d) = o.class.find_prop(name) else { return Ok(v) };
+        let Some(ty) = d.ty else { return Ok(v) };
+        let strict = o.class.find_method("__get").is_some_and(|m| m.ctx.strict);
+        let decl_class = self.classes.borrow().get(&*self.lower.get(&d.declaring)).cloned();
+        match self.coerce(v.clone(), ty, &d.ctx, decl_class.as_ref(), Some(&o.class), strict)? {
+            Some(v) => Ok(v),
+            None => {
+                let cname = crate::class::display_name(&d.declaring);
+                Err(self.error(
+                    "TypeError",
+                    &format!("Value of type {} returned from {cname}::__get() must be compatible with unset property {cname}::${name} of type {}", v.type_name(), crate::call::type_str(ty)),
+                ))
+            }
+        }
+    }
+
     pub fn get_prop(&self, f: &Frame, o: &Rc<Obj>, name: &str) -> R<Value> {
         let key = self.prop_key(f, o, name);
         let name = &*key;
@@ -1870,7 +1889,8 @@ impl Interp {
             }
         }
         if !(visible && self.prop_uninit(o, name)) && self.has_magic(o, MAGIC_GET, name) {
-            return self.call_magic(o, MAGIC_GET, name, None);
+            let v = self.call_magic(o, MAGIC_GET, name, None)?;
+            return if visible { self.magic_get_typed(o, name, v) } else { Ok(v) };
         }
         if !visible {
             return Err(self.error("Error", &format!("Cannot access {} property {}::${name}", vis_word(o, name), o.class.name)));
