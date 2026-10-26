@@ -19,6 +19,11 @@ pub(crate) const MAGIC_UNSET: u8 = 2;
 pub(crate) const MAGIC_ISSET: u8 = 3;
 const MAGIC_NAMES: [&str; 4] = ["__get", "__set", "__unset", "__isset"];
 
+/// How a quiet read of a missing magic property behaves (see magic_isset).
+pub(crate) const QUIET_READ: u8 = 0;
+pub(crate) const QUIET_ISSET: u8 = 1;
+pub(crate) const QUIET_EMPTY: u8 = 2;
+
 #[derive(Clone)]
 pub enum Root {
     Var(Slot),
@@ -469,14 +474,14 @@ impl Interp {
             }
             Isset(es) => {
                 for x in es {
-                    match self.eval_quiet_mode(f, x, true)? {
+                    match self.eval_quiet_mode(f, x, QUIET_ISSET)? {
                         Some(v) if !v.is_null() => {}
                         _ => return Ok(Value::Bool(false)),
                     }
                 }
                 Value::Bool(true)
             }
-            Empty(x) => Value::Bool(!self.eval_quiet(f, x)?.is_some_and(|v| v.truthy())),
+            Empty(x) => Value::Bool(!self.eval_quiet_mode(f, x, QUIET_EMPTY)?.is_some_and(|v| v.truthy())),
             Throw(x) => {
                 let v = self.eval(f, x)?;
                 match v {
@@ -966,14 +971,13 @@ impl Interp {
         }
     }
 
-    /// For empty/??: like eval, but missing things are `None`, silently.
+    /// For ??: like eval, but missing things are `None`, silently.
     pub fn eval_quiet(&self, f: &mut Frame, e: &'static Expr) -> R<Option<Value>> {
-        self.eval_quiet_mode(f, e, false)
+        self.eval_quiet_mode(f, e, QUIET_READ)
     }
 
-    /// `isset_only`: a magic property answers from `__isset()` alone, without
-    /// calling `__get()` (PHP's isset() semantics).
-    fn eval_quiet_mode(&self, f: &mut Frame, e: &'static Expr, isset_only: bool) -> R<Option<Value>> {
+    /// `mode` (QUIET_*) decides how a missing magic property answers.
+    fn eval_quiet_mode(&self, f: &mut Frame, e: &'static Expr, mode: u8) -> R<Option<Value>> {
         match &e.kind {
             ExprKind::Var(n) => {
                 if n == "this" {
@@ -1036,7 +1040,7 @@ impl Interp {
                         return Ok(None);
                     }
                 }
-                self.magic_isset(&o, &name, isset_only)
+                self.magic_isset(&o, &name, mode)
             }
             ExprKind::StaticProp { class, name } => {
                 let cls = self.class_ref(f, class)?;
@@ -1730,12 +1734,21 @@ impl Interp {
         r
     }
 
-    /// isset()/`??` of a missing property through __isset (then __get).
-    pub(crate) fn magic_isset(&self, o: &Rc<Obj>, name: &str, isset_only: bool) -> R<Option<Value>> {
-        if !self.has_magic(o, MAGIC_ISSET, name) || !self.call_magic(o, MAGIC_ISSET, name, None)?.truthy() {
+    /// A missing property read quietly, through __isset/__get as PHP does:
+    /// isset() asks only __isset; empty() asks __isset, then __get; a
+    /// quiet read (`??`, the container in a deeper isset/empty) asks
+    /// __isset then __get, or straight __get when there's no __isset.
+    pub(crate) fn magic_isset(&self, o: &Rc<Obj>, name: &str, mode: u8) -> R<Option<Value>> {
+        if !self.has_magic(o, MAGIC_ISSET, name) {
+            if mode == QUIET_READ && self.has_magic(o, MAGIC_GET, name) {
+                return self.call_magic(o, MAGIC_GET, name, None).map(Some);
+            }
             return Ok(None);
         }
-        if isset_only {
+        if !self.call_magic(o, MAGIC_ISSET, name, None)?.truthy() {
+            return Ok(None);
+        }
+        if mode == QUIET_ISSET {
             return Ok(Some(Value::Bool(true)));
         }
         if self.has_magic(o, MAGIC_GET, name) {

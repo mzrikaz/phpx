@@ -1444,7 +1444,7 @@ impl<'a> Lower<'a> {
                 self.b.append_block_param(merge, types::I8);
                 for x in es {
                     let t = self.alloc_temp();
-                    let found = self.quiet_mode(x, t, true)?;
+                    let found = self.quiet_mode(x, t, crate::expr::QUIET_ISSET)?;
                     let ta = self.temp_addr(t);
                     self.clear(ta);
                     self.free.push(t);
@@ -1460,7 +1460,7 @@ impl<'a> Lower<'a> {
             }
             Empty(x) => {
                 let t = self.alloc_temp();
-                let found = self.quiet(x, t)?;
+                let found = self.quiet_mode(x, t, crate::expr::QUIET_EMPTY)?;
                 let (yes, merge) = (self.b.create_block(), self.b.create_block());
                 self.b.append_block_param(merge, types::I8);
                 let one = self.b.ins().iconst(types::I8, 1);
@@ -2434,12 +2434,12 @@ impl<'a> Lower<'a> {
     /// isset/??/empty operand: writes the value (if any) into temp `t` and
     /// returns found (i8).
     fn quiet(&mut self, e: &'static Expr, t: usize) -> L<CValue> {
-        self.quiet_mode(e, t, false)
+        self.quiet_mode(e, t, crate::expr::QUIET_READ)
     }
 
-    /// `quiet`; `isset_only` for isset()'s own operand, where a magic
-    /// property asks only __isset (not __get).
-    fn quiet_mode(&mut self, e: &'static Expr, t: usize, isset_only: bool) -> L<CValue> {
+    /// `quiet`; `mode` (QUIET_*) for isset()'s and empty()'s own operand,
+    /// where a magic property answers differently (see magic_isset).
+    fn quiet_mode(&mut self, e: &'static Expr, t: usize, mode: u8) -> L<CValue> {
         match &e.kind {
             ExprKind::Var(n) => {
                 let i = *self.locals.index.get(n.as_str()).ok_or("unknown local")?;
@@ -2473,7 +2473,12 @@ impl<'a> Lower<'a> {
                     ExprKind::Prop { name, .. } => {
                         let name = self.member(name)?;
                         let (np, nl) = self.name_parts(name);
-                        self.call(if isset_only { "rt_isset_prop" } else { "rt_quiet_prop" }, &[self.cx, ba, np, nl, ta]).unwrap()
+                        let f = match mode {
+                            crate::expr::QUIET_ISSET => "rt_isset_prop",
+                            crate::expr::QUIET_EMPTY => "rt_empty_prop",
+                            _ => "rt_quiet_prop",
+                        };
+                        self.call(f, &[self.cx, ba, np, nl, ta]).unwrap()
                     }
                     _ => unreachable!(),
                 };

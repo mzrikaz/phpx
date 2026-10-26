@@ -585,16 +585,21 @@ pub unsafe extern "C" fn rt_prop_get(c: *mut Cx, obj: *const Value, name: *const
 
 /// Quiet `$obj->name`: 1 found, 0 missing, 2 error.
 pub unsafe extern "C" fn rt_quiet_prop(c: *mut Cx, obj: *const Value, name: *const u8, len: u64, dst: *mut Value) -> u64 {
-    quiet_prop(c, obj, name, len, dst, false)
+    quiet_prop(c, obj, name, len, dst, crate::expr::QUIET_READ)
 }
 
 /// `isset($obj->name)`: like rt_quiet_prop, but a magic property only
 /// asks __isset.
 pub unsafe extern "C" fn rt_isset_prop(c: *mut Cx, obj: *const Value, name: *const u8, len: u64, dst: *mut Value) -> u64 {
-    quiet_prop(c, obj, name, len, dst, true)
+    quiet_prop(c, obj, name, len, dst, crate::expr::QUIET_ISSET)
 }
 
-unsafe fn quiet_prop(c: *mut Cx, obj: *const Value, name: *const u8, len: u64, dst: *mut Value, isset_only: bool) -> u64 {
+/// `empty($obj->name)`: a magic property asks __isset, then __get.
+pub unsafe extern "C" fn rt_empty_prop(c: *mut Cx, obj: *const Value, name: *const u8, len: u64, dst: *mut Value) -> u64 {
+    quiet_prop(c, obj, name, len, dst, crate::expr::QUIET_EMPTY)
+}
+
+unsafe fn quiet_prop(c: *mut Cx, obj: *const Value, name: *const u8, len: u64, dst: *mut Value, mode: u8) -> u64 {
     let (it, f) = cx(c);
     let name = name_of(name, len);
     let Value::Object(o) = &*obj else { return 0 };
@@ -609,7 +614,7 @@ unsafe fn quiet_prop(c: *mut Cx, obj: *const Value, name: *const u8, len: u64, d
             return 0;
         }
     }
-    match it.magic_isset(o, name, isset_only) {
+    match it.magic_isset(o, name, mode) {
         Ok(Some(v)) => {
             put(dst, v);
             1

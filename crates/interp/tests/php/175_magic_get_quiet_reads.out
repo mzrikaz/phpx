@@ -1,0 +1,24 @@
+__get config
+exists view
+get view
+bool(true)
+bool(false)
+__get config
+object(C)#2 (1) {
+  ["d":"C":private]=>
+  array(1) {
+    ["view"]=>
+    array(1) {
+      ["paths"]=>
+      array(1) {
+        [0]=>
+        string(1) "x"
+      }
+    }
+  }
+}
+__get missing
+string(4) "dflt"
+__get config
+bool(false)
+bool(true)
