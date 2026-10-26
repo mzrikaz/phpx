@@ -1468,6 +1468,17 @@ impl<'a> Lower<'a> {
                 self.free.push(t);
                 Op::Bool(self.b.block_params(merge)[0])
             }
+            Instanceof { expr, class: ClassRef::Dynamic(ce) } => {
+                let v = self.expr(expr)?;
+                let v = self.materialize(v);
+                let cv = self.expr(ce)?;
+                let cv = self.materialize(cv);
+                let (va, ca) = (self.addr(v).unwrap(), self.addr(cv).unwrap());
+                let r = self.helper_value("rt_instanceof_dyn", |l| vec![l.cx, va, ca])?;
+                self.release(cv);
+                self.release(v);
+                r
+            }
             Instanceof { expr, class } => {
                 let v = self.expr(expr)?;
                 let v = self.materialize(v);
@@ -1519,12 +1530,24 @@ impl<'a> Lower<'a> {
                 if e.span.start != self.stmt_start {
                     self.set_pos(e.span.start);
                 }
-                let cr = self.iconst(class as *const ClassRef as i64);
-                let (np, nl) = self.name_parts(&name.name);
-                self.helper_value("rt_class_const", |l| vec![l.cx, cr, np, nl])?
+                match class {
+                    ClassRef::Dynamic(ce) if name.name.eq_ignore_ascii_case("class") => {
+                        let v = self.expr(ce)?;
+                        let v = self.materialize(v);
+                        let va = self.addr(v).unwrap();
+                        let r = self.helper_value("rt_class_name_of", |l| vec![l.cx, va])?;
+                        self.release(v);
+                        r
+                    }
+                    _ => {
+                        let cr = self.class_ref_ptr(class)?;
+                        let (np, nl) = self.name_parts(&name.name);
+                        self.helper_value("rt_class_const", |l| vec![l.cx, cr, np, nl])?
+                    }
+                }
             }
             StaticProp { class, name } => {
-                let cr = self.iconst(class as *const ClassRef as i64);
+                let cr = self.class_ref_ptr(class)?;
                 let (np, nl) = self.name_parts(&name.name);
                 self.helper_value("rt_static_prop_get", |l| vec![l.cx, cr, np, nl])?
             }
@@ -1666,7 +1689,7 @@ impl<'a> Lower<'a> {
                     MemberName::Ident(i) => i.span.start,
                     MemberName::Dynamic(d) => d.span.start,
                 };
-                let cr = self.iconst(class as *const ClassRef as i64);
+                let cr = self.class_ref_ptr(class)?;
                 let lname: &'static str = Box::leak(name.to_ascii_lowercase().into_boxed_str());
                 let site = Box::new(super::rt::MethodSite::new(name, lname));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
@@ -1687,7 +1710,7 @@ impl<'a> Lower<'a> {
                 if e.span.start != self.stmt_start {
                     self.set_pos(e.span.start);
                 }
-                let cr = self.iconst(class as *const ClassRef as i64);
+                let cr = self.class_ref_ptr(class)?;
                 let site = Box::new(super::rt::MethodSite::new("__construct", "__construct"));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
@@ -2610,6 +2633,27 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// A class reference operand: the AST node for a name, or for `$x::`
+    /// the interned reference of the class `$x` names (evaluated now).
+    fn class_ref_ptr(&mut self, class: &'static ClassRef) -> L<CValue> {
+        match class {
+            ClassRef::Name(_) => Ok(self.iconst(class as *const ClassRef as i64)),
+            ClassRef::Dynamic(e) => {
+                let v = self.expr(e)?;
+                let v = self.materialize(v);
+                let va = self.addr(v).unwrap();
+                let r = self.call("rt_dyn_class", &[self.cx, va]).unwrap();
+                self.release(v);
+                let bad = self.b.ins().icmp_imm_s(IntCC::Equal, r, 0);
+                let cont = self.b.create_block();
+                self.b.ins().brif(bad, self.unwind, &[], cont, &[]);
+                self.b.switch_to_block(cont);
+                Ok(r)
+            }
+            ClassRef::Anonymous(_) => Err("anonymous class"),
+        }
+    }
+
     /// Resolve a write target to (root pointer, (name ptr, len) or (0, 0),
     /// key array). The root is a local's address, or a temp holding the
     /// object for property targets.
@@ -2648,7 +2692,7 @@ impl<'a> Lower<'a> {
                 (Root { addr: oa, temp: Some(o) }, np)
             }
             ExprKind::StaticProp { class, name } => {
-                let cr = self.iconst(class as *const ClassRef as i64);
+                let cr = self.class_ref_ptr(class)?;
                 let (np, nl) = self.name_parts(&name.name);
                 let nl = self.b.ins().bor_imm_s(nl, super::rt::STATIC_ROOT as i64);
                 (Root { addr: cr, temp: None }, (np, nl))

@@ -1,0 +1,126 @@
+App\A 3
+ka kb App\A App\B App\B
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+kb/App\B/App\B/App\B
+array(2) {
+  ["x"]=>
+  int(2)
+  ["y"]=>
+  int(2)
+}
+App\A7
+Cannot use "::class" on string
+Cannot use "::class" on null
+Class name must be a valid object or a string
+Class "Nope\Missing" not found
+Class name must be a valid object or a string
+App\B 3
+kb ka App\B App\A App\A
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+ka/App\A/App\A/App\A
+array(2) {
+  ["x"]=>
+  int(3)
+  ["y"]=>
+  int(2)
+}
+App\B7
+Cannot use "::class" on string
+Cannot use "::class" on null
+Class name must be a valid object or a string
+Class "Nope\Missing" not found
+Class name must be a valid object or a string
+App\A 3
+ka kb App\A App\B App\B
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+kb/App\B/App\B/App\B
+array(2) {
+  ["x"]=>
+  int(4)
+  ["y"]=>
+  int(2)
+}
+App\A7
+Cannot use "::class" on string
+Cannot use "::class" on null
+Class name must be a valid object or a string
+Class "Nope\Missing" not found
+Class name must be a valid object or a string
+App\B 3
+kb ka App\B App\A App\A
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+ka/App\A/App\A/App\A
+array(2) {
+  ["x"]=>
+  int(5)
+  ["y"]=>
+  int(2)
+}
+App\B7
+Cannot use "::class" on string
+Cannot use "::class" on null
+Class name must be a valid object or a string
+Class "Nope\Missing" not found
+Class name must be a valid object or a string
+App\A 3
+ka kb App\A App\B App\B
+bool(true)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+kb/App\B/App\B/App\B
+array(2) {
+  ["x"]=>
+  int(6)
+  ["y"]=>
+  int(2)
+}
+App\A7
+Cannot use "::class" on string
+Cannot use "::class" on null
+Class name must be a valid object or a string
+Class "Nope\Missing" not found
+Class name must be a valid object or a string
+App\B 3
+kb ka App\B App\A App\A
+bool(false)
+bool(true)
+bool(true)
+bool(false)
+bool(true)
+bool(false)
+ka/App\A/App\A/App\A
+array(2) {
+  ["x"]=>
+  int(7)
+  ["y"]=>
+  int(2)
+}
+App\B7
+Cannot use "::class" on string
+Cannot use "::class" on null
+Class name must be a valid object or a string
+Class "Nope\Missing" not found
+Class name must be a valid object or a string

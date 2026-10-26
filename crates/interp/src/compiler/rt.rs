@@ -651,6 +651,39 @@ pub unsafe extern "C" fn rt_static_prop_get(c: *mut Cx, cref: *const ast::ClassR
     status(it, r, |v| put(dst, v))
 }
 
+/// The class reference for a runtime class value (0 = error pending).
+pub unsafe extern "C" fn rt_dyn_class(c: *mut Cx, v: *const Value) -> u64 {
+    let (it, _) = cx(c);
+    match it.class_of_value(&(*v).deref()) {
+        Ok(cls) => it.dyn_class_ref(&cls) as *const ast::ClassRef as u64,
+        Err(e) => {
+            status(it, Err::<(), _>(e), |_| ());
+            0
+        }
+    }
+}
+
+/// `$x::class`.
+pub unsafe extern "C" fn rt_class_name_of(c: *mut Cx, v: *const Value, dst: *mut Value) -> u64 {
+    let (it, _) = cx(c);
+    status(it, it.class_name_of_value(&(*v).deref()), |v| put(dst, v))
+}
+
+/// `$v instanceof $class` (an object or a class name; unknown names are
+/// false without autoloading).
+pub unsafe extern "C" fn rt_instanceof_dyn(c: *mut Cx, v: *const Value, class: *const Value, dst: *mut Value) -> u64 {
+    let (it, _) = cx(c);
+    let r = (|| -> R<Value> {
+        let lname = match (*class).deref() {
+            Value::Object(c) => c.class.lname.clone(),
+            Value::Str(s) => it.lower.get(String::from_utf8_lossy(&s).trim_start_matches('\\')),
+            _ => return Err(it.error("Error", "Class name must be a valid object or a string")),
+        };
+        Ok(Value::Bool(matches!((*v).deref(), Value::Object(o) if o.class.is_a(&lname))))
+    })();
+    status(it, r, |v| put(dst, v))
+}
+
 /// get_called_class().
 pub unsafe extern "C" fn rt_called_class(c: *mut Cx, dst: *mut Value) -> u64 {
     let (it, f) = cx(c);
@@ -1864,7 +1897,7 @@ pub unsafe extern "C" fn rt_static_call(
     let (it, f) = cx(c);
     let site = &*site;
     let cref = &*cref;
-    if !meta.is_null() || !matches!(cref, ast::ClassRef::Name(_)) {
+    if !meta.is_null() || !matches!(cref, ast::ClassRef::Name(n) if !n.starts_with('\x01')) {
         let cls = match it.class_ref(f, cref) {
             Ok(c) => c,
             Err(e) => return status(it, Err::<(), _>(e), |_| ()),
@@ -2004,7 +2037,7 @@ pub unsafe extern "C" fn rt_new(
     let (it, f) = cx(c);
     let site = &*site;
     let cref = &*cref;
-    if meta.is_null() && matches!(cref, ast::ClassRef::Name(_)) {
+    if meta.is_null() && matches!(cref, ast::ClassRef::Name(n) if !n.starts_with('\x01')) {
         if let Some(st) = new_cached(it, f, cref, site, args, n, dst) {
             return st;
         }

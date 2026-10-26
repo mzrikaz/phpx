@@ -252,7 +252,8 @@ impl Analysis {
     fn class_ref(&mut self, c: &'static ClassRef) -> Result<(), Reject> {
         match c {
             ClassRef::Name(_) => Ok(()),
-            _ => Err("dynamic class reference"),
+            ClassRef::Dynamic(e) => self.expr(e),
+            ClassRef::Anonymous(_) => Err("anonymous class"),
         }
     }
 
@@ -394,10 +395,7 @@ impl Analysis {
             }
             ClassConst { class, .. } | StaticProp { class, .. } => self.class_ref(class),
             New { class, args } => {
-                match class {
-                    ClassRef::Name(_) => {}
-                    _ => return Err("dynamic/anonymous new"),
-                }
+                self.class_ref(class)?;
                 self.args(args)
             }
             Closure(c) => {

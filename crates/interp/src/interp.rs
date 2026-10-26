@@ -346,6 +346,9 @@ pub struct Interp {
     output_start: RefCell<Option<(String, usize)>>,
     /// Classes resolved from source names, keyed by the AST name's address.
     pub class_cache: RefCell<FxHashMap<usize, Rc<Class>>>,
+    /// Class references standing for a class computed at runtime
+    /// (`$x::m()` in compiled code), one per class.
+    pub dyn_class_refs: RefCell<FxHashMap<usize, &'static ast::ClassRef>>,
     /// Class names in type declarations, resolved and lowercased, keyed by
     /// the AST name's address (a name always resolves the same way).
     pub type_names: RefCell<FxHashMap<usize, Rc<str>>>,
@@ -421,6 +424,7 @@ impl Interp {
             ini: RefCell::new(crate::ini::Ini::new()),
             const_arrays: RefCell::new(FxHashMap::default()),
             class_cache: RefCell::new(FxHashMap::default()),
+            dyn_class_refs: RefCell::new(FxHashMap::default()),
             type_names: RefCell::new(FxHashMap::default()),
             closure_names: RefCell::new(FxHashMap::default()),
             builtin_pos: Cell::new(Pos { file: u32::MAX, off: 0 }),
