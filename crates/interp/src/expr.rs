@@ -233,7 +233,7 @@ impl Interp {
             Var(n) => self.read_var(f, n)?,
             Name(n) => self.constant(f, n)?,
             MagicConst(m) => self.magic_const(f, m, e),
-            Array(items) => match self.const_array_cached(e, items) {
+            Array(items) => match self.const_array_cached(f, e, items) {
                 Some(v) => v,
                 None => self.eval_array(f, items)?,
             },
@@ -710,15 +710,20 @@ impl Interp {
         }
     }
 
-    /// A literal array of constants is built once and shared (copy on write),
-    /// like PHP's immutable arrays.
-    fn const_array_cached(&self, e: &'static Expr, items: &'static [Option<ast::ArrayItem>]) -> Option<Value> {
-        let key = e as *const Expr as usize;
-        if let Some(v) = self.const_arrays.borrow().get(&key) {
-            return v.clone();
+    /// A literal array of constants is built once per thread and shared
+    /// (copy on write), like PHP's immutable arrays: its value can't change
+    /// between requests (the AST of a file version is never freed).
+    /// `__DIR__`/`__FILE__` and concatenations count as constants, as in
+    /// Composer's class maps.
+    fn const_array_cached(&self, f: &Frame, e: &'static Expr, items: &'static [Option<ast::ArrayItem>]) -> Option<Value> {
+        let key = (e as *const Expr as usize, f.ctx.file);
+        if let Some(v) = CONST_ARRAYS.with(|c| c.borrow().get(&key).cloned()) {
+            return v;
         }
-        let v = const_array(items);
-        self.const_arrays.borrow_mut().insert(key, v.clone());
+        let path = self.file_path(f.ctx.file);
+        let file = (f.ctx.file != crate::interp::PRELUDE_FILE && !path.ends_with("eval()'d code")).then_some(path.as_str());
+        let v = const_array_in(items, file);
+        CONST_ARRAYS.with(|c| c.borrow_mut().insert(key, v.clone()));
         v
     }
 
@@ -1976,10 +1981,22 @@ pub fn key_repr(k: &Key) -> String {
     }
 }
 
+// Constant array literals by (AST node, file id); see `const_array_cached`.
+thread_local! {
+    static CONST_ARRAYS: std::cell::RefCell<rustc_hash::FxHashMap<(usize, usize), Option<Value>>> = Default::default();
+}
+
 /// The value of an array literal made only of constants (scalars, strings,
 /// nested constant arrays), or None.
 pub fn const_array(items: &[Option<ast::ArrayItem>]) -> Option<Value> {
-    fn scalar(e: &Expr) -> Option<Value> {
+    const_array_in(items, None)
+}
+
+/// `const_array`, with `__FILE__`/`__DIR__` of `file` (when given) and
+/// string concatenation also constant.
+fn const_array_in(items: &[Option<ast::ArrayItem>], file: Option<&str>) -> Option<Value> {
+    let scalar = |e: &Expr| scalar_in(e, file);
+    fn scalar_in(e: &Expr, file: Option<&str>) -> Option<Value> {
         Some(match &e.kind {
             ExprKind::Int(n) => Value::Int(*n),
             ExprKind::Float(x) => Value::Float(*x),
@@ -1992,7 +2009,22 @@ pub fn const_array(items: &[Option<ast::ArrayItem>]) -> Option<Value> {
                 ExprKind::Float(x) => Value::Float(-x),
                 _ => return None,
             },
-            ExprKind::Array(inner) => const_array(inner)?,
+            ExprKind::Array(inner) => const_array_in(inner, file)?,
+            ExprKind::MagicConst(m) if file.is_some() && (m == "__FILE__" || m == "__DIR__") => {
+                let p = file?;
+                if m == "__FILE__" {
+                    Value::str(p)
+                } else {
+                    Value::str(&std::path::Path::new(p).parent().map(|d| d.display().to_string()).unwrap_or_default())
+                }
+            }
+            ExprKind::Binary { op: ast::BinOp::Concat, left, right } => {
+                let (Value::Str(a), Value::Str(b)) = (scalar_in(left, file)?, scalar_in(right, file)?) else { return None };
+                let mut out = Vec::with_capacity(a.len() + b.len());
+                out.extend_from_slice(&a);
+                out.extend_from_slice(&b);
+                Value::bytes(out)
+            }
             _ => return None,
         })
     }

@@ -121,3 +121,19 @@ if (file_get_contents('MODE_FILE') === 'x') {
         assert_eq!(out, if m == 'x' { "x-prop" } else { "y-prop" }, "mode {m}");
     }
 }
+
+#[test]
+fn constant_arrays_are_not_changed_by_a_request() {
+    let src = r#"<?php
+class Map { public static $files = ['a' => __DIR__ . '/a.php', 'n' => [1, 2], 'f' => __FILE__ . '!']; }
+function lit() { return ['k' => 'v', 'list' => [1, 2, 3]]; }
+$m = Map::$files; $l = lit();
+$ok = $m['a'] === dirname($m['f']) . '/a.php' && $m['n'] === [1, 2] && $l['list'] === [1, 2, 3] && count($m) === 3;
+Map::$files['a'] = 'changed'; Map::$files['extra'] = 1; $l['list'][] = 4;
+$x = lit(); $x['k'] = 'w';
+echo $ok ? 'ok' : 'BROKEN';
+"#;
+    for out in serve("constarrays", src, "xxxxx") {
+        assert_eq!(out, "ok");
+    }
+}

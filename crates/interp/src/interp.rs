@@ -413,8 +413,6 @@ pub struct Interp {
     /// callback), not from user code.
     pub builtin_pos: Cell<Pos>,
     pub ini: RefCell<crate::ini::Ini>,
-    /// Constant array literals, built once (None: not constant).
-    pub const_arrays: RefCell<FxHashMap<usize, Option<Value>>>,
     /// eval() sources already parsed, by call site + code.
     pub eval_cache: RefCell<HashMap<String, (usize, &'static ast::File)>>,
     /// `@` nesting depth: warnings are suppressed while nonzero.
@@ -486,7 +484,6 @@ impl Interp {
             silence: Cell::new(0),
             eval_cache: RefCell::new(HashMap::default()),
             ini: RefCell::new(crate::ini::Ini::new()),
-            const_arrays: RefCell::new(FxHashMap::default()),
             class_cache: RefCell::new(FxHashMap::default()),
             dyn_class_refs: RefCell::new(FxHashMap::default()),
             type_names: RefCell::new(FxHashMap::default()),
