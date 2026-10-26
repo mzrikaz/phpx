@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use phpx_syntax::ast::{self, Stmt, StmtKind};
-use phpx_syntax::diag::line_col;
 use rustc_hash::FxHashMap;
 
 use crate::class::{Class, StaticProp};
@@ -73,6 +72,21 @@ pub struct NsCtx {
 pub struct FileInfo {
     pub path: PathBuf,
     pub src: &'static str,
+    /// Byte offsets where lines start, built on first use (line numbers
+    /// for traces and errors).
+    lines: std::cell::OnceCell<Vec<u32>>,
+}
+
+impl FileInfo {
+    /// 1-based line of byte offset `off`.
+    pub fn line(&self, off: usize) -> usize {
+        let starts = self.lines.get_or_init(|| {
+            let mut v = vec![0u32];
+            v.extend(memchr::memchr_iter(b'\n', self.src.as_bytes()).map(|i| i as u32 + 1));
+            v
+        });
+        starts.partition_point(|&s| s as usize <= off.min(self.src.len()))
+    }
 }
 
 pub struct UserFn {
@@ -451,7 +465,7 @@ impl Interp {
 
     pub fn add_file(&self, path: PathBuf, src: &'static str) -> usize {
         let mut files = self.files.borrow_mut();
-        files.push(FileInfo { path, src });
+        files.push(FileInfo { path, src, lines: Default::default() });
         files.len() - 1
     }
 
@@ -490,12 +504,12 @@ impl Interp {
         let file = file as usize;
         let files = self.files.borrow();
         let f = &files[file.min(files.len() - 1)];
-        (f.path.display().to_string(), line_col(f.src, off as usize).0)
+        (f.path.display().to_string(), f.line(off as usize))
     }
 
     pub fn line_of(&self, file: usize, off: u32) -> usize {
         let files = self.files.borrow();
-        line_col(files[file].src, off as usize).0
+        files[file].line(off as usize)
     }
 
     // ---- output ------------------------------------------------------
