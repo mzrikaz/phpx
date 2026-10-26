@@ -55,7 +55,7 @@ or request parks the green thread instead of blocking the process.
 - [ ] PDO Postgres and `pg_*` on a native protocol client
 - [ ] `http://` / `https://` stream wrapper (`file_get_contents($url)`)
 - [ ] curl + curl_multi (Guzzle)
-- [ ] Redis (`Redis` class, phpredis-compatible; Predis already works over sockets)
+- [x] Redis (`Redis` class, phpredis-compatible, on a native RESP client; Predis also works over sockets)
 - [ ] gRPC (HTTP/2 client, `Grpc\Channel`)
 - [ ] ext-sockets (`socket_*`)
 - [ ] Non-blocking DNS (resolution currently blocks the thread)
@@ -73,8 +73,15 @@ Tested against a real Laravel 12 + Filament app (Wit-ERP, MySQL):
 - [x] `set_error_handler` / `set_exception_handler` (Laravel turns warnings into `ErrorException`)
 - [x] `artisan module:list`, `artisan about` (output identical to PHP)
 - [x] `artisan serve` through phpx's built-in server (`phpx -S`)
-- [ ] The remaining functions of implemented extensions (about 200: output buffering details, zlib streams, iconv, session, hash_pbkdf2, ...)
-- [ ] `DOMXPath` (PHPUnit configuration, Symfony DomCrawler)
+- [x] The remaining functions of implemented extensions (Core + standard: 606 of 606)
+- [x] `DOMXPath` (XPath 1.0), XMLWriter, the `xml_parser_*` SAX API
+- [x] Every Filament admin and tenant page of the app renders byte-identical to PHP (100+ routes; differences are only random ids)
+- [x] ext/openssl symmetric crypto (`openssl_encrypt/decrypt`, AES modes incl. GCM), all of PHP's hash algorithms (xxh128 & co)
+- [x] ext/random (`Random\Randomizer`, all engines, seeded `mt_rand` sequences identical to PHP)
+- [x] ext/intl `NumberFormatter` on ICU's own locale data (906 locales), ext/fileinfo
+- [x] Return by reference (`function &f()`), magic-method recursion guards, PHP's uninitialized-typed-property rules
+- [ ] Livewire interactions (POST `/livewire/update`): login, form saves, table actions
+- [ ] PHPUnit suite of the app
 - [ ] Undefined-variable warnings in compiled code (compiled locals have no "unset" state yet)
 
 ## 3. HTTP server mode (`phpx serve`)

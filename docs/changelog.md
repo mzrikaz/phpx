@@ -4,6 +4,38 @@ What has been built so far, grouped by milestone (most recent first).
 Entries before the first commit (2026-10-25) are reconstructed from the code
 and project notes; later entries follow the git history.
 
+## 2026-10-26 — Every Filament page renders like PHP
+
+Every GET route of a Laravel 12 + Filament app (admin panel and a
+multi-tenant panel, 100+ pages with tables, forms, widgets) renders
+byte-identical to PHP 8.5; the only differences are random ids.
+
+- **Extensions**: `Redis` (phpredis on a native RESP client: pipelines,
+  MULTI, scan iterators, serializers, pub/sub), every PHP hash algorithm
+  (md2 to xxh128, with seeds and secrets), openssl symmetric ciphers (AES
+  ECB/CBC/CTR/CFB/OFB/GCM, `openssl_digest`, `openssl_pbkdf2`),
+  `ext/random` (`Random\Randomizer` on Mt19937, PCG, Xoshiro, Secure and
+  user engines; seeded sequences identical to PHP), `ext/intl`
+  `NumberFormatter` (ICU's DecimalFormat on all 906 ICU locales'
+  data, generated from PHP itself) and `Locale` helpers, `ext/fileinfo`,
+  and the constants of openssl, intl and fileinfo, with PHP's
+  deprecations for deprecated ones.
+- **Language**: return by reference (`$x = &f()`, `&offsetGet`), nested
+  writes through `ArrayAccess`/`WeakMap`/`ArrayObject`, magic-method
+  recursion guards, uninitialized typed properties bypassing
+  `__get`/`__set`, quiet reads of magic properties (`??`, nested
+  `isset`), named arguments into `__call`/`__callStatic`,
+  `new static::$prop`, anonymous classes with PHP's real names, closures
+  compared like PHP, property order of traits and reflection.
+- **Library behaviour**: `array_unique()` flags, `property_exists()` on
+  statics, `mb_convert_case()` (PHP's title-case rule and Unicode data,
+  every mode identical for every code point), `DateTime::createFromFormat`
+  as a port of timelib (errors and `getLastErrors()`), time zone lists
+  from PHP's index, `var_dump` of uninitialized properties, type names in
+  PHP's order.
+- **Runtime**: Composer's own autoloader runs by default; sockets dropped
+  at thread exit no longer abort the process.
+
 ## 2026-10-26 — Laravel serves, tiered compilation
 
 `artisan module:list`, `artisan about` and `artisan serve` run on a real
