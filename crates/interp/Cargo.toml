@@ -40,3 +40,4 @@ gost94 = "0.10"
 xxhash-rust = { version = "0.8", features = ["xxh32", "xxh64", "xxh3"] }
 aes = "0.8"
 ghash = "0.5"
+unicode-segmentation = "1"

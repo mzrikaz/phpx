@@ -2,6 +2,7 @@
 //! locales_table.rs), Locale's parsing helpers, idn_to_ascii/idn_to_utf8
 //! and the intl error functions. Classes are declared in prelude_intl.php.
 
+mod grapheme;
 mod locales_table;
 pub mod numfmt;
 
@@ -870,6 +871,7 @@ macro_rules! static_fn {
 }
 
 pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
+    grapheme::register(t);
     t.insert("__phpx_intl_missing", |it, _, a| {
         let m = String::from_utf8_lossy(&s(it, a, 0)?).into_owned();
         Err(it.error("Error", &format!("{m}() is not supported by phpx yet")))

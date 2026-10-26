@@ -1,0 +1,65 @@
+20
+0
+null
+3
+"héllo wörld 👨‍👩‍👧 éx 🇱🇰 Ǆ"
+"éll"
+"🇱🇰 Ǆ"
+"🇱🇰 "
+" wörld 👨‍👩‍👧 éx 🇱🇰"
+""
+"hé"
+"👨‍👩‍👧"
+""
+""
+7
+7
+7
+7
+3
+3
+9
+9
+false
+false
+9
+9
+false
+4
+false
+4
+ValueError: grapheme_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+ValueError: grapheme_stripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+ValueError: grapheme_strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+ValueError: grapheme_strripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+0
+0
+31
+31
+false
+false
+false
+false
+false
+false
+false
+false
+ValueError: grapheme_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+ValueError: grapheme_stripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+ValueError: grapheme_strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+ValueError: grapheme_strripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
+"wörld 👨‍👩‍👧 éx 🇱🇰 Ǆ"
+"héllo "
+"wörld 👨‍👩‍👧 éx 🇱🇰 Ǆ"
+false
+["hél","lo ","wör","ld ","👨‍👩‍👧 é","x 🇱🇰"," Ǆ"]
+["h","é","l","l","o"," ","w","ö","r","l","d"," ","👨‍👩‍👧"," ","é","x"," ","🇱🇰"," ","Ǆ"]
+[]
+ValueError: grapheme_str_split(): Argument #2 ($length) must be greater than 0 and less than or equal to 1073741823
+"hél" next=4
+"héll" next=5
+"llo " next=7
+false next=100
+" Ǆ" next=49
+3
+1
