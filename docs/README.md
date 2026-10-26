@@ -1,6 +1,6 @@
 # phpx documentation
 
-Last updated: 2026-10-25.
+Last updated: 2026-10-26.
 
 phpx runs PHP code unchanged on a Rust engine: a tree-walking interpreter that
 defines the semantics, a Cranelift native compiler for whole functions, a
@@ -12,6 +12,9 @@ Output is required to be byte-identical to PHP 8.5.
 | If you want to… | Read |
 |---|---|
 | Understand how the engine is put together | [architecture.md](architecture.md) |
+| Find any module, type or function, and follow a request end to end | [anatomy.md](anatomy.md) |
+| Add a built-in, a class, syntax, an ini setting or a compiler fast path; fix a difference from PHP | [contributing-recipes.md](contributing-recipes.md) |
+| Move phpx to a new PHP version (8.6, ...) | [php-upgrade-guide.md](php-upgrade-guide.md) |
 | Know whether a PHP feature works (and whether it compiles natively) | [language-support.md](language-support.md) |
 | Know where phpx behaves differently from PHP 8.5 | [php-compatibility.md](php-compatibility.md) |
 | Check whether a built-in function or class exists | [stdlib.md](stdlib.md) |

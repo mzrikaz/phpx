@@ -4,6 +4,11 @@ phpx is a Cargo workspace of five crates. A PHP file goes through the
 parser, then the interpreter, which hands hot functions to the native
 compiler or the numeric JIT. Everything runs inside a green-thread runtime.
 
+This page is the overview. For a module-by-module map, the full life of a
+request, per-request state and debugging switches, see
+[anatomy.md](anatomy.md); for step-by-step procedures see
+[contributing-recipes.md](contributing-recipes.md).
+
 ```
              source .php
                   │
@@ -139,7 +144,9 @@ it can sleep or do I/O between yields.
 
 ## Composer
 
-`require .../vendor/autoload.php` is intercepted: phpx loads Composer's
+By default `require .../vendor/autoload.php` runs Composer's own
+autoloader, like PHP (apps use its `ClassLoader`). With
+`PHPX_NATIVE_COMPOSER=1` it is intercepted instead: phpx loads Composer's
 generated maps (`autoload_classmap.php`, `autoload_psr4.php`,
 `autoload_namespaces.php`, files) directly and registers a built-in
-autoloader, instead of executing Composer's bootstrap code.
+autoloader (`composer.rs`), without a `ClassLoader` object.
