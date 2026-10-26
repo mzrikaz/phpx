@@ -1278,7 +1278,10 @@ impl Interp {
                     let mut cur = o.props.borrow_mut().get_mut(&**name).map(std::mem::take).unwrap_or_default();
                     if decl_ro && present && !matches!(cur, Value::Object(_)) {
                         o.props.borrow_mut().insert(name.clone(), cur);
-                        return Err(self.error("Error", &format!("Cannot modify readonly property {}::${name}", o.class.name)));
+                        // An element write fetches the property for writing
+                        // (zend_readonly_property_indirect_modification_error).
+                        let how = if p.path.is_empty() { "modify" } else { "indirectly modify" };
+                        return Err(self.error("Error", &format!("Cannot {how} readonly property {}::${name}", o.class.name)));
                     }
                     let r = self.write_path(&mut cur, &p.path, v);
                     o.props.borrow_mut().insert(name.clone(), cur);

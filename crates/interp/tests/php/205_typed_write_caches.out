@@ -1,0 +1,44 @@
+string(1) "5"
+float(2)
+Ci
+Cannot assign ArrayObject to property Box::$shape of type ?Shape
+Cannot assign array to property Box::$s of type string
+{"k":0,"7":"seven","08":"str","8":"p"}
+1
+Cannot indirectly modify readonly property Box::$ro
+{"z":1}
+SubBoxBox
+SqCi
+Box::take(): Argument #1 ($s) must be of type Shape, ArrayOb
+string(1) "5"
+float(2)
+Ci
+Cannot assign ArrayObject to property Box::$shape of type ?Shape
+Cannot assign array to property Box::$s of type string
+{"k":1,"7":"seven","08":"str","8":"p","9":"p"}
+2
+Cannot indirectly modify readonly property Box::$ro
+{"z":1}
+SubBoxBox
+SqCi
+Box::take(): Argument #1 ($s) must be of type Shape, ArrayOb
+string(1) "5"
+float(2)
+Ci
+Cannot assign ArrayObject to property Box::$shape of type ?Shape
+Cannot assign array to property Box::$s of type string
+{"k":2,"7":"seven","08":"str","8":"p","9":"p","10":"p"}
+3
+Cannot indirectly modify readonly property Box::$ro
+{"z":1}
+SubBoxBox
+SqCi
+Box::take(): Argument #1 ($s) must be of type Shape, ArrayOb
+string(13) "a%+5b/c%zz%4A"
+string(5) "x yA%"
+string(4) "/a/b"
+string(1) "x"
+string(1) "q"
+string(0) ""
+string(0) ""
+string(2) "ab"
