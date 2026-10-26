@@ -1717,6 +1717,14 @@ impl<'a> Lower<'a> {
                 self.release(cv);
                 r
             }
+            Call { callee, args } if args.is_empty() && self.top_ptrs.is_none() && matches!(&callee.kind, ExprKind::Name(n) if n.trim_start_matches('\\').eq_ignore_ascii_case("func_get_args")) => {
+                let la = self.b.ins().stack_addr(types::I64, self.locals_slot, 0);
+                let sp = self.iconst(self.spec_addr);
+                self.helper_value("rt_func_get_args", |l| vec![l.cx, la, sp])?
+            }
+            Call { callee, args } if args.is_empty() && self.top_ptrs.is_none() && matches!(&callee.kind, ExprKind::Name(n) if n.trim_start_matches('\\').eq_ignore_ascii_case("func_num_args")) => {
+                self.helper_value("rt_func_num_args", |l| vec![l.cx])?
+            }
             Call { callee, args } if args.is_empty() && matches!(&callee.kind, ExprKind::Name(n) if n.trim_start_matches('\\').eq_ignore_ascii_case("get_called_class")) => {
                 self.helper_value("rt_called_class", |l| vec![l.cx])?
             }

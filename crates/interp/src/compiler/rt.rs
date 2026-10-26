@@ -56,6 +56,9 @@ pub struct LocalsSpec {
     pub captured_slots: Vec<usize>,
     pub ret: Option<&'static ast::Type>,
     pub ret_quick: (Quick, bool),
+    /// Uses func_get_args()/func_num_args(): binding keeps the arguments
+    /// in the frame.
+    pub func_args: bool,
 }
 
 /// The declared return type, checked (and the value coerced) in the
@@ -211,6 +214,9 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
     let n = n as usize;
     if spec.this_slot.is_some() && f.this.is_none() {
         return 2;
+    }
+    if spec.func_args {
+        f.args = (0..n).map(|i| (*args.add(i)).clone().into_deref()).collect();
     }
     if spec.simple && n >= spec.params.len() {
         for i in 0..spec.params.len() {
@@ -886,6 +892,23 @@ pub unsafe extern "C" fn rt_instanceof_dyn(c: *mut Cx, v: *const Value, class: *
         Ok(Value::Bool(matches!((*v).deref(), Value::Object(o) if o.class.is_a(&lname))))
     })();
     status(it, r, |v| put(dst, v))
+}
+
+/// func_get_args(): the parameters' current values, then the extra
+/// arguments as passed.
+pub unsafe extern "C" fn rt_func_get_args(c: *mut Cx, locals: *const Value, spec: *const LocalsSpec, dst: *mut Value) -> u64 {
+    let (_, f) = cx(c);
+    let spec = &*spec;
+    let fixed = spec.params.iter().position(|p| p.variadic).unwrap_or(spec.params.len());
+    let vals: Vec<Value> = f.args.iter().enumerate().map(|(i, a)| if i < fixed { (*locals.add(i)).deref() } else { a.clone() }).collect();
+    put(dst, Value::array(PhpArray::from_list(vals)));
+    0
+}
+
+pub unsafe extern "C" fn rt_func_num_args(c: *mut Cx, dst: *mut Value) -> u64 {
+    let (_, f) = cx(c);
+    put(dst, Value::Int(f.args.len() as i64));
+    0
 }
 
 /// get_called_class().

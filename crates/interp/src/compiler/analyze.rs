@@ -39,6 +39,8 @@ pub struct Analysis {
     /// Top level: expressions and statements the interpreter runs on the
     /// frame (by address), where locals are the frame's own variables.
     pub escapes: std::collections::HashSet<usize>,
+    /// Calls func_get_args() / func_num_args() (the call keeps its arguments).
+    pub func_args: bool,
 }
 
 /// Rejections the top level can hand to the interpreter instead.
@@ -74,7 +76,7 @@ fn flow_contained(s: &[Stmt], depth: usize) -> bool {
 const SCOPE_FNS: &[&str] = &["compact", "eval", "get_defined_vars", "func_get_args", "func_num_args", "extract"];
 
 pub fn analyze_mode(params: &'static [ast::Param], captured: &[&'static str], body: Body, top_level: bool) -> Result<Analysis, Reject> {
-    let mut a = Analysis { locals: Locals::default(), uses_this: false, top_level, escapes: Default::default() };
+    let mut a = Analysis { locals: Locals::default(), uses_this: false, top_level, escapes: Default::default(), func_args: false };
     if let (true, Body::Block(stmts)) = (top_level, body) {
         // Only declarations directly in the segment are hoisted/declared
         // in order; conditional ones (inside if/loops) must stay interpreted.
@@ -414,6 +416,10 @@ impl Analysis {
                 match &callee.kind {
                     Name(n) => {
                         let l = n.trim_start_matches('\\').to_ascii_lowercase();
+                        if matches!(l.as_str(), "func_get_args" | "func_num_args") && !self.top_level && args.is_empty() {
+                            self.func_args = true;
+                            return Ok(());
+                        }
                         if SCOPE_FNS.contains(&l.as_str()) {
                             return Err("scope-reading function");
                         }

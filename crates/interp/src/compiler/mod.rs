@@ -164,6 +164,8 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_class_const: 6 => true,
     rt_static_prop_get: 6 => true,
     rt_called_class: 2 => true,
+    rt_func_get_args: 4 => true,
+    rt_func_num_args: 2 => true,
     rt_dyn_class: 2 => true,
     rt_class_name_of: 3 => true,
     rt_instanceof_dyn: 4 => true,
@@ -481,7 +483,8 @@ impl Native {
             display: t.display.clone(),
             ctx: t.ctx.clone(),
             class: t.class.clone(),
-            simple: t.captured.is_empty() && t.params.iter().all(|p| p.ty.is_none() && !p.by_ref && !p.variadic && p.promote.is_none()),
+            simple: t.captured.is_empty() && !a.func_args && t.params.iter().all(|p| p.ty.is_none() && !p.by_ref && !p.variadic && p.promote.is_none()),
+            func_args: a.func_args,
             captured_slots: t.captured.iter().map(|c| a.locals.index[c] as usize).collect(),
             ret: t.ret,
             ret_quick: rt::Quick::of(t.ret),
@@ -541,6 +544,7 @@ impl Native {
             } else {
                 None
             };
+            l.spec_addr = spec_addr;
             l.top_rcs = top_rcs;
             l.top_def = top_level.then(|| l.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, nlocals.max(1) as u32, 0)));
             let top_def = l.top_def;
