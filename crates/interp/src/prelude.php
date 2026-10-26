@@ -166,6 +166,7 @@ class CompileError extends Error {}
 class ParseError extends CompileError {}
 class ArgumentCountError extends TypeError {}
 class UnhandledMatchError extends Error {}
+class AssertionError extends Error {}
 class LogicException extends Exception {}
 class BadFunctionCallException extends LogicException {}
 class BadMethodCallException extends BadFunctionCallException {}
