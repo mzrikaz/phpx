@@ -76,6 +76,11 @@ pub fn format(fmt: &[u8], ts: i64, us: i64, zone: &Zone) -> Vec<u8> {
             b'O' => push(&format_offset(off, false), &mut out),
             b'P' => push(&format_offset(off, true), &mut out),
             b'p' => push(&if off == 0 { "Z".to_string() } else { format_offset(off, true) }, &mut out),
+            // An offset zone has no abbreviation: GMT+hhmm.
+            b'T' if matches!(zone, Zone::Offset(_)) => {
+                let a = off.unsigned_abs();
+                push(&format!("GMT{}{:02}{:02}", if off < 0 { '-' } else { '+' }, a / 3600, a % 3600 / 60), &mut out)
+            }
             b'T' => push(&abbr, &mut out),
             b'Z' => push(&off.to_string(), &mut out),
             b'c' => out.extend(format(b"Y-m-d\\TH:i:sP", ts, us, zone)),
