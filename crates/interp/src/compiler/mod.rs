@@ -32,6 +32,9 @@ use rt::{CallSite, Cx, LocalsSpec};
 /// the interpreter frame (`invoke` already bound them); otherwise they are
 /// bound natively from the argument array (fast calls between compiled
 /// functions). Returns 0 ok, 1 error (`pending`), 2 declined.
+/// Largest function (in IR instructions) worth compiling.
+const MAX_INSTS: usize = 60_000;
+
 pub type Entry = unsafe extern "C" fn(*mut Cx, *mut Value, u64, *mut Value) -> u64;
 
 /// What the compiler needs to know about a function.
@@ -449,10 +452,16 @@ impl Native {
     /// `osr`: compile an entry that starts at that loop statement (locals
     /// come from the interpreter frame).
     fn compile_mode(&mut self, it: &Interp, t: &Target, top_level: bool, osr: Option<usize>) -> Result<Entry, &'static str> {
+        // Compiling is the engine's work, not the script's (memory_limit).
+        crate::alloc::uncharged(|| self.compile_mode_inner(it, t, top_level, osr))
+    }
+
+    fn compile_mode_inner(&mut self, it: &Interp, t: &Target, top_level: bool, osr: Option<usize>) -> Result<Entry, &'static str> {
         if self.skip.iter().any(|s| t.display.contains(s.as_str())) || self.max.is_some_and(|m| self.count >= m) {
             return Err("excluded (PHPX_NATIVE_MAX / PHPX_NATIVE_SKIP)");
         }
         let mut a = analyze::analyze_mode(t.params, &t.captured, t.body, top_level)?;
+        let escapes = std::mem::take(&mut a.escapes);
         if top_level && a.uses_this {
             // A file included from a method sees its `$this`; file code
             // binds frame variables, which `$this` is not.
@@ -685,6 +694,15 @@ impl Native {
             self.psites.extend(psites);
             self.csites.extend(csites);
         }
+        // Register allocation grows faster than linearly: huge bodies (a
+        // whole page template) stay interpreted.
+        let insts = ctx.func.dfg.num_insts();
+        if self.log {
+            eprintln!("[native] {}: {insts} instructions", t.display);
+        }
+        if insts > MAX_INSTS {
+            return Err("function too large");
+        }
         self.module.define_function(id, &mut ctx).map_err(|e| {
             if self.log {
                 eprintln!("[native] codegen error: {e:?}");
@@ -798,8 +816,8 @@ impl Interp {
                         .unwrap_or(Err("internal compiler error"));
                     if n.log {
                         match &r {
-                            Ok(_) => eprintln!("[native] top-level compiled"),
-                            Err(why) => eprintln!("[native] top-level: not compiled: {why}"),
+                            Ok(_) => eprintln!("[native] top-level of {} compiled", self.file_path(f.ctx.file)),
+                            Err(why) => eprintln!("[native] top-level of {}: not compiled: {why}", self.file_path(f.ctx.file)),
                         }
                     }
                     let e = r.ok();

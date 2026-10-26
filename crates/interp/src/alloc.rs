@@ -225,6 +225,20 @@ pub fn exclude(bytes: usize) {
     EXCLUDED_C.with(|e| e.set(e.get() + bytes as isize));
 }
 
+/// Run `f` (the native compiler) outside the script's accounting: what
+/// it allocates, keeps or frees is excluded, and its peak doesn't count.
+pub fn uncharged<T>(f: impl FnOnce() -> T) -> T {
+    let (used, peak) = (raw(&USED_C), raw(&PEAK_C));
+    // Excluding everything up front keeps the limit from tripping meanwhile.
+    let headroom = isize::MAX / 4;
+    EXCLUDED_C.with(|e| e.set(e.get() + headroom));
+    let r = f();
+    let grown = raw(&USED_C) - used;
+    EXCLUDED_C.with(|e| e.set(e.get() - headroom + grown));
+    PEAK_C.with(|p| p.set(peak.max(raw(&USED_C))));
+    r
+}
+
 /// (configured, enforced); None = unlimited.
 pub fn set_limit(limit: Option<(usize, usize)>) {
     CONFIGURED.store(limit.map_or(usize::MAX, |l| l.0), Relaxed);
