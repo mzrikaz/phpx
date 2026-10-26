@@ -601,6 +601,11 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("mb_ltrim", |it, _, a| mb_trim(it, a, true, false));
     t.insert("mb_rtrim", |it, _, a| mb_trim(it, a, false, true));
     t.insert("mb_strrpos", |it, _, a| {
+        if single_byte_enc(it, a, 3)? {
+            let (h, n) = (s(it, a, 0)?, s(it, a, 1)?);
+            let p = if n.len() > h.len() { None } else { (0..=h.len() - n.len()).rev().find(|&i| h[i..].starts_with(&n)) };
+            return Ok(p.map(|p| Value::Int(p as i64)).unwrap_or(Value::Bool(false)));
+        }
         let (h, n) = (utf8(&s(it, a, 0)?).into_owned(), utf8(&s(it, a, 1)?).into_owned());
         Ok(h.rfind(&n).map(|p| Value::Int(h[..p].chars().count() as i64)).unwrap_or(Value::Bool(false)))
     });
@@ -609,10 +614,19 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(h.find(&n).map(|p| Value::Int(h[..p].chars().count() as i64)).unwrap_or(Value::Bool(false)))
     });
     t.insert("mb_substr_count", |it, _, a| {
-        let (h, n) = (utf8(&s(it, a, 0)?).into_owned(), utf8(&s(it, a, 1)?).into_owned());
-        if n.is_empty() {
+        if s(it, a, 1)?.is_empty() {
             return Err(it.error("ValueError", "mb_substr_count(): Argument #2 ($needle) must not be empty"));
         }
+        if single_byte_enc(it, a, 2)? {
+            let (h, n) = (s(it, a, 0)?, s(it, a, 1)?);
+            let (mut i, mut c) = (0, 0);
+            while let Some(p) = find(&h, &n, i) {
+                c += 1;
+                i = p + n.len();
+            }
+            return Ok(Value::Int(c));
+        }
+        let (h, n) = (utf8(&s(it, a, 0)?).into_owned(), utf8(&s(it, a, 1)?).into_owned());
         Ok(Value::Int(h.matches(&n).count() as i64))
     });
     t.insert("mb_ord", |it, _, a| Ok(utf8(&s(it, a, 0)?).chars().next().map(|c| Value::Int(c as i64)).unwrap_or(Value::Bool(false))));
@@ -651,23 +665,47 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("ctype_cntrl", |it, _, a| ctype(it, a, |c| c.is_ascii_control()));
     t.insert("ctype_print", |it, _, a| ctype(it, a, |c| (32..127).contains(&c)));
     t.insert("ctype_graph", |it, _, a| ctype(it, a, |c| (33..127).contains(&c)));
-    t.insert("mb_strlen", |it, _, a| Ok(Value::Int(utf8(&s(it, a, 0)?).chars().count() as i64)));
+    t.insert("mb_strlen", |it, _, a| {
+        let st = s(it, a, 0)?;
+        if single_byte_enc(it, a, 1)? {
+            return Ok(Value::Int(st.len() as i64));
+        }
+        Ok(Value::Int(utf8(&st).chars().count() as i64))
+    });
     t.insert("mb_strtoupper", |it, _, a| Ok(Value::str(&crate::mbcase::convert(&utf8(&s(it, a, 0)?), 0))));
     t.insert("mb_strtolower", |it, _, a| Ok(Value::str(&crate::mbcase::convert(&utf8(&s(it, a, 0)?), 1))));
     t.insert("mb_substr", |it, _, a| {
+        let len = if has(a, 2) && !arg(a, 2).is_null() { Some(int(it, a, 2)?) } else { None };
+        if single_byte_enc(it, a, 3)? {
+            let b = s(it, a, 0)?;
+            let (lo, hi) = substr_range(b.len(), int(it, a, 1)?, len);
+            return Ok(Value::bytes(b[lo..hi].to_vec()));
+        }
         let st = utf8(&s(it, a, 0)?).into_owned();
         let chars: Vec<char> = st.chars().collect();
-        let len = if has(a, 2) && !arg(a, 2).is_null() { Some(int(it, a, 2)?) } else { None };
         let (lo, hi) = substr_range(chars.len(), int(it, a, 1)?, len);
         Ok(Value::str(&chars[lo..hi].iter().collect::<String>()))
     });
     t.insert("mb_str_split", |it, _, a| {
-        let st = utf8(&s(it, a, 0)?).into_owned();
         let n = if has(a, 1) { int(it, a, 1)?.max(1) as usize } else { 1 };
+        if single_byte_enc(it, a, 2)? {
+            let b = s(it, a, 0)?;
+            return Ok(Value::array(PhpArray::from_list(b.chunks(n).map(|c| Value::bytes(c.to_vec())))));
+        }
+        let st = utf8(&s(it, a, 0)?).into_owned();
         let chars: Vec<char> = st.chars().collect();
         Ok(Value::array(PhpArray::from_list(chars.chunks(n).map(|c| Value::str(&c.iter().collect::<String>())))))
     });
     t.insert("mb_strpos", |it, _, a| {
+        if single_byte_enc(it, a, 3)? {
+            let (h, n) = (s(it, a, 0)?, s(it, a, 1)?);
+            let off = if has(a, 2) { int(it, a, 2)? } else { 0 };
+            let start = if off < 0 { h.len() as i64 + off } else { off };
+            if start < 0 || start > h.len() as i64 {
+                return Err(it.error("ValueError", "mb_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)"));
+            }
+            return Ok(find(&h, &n, start as usize).map(|p| Value::Int(p as i64)).unwrap_or(Value::Bool(false)));
+        }
         let (h, n) = (utf8(&s(it, a, 0)?).into_owned(), utf8(&s(it, a, 1)?).into_owned());
         Ok(h.find(&n).map(|p| Value::Int(h[..p].chars().count() as i64)).unwrap_or(Value::Bool(false)))
     });
@@ -740,6 +778,21 @@ thread_local! {
 
 pub fn one_byte(c: u8) -> crate::value::PStr {
     ONE_BYTE.with(|t| t[c as usize].clone())
+}
+
+/// Whether the mb_* `$encoding` argument at `i` names a single-byte
+/// encoding (`8bit`, `ASCII`, `ISO-8859-*`, …), where characters are bytes.
+/// Absent or null means the internal encoding, UTF-8.
+fn single_byte_enc(it: &Interp, a: &[Value], i: usize) -> R<bool> {
+    if !has(a, i) || arg(a, i).is_null() {
+        return Ok(false);
+    }
+    let e = crate::pstr::lossy(&s(it, a, i)?).to_ascii_lowercase();
+    Ok(matches!(e.as_str(), "8bit" | "binary" | "7bit" | "ascii" | "us-ascii" | "latin1" | "cp850" | "cp866" | "ibm866" | "koi8-r" | "koi8-u" | "armscii-8")
+        || e.starts_with("iso-8859-")
+        || e.starts_with("iso8859-")
+        || e.starts_with("windows-125")
+        || e.starts_with("cp125"))
 }
 
 /// A string as mbstring decodes UTF-8: each invalid sequence becomes the

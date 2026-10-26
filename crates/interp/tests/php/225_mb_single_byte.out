@@ -1,0 +1,18 @@
+8bit: 32 a78373c2 bf8f 9 13
+8BIT: 32 a78373c2 bf8f 9 13
+ISO-8859-1: 32 a78373c2 bf8f 9 13
+latin1: 32 a78373c2 bf8f 9 13
+Windows-1252: 32 a78373c2 bf8f 9 13
+32 31
+6 5
+ok
+int(5)
+bool(false)
+Array
+(
+    [0] => 68c3
+    [1] => a96c
+    [2] => 6c6f
+)
+2
+mb_strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)
