@@ -13,79 +13,6 @@ use crate::builtins::{arg, has, s};
 use crate::interp::{BuiltinFn, Interp, R};
 use crate::value::{pstr, Key, PhpArray, Value};
 
-/// PHP 8.5 CLI defaults without a php.ini.
-const DEFAULTS: &[(&str, &str)] = &[
-    ("allow_url_fopen", "1"),
-    ("arg_separator.input", "&"),
-    ("arg_separator.output", "&"),
-    ("assert.active", "1"),
-    ("assert.exception", "1"),
-    ("auto_detect_line_endings", "0"),
-    ("date.timezone", "UTC"),
-    ("default_charset", "UTF-8"),
-    ("default_mimetype", "text/html"),
-    ("default_socket_timeout", "60"),
-    ("disable_classes", ""),
-    ("disable_functions", ""),
-    ("display_errors", "1"),
-    ("display_startup_errors", "1"),
-    ("error_log", ""),
-    ("error_reporting", "30719"),
-    ("expose_php", "1"),
-    ("file_uploads", "1"),
-    ("html_errors", "0"),
-    ("ignore_user_abort", "0"),
-    ("implicit_flush", "1"),
-    ("include_path", ".:/usr/share/php"),
-    ("log_errors", "0"),
-    ("max_execution_time", "0"),
-    ("max_file_uploads", "20"),
-    ("max_input_nesting_level", "64"),
-    ("max_input_time", "-1"),
-    ("max_input_vars", "1000"),
-    ("mbstring.language", "neutral"),
-    ("memory_limit", "128M"),
-    ("open_basedir", ""),
-    ("output_buffering", "0"),
-    ("output_handler", ""),
-    ("pcre.backtrack_limit", "1000000"),
-    ("pcre.jit", "1"),
-    ("pcre.recursion_limit", "100000"),
-    ("post_max_size", "8M"),
-    ("precision", "14"),
-    ("register_argc_argv", "1"),
-    ("request_order", ""),
-    ("serialize_precision", "-1"),
-    ("session.auto_start", "0"),
-    ("session.cache_expire", "180"),
-    ("session.cache_limiter", "nocache"),
-    ("session.cookie_domain", ""),
-    ("session.cookie_httponly", "0"),
-    ("session.cookie_lifetime", "0"),
-    ("session.cookie_path", "/"),
-    ("session.cookie_samesite", ""),
-    ("session.cookie_secure", "0"),
-    ("session.gc_maxlifetime", "1440"),
-    ("session.name", "PHPSESSID"),
-    ("session.save_handler", "files"),
-    ("session.save_path", ""),
-    ("session.serialize_handler", "php"),
-    ("session.use_cookies", "1"),
-    ("session.use_only_cookies", "1"),
-    ("session.use_strict_mode", "0"),
-    ("short_open_tag", "1"),
-    ("sys_temp_dir", ""),
-    ("unserialize_callback_func", ""),
-    ("unserialize_max_depth", "4096"),
-    ("upload_max_filesize", "2M"),
-    ("upload_tmp_dir", ""),
-    ("user_agent", ""),
-    ("variables_order", "EGPCS"),
-    ("zend.assertions", "1"),
-    ("zend.enable_gc", "1"),
-    ("zend.exception_ignore_args", "0"),
-    ("zlib.output_compression", "0"),
-];
 
 #[derive(Default)]
 pub struct Ini {
@@ -158,8 +85,10 @@ fn find_ini(script: &Path) -> Option<PathBuf> {
 }
 
 impl Ini {
+    /// PHP 8.5's built-in defaults (`php -n`) for every directive of the
+    /// modules phpx implements.
     pub fn new() -> Ini {
-        let values: HashMap<String, String> = DEFAULTS.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let values: HashMap<String, String> = crate::phpinfo_data::INI.iter().map(|d| (d.name.to_string(), d.value.unwrap_or("").to_string())).collect();
         Ini { startup: values.clone(), values, loaded_file: None }
     }
 
@@ -205,7 +134,8 @@ impl Ini {
 
     pub fn all(&self) -> Vec<(String, String)> {
         let mut v: Vec<_> = self.values.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        v.sort();
+        // zend_ini_sort_entries(): case-insensitive.
+        v.sort_by_key(|(k, _)| k.to_ascii_lowercase());
         v
     }
 }
@@ -303,6 +233,10 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("ini_set", |it, _, a| {
         let k = bstr(it, a, 0)?;
         let v = ini_value(&arg(a, 1), it)?;
+        // Only PHP_INI_USER directives can change at run time.
+        if crate::phpinfo::directive(&k).is_some_and(|d| d.access & 1 == 0) {
+            return Ok(Value::Bool(false));
+        }
         let old = it.ini.borrow_mut().set(&k, &v);
         Ok(match old {
             Some(o) => {
@@ -322,22 +256,37 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::Null)
     });
     t.insert("ini_get_all", |it, _, a| {
-        let prefix = if has(a, 0) && !arg(a, 0).is_null() { Some(format!("{}.", bstr(it, a, 0)?.to_ascii_lowercase())) } else { None };
+        // By extension, like PHP (not by name prefix).
+        let module = if has(a, 0) && !arg(a, 0).is_null() {
+            let ext = bstr(it, a, 0)?;
+            match crate::phpinfo::module_name(&ext) {
+                Some(m) => Some(m),
+                None => {
+                    it.warn(&format!("ini_get_all(): Extension \"{ext}\" cannot be found"));
+                    return Ok(Value::Bool(false));
+                }
+            }
+        } else {
+            None
+        };
         let details = !has(a, 1) || arg(a, 1).truthy();
         let mut out = PhpArray::new();
         let ini = it.ini.borrow();
         for (k, v) in ini.all() {
-            if prefix.as_ref().is_some_and(|p| !k.starts_with(p.as_str())) {
+            let def = crate::phpinfo::directive(&k);
+            if module.is_some_and(|m| def.is_none_or(|d| d.module != m)) {
                 continue;
             }
+            // A NULL default not set since shows as null.
+            let shown = |s: &str| if s.is_empty() && def.is_some_and(|d| d.value.is_none()) { Value::Null } else { Value::str(s) };
             let val = if details {
                 let mut d = PhpArray::new();
-                d.insert(Key::Str(pstr("global_value")), Value::str(ini.startup.get(&k).map(String::as_str).unwrap_or("")));
-                d.insert(Key::Str(pstr("local_value")), Value::str(&v));
-                d.insert(Key::Str(pstr("access")), Value::Int(7));
+                d.insert(Key::Str(pstr("global_value")), shown(ini.startup.get(&k).map(String::as_str).unwrap_or("")));
+                d.insert(Key::Str(pstr("local_value")), shown(&v));
+                d.insert(Key::Str(pstr("access")), Value::Int(def.map_or(7, |d| d.access as i64)));
                 Value::array(d)
             } else {
-                Value::str(&v)
+                shown(&v)
             };
             out.insert(Key::Str(pstr(&k)), val);
         }

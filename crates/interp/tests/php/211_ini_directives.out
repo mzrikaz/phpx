@@ -1,0 +1,78 @@
+memory_limit = '128M'
+precision = '14'
+session.name = 'PHPSESSID'
+date.timezone = 'UTC'
+mbstring.language = 'neutral'
+pcre.jit = '1'
+zend.assertions = '1'
+serialize_precision = '-1'
+default_charset = 'UTF-8'
+max_input_vars = '1000'
+session.sid_length = '32'
+arg_separator.output = '&'
+highlight.string = '#DD0000'
+no.such.directive = false
+disable_classes = false
+string(4) "128M"
+string(4) "256M"
+bool(false)
+string(1) "1"
+bool(false)
+31 {"global_value":"PHPSESSID","local_value":"PHPSESSID","access":7}
+{"date.default_latitude":"31.7667","date.default_longitude":"35.2333","date.sunrise_zenith":"90.833333","date.sunset_zenith":"90.833333","date.timezone":"UTC"}
+bool(false)
+{"allow_url_fopen":"1","allow_url_include":"0","arg_separator.input":"&"}
+[json]
+json support => enabled
+[ctype]
+ctype functions => enabled
+[date]
+date/time support => enabled
+timelib version => 2022.17
+"Olson" Timezone Database Version => 2026.3
+Timezone Database => internal
+Default timezone => UTC
+
+Directive => Local Value => Master Value
+date.default_latitude => 31.7667 => 31.7667
+date.default_longitude => 35.2333 => 35.2333
+date.sunrise_zenith => 90.833333 => 90.833333
+date.sunset_zenith => 90.833333 => 90.833333
+date.timezone => UTC => UTC
+[session]
+Session Support => enabled
+Registered save handlers => files user 
+Registered serializer handlers => php_serialize php php_binary 
+
+Directive => Local Value => Master Value
+session.auto_start => Off => Off
+session.cache_expire => 180 => 180
+session.cache_limiter => nocache => nocache
+session.cookie_domain => no value => no value
+session.cookie_httponly => Off => Off
+session.cookie_lifetime => 0 => 0
+session.cookie_partitioned => Off => Off
+session.cookie_path => / => /
+session.cookie_samesite => no value => no value
+session.cookie_secure => Off => Off
+session.gc_divisor => 100 => 100
+session.gc_maxlifetime => 1440 => 1440
+session.gc_probability => 1 => 1
+session.lazy_write => On => On
+session.name => PHPSESSID => PHPSESSID
+session.referer_check => no value => no value
+session.save_handler => files => files
+session.save_path => no value => no value
+session.serialize_handler => php => php
+session.sid_bits_per_character => 4 => 4
+session.sid_length => 32 => 32
+session.upload_progress.cleanup => On => On
+session.upload_progress.enabled => On => On
+session.upload_progress.freq => 1% => 1%
+session.upload_progress.min_freq => 1 => 1
+session.upload_progress.name => PHP_SESSION_UPLOAD_PROGRESS => PHP_SESSION_UPLOAD_PROGRESS
+session.upload_progress.prefix => upload_progress_ => upload_progress_
+session.use_cookies => On => On
+session.use_only_cookies => On => On
+session.use_strict_mode => Off => Off
+session.use_trans_sid => Off => Off

@@ -94,7 +94,7 @@ pub fn guarded(it: &Interp, name: &str, f: impl FnOnce() -> R<Value>) -> R<Value
 }
 
 /// Extensions phpx implements (enough for feature checks to pass).
-pub const EXTENSIONS: &[&str] = &["Core", "date", "libxml", "pcre", "zlib", "ctype", "dom", "fileinfo", "filter", "hash", "intl", "json", "mbstring", "openssl", "SPL", "PDO", "pdo_mysql", "random", "Reflection", "standard", "tokenizer", "xml", "xmlwriter", "redis"];
+pub const EXTENSIONS: &[&str] = &["Core", "date", "libxml", "pcre", "zlib", "ctype", "dom", "fileinfo", "filter", "hash", "intl", "json", "mbstring", "openssl", "SPL", "PDO", "pdo_mysql", "mysqlnd", "random", "Reflection", "session", "standard", "tokenizer", "xml", "xmlwriter", "redis"];
 
 /// When the first interpreter started (gc_status()'s application_time).
 static PROCESS_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
