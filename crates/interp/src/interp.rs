@@ -598,6 +598,9 @@ struct PreludeState {
 }
 
 thread_local! {
+    /// Functions built from a declaration: (the function, its lowercase
+    /// name, whether it shadows a built-in).
+    static FN_DECLS: RefCell<FxHashMap<usize, (Rc<UserFn>, Rc<str>, bool)>> = RefCell::new(FxHashMap::default());
     static PRELUDE_STATE: RefCell<Option<PreludeState>> = const { RefCell::new(None) };
 }
 
@@ -979,15 +982,27 @@ impl Interp {
     }
 
     pub fn declare_function(&self, f: &'static ast::Function, ctx: &Rc<NsCtx>) {
-        let full = qualify(&ctx.ns, &f.name.name);
-        let key = self.lower.get(&full);
-        self.decl_ctx.borrow_mut().insert(f as *const ast::Function as usize, ctx.clone());
-        if !ctx.ns.is_empty() && self.builtins.contains_key(&*f.name.name.to_ascii_lowercase()) {
+        let at = f as *const ast::Function as usize;
+        // A thread builds a declaration's function once (per context).
+        let known = FN_DECLS.with(|m| m.borrow().get(&at).filter(|d| Rc::ptr_eq(&d.0.ctx, ctx)).cloned());
+        let (func, key, shadows) = match known {
+            Some(d) => (d.0, d.1, d.2),
+            None => {
+                let full = qualify(&ctx.ns, &f.name.name);
+                let key = self.lower.get(&full);
+                let shadows = !ctx.ns.is_empty() && self.builtins.contains_key(&*f.name.name.to_ascii_lowercase());
+                let func = Rc::new(UserFn { name: Rc::from(full), decl: f, ctx: ctx.clone() });
+                FN_DECLS.with(|m| m.borrow_mut().insert(at, (func.clone(), key.clone(), shadows)));
+                (func, key, shadows)
+            }
+        };
+        self.decl_ctx.borrow_mut().insert(at, ctx.clone());
+        if shadows {
             // A namespaced function shadows a built-in for unqualified calls
             // in that namespace: compiled code stops inlining built-ins.
             crate::value::builtin_shadowed().store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        self.functions.borrow_mut().insert(key, Rc::new(UserFn { name: Rc::from(full), decl: f, ctx: ctx.clone() }));
+        self.functions.borrow_mut().insert(key, func);
     }
 
     // ---- statements --------------------------------------------------
