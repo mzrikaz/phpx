@@ -738,14 +738,21 @@ impl Interp {
                     None => Err(self.error("Error", "Object of type {} is not callable")),
                 }
             }
-            Value::Str(s) => {
-                let s = String::from_utf8_lossy(s).into_owned();
+            Value::Str(bytes) => {
+                if let Some(c) = self.str_callables.borrow().get(&**bytes) {
+                    return Ok(c.clone());
+                }
+                let s = String::from_utf8_lossy(bytes).into_owned();
                 if let Some((cls, m)) = s.split_once("::") {
                     let class = self.string_class(f, cls)?;
                     return self.method_callable(f, None, &class, m);
                 }
-                self.find_function(&f.ctx, &format!("\\{}", s.trim_start_matches('\\')))
-                    .ok_or_else(|| self.error("Error", &format!("Call to undefined function {s}()")))
+                let c = self
+                    .find_function(&f.ctx, &format!("\\{}", s.trim_start_matches('\\')))
+                    .ok_or_else(|| self.error("Error", &format!("Call to undefined function {s}()")))?;
+                // A function, once declared, stays.
+                self.str_callables.borrow_mut().insert(bytes.to_vec().into_boxed_slice(), c.clone());
+                Ok(c)
             }
             Value::Array(a) if a.len() == 2 => {
                 let target = a.get(&Key::Int(0)).unwrap_or_default();

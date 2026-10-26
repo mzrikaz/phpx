@@ -215,6 +215,9 @@ impl Spec {
         let or_null = if p.mask & NULL != 0 { " or null" } else { "" };
         let why = match v {
             Value::Str(s) => {
+                if it.str_callables.borrow().contains_key(&**s) {
+                    return Ok(());
+                }
                 let name = String::from_utf8_lossy(s);
                 if name.contains("::") || it.find_function(&it.file_ctx(0), &name).is_some() {
                     return Ok(());

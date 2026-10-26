@@ -309,8 +309,10 @@ impl Frame {
 
 pub struct Interp {
     pub files: RefCell<Vec<FileInfo>>,
-    pub functions: RefCell<HashMap<Rc<str>, Rc<UserFn>>>,
-    pub builtins: HashMap<&'static str, BuiltinFn>,
+    pub functions: RefCell<FxHashMap<Rc<str>, Rc<UserFn>>>,
+    pub builtins: FxHashMap<&'static str, BuiltinFn>,
+    /// Functions found for string callables ('strlen', 'App\\helper').
+    pub str_callables: RefCell<FxHashMap<Box<[u8]>, Callable>>,
     pub natives: HashMap<(&'static str, &'static str), NativeMethod>,
     pub classes: RefCell<FxHashMap<Rc<str>, Rc<Class>>>,
     pub constants: RefCell<HashMap<String, Value>>,
@@ -400,8 +402,9 @@ impl Interp {
     pub fn new(writer: Box<dyn Write>) -> Rc<Interp> {
         let it = Rc::new(Interp {
             files: RefCell::new(vec![]),
-            functions: RefCell::new(HashMap::new()),
-            builtins: crate::builtins::table(),
+            functions: RefCell::new(FxHashMap::default()),
+            str_callables: RefCell::new(FxHashMap::default()),
+            builtins: crate::builtins::table().into_iter().collect(),
             natives: crate::native::table(),
             classes: RefCell::new(FxHashMap::default()),
             constants: RefCell::new(crate::builtins::constants()),
