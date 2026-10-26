@@ -1228,6 +1228,9 @@ pub struct MethodSite {
     pub name: &'static str,
     pub lname: &'static str,
     pub cached: std::cell::Cell<Option<MethodCache>>,
+    /// The method last found here while it isn't compiled: (class, scope,
+    /// method), called through the interpreter without looking it up again.
+    pub interp: std::cell::RefCell<Option<(usize, usize, Rc<crate::class::Method>)>>,
 }
 
 impl MethodSite {
@@ -1240,6 +1243,7 @@ impl MethodSite {
             name,
             lname,
             cached: Default::default(),
+            interp: Default::default(),
         }
     }
 }
@@ -1525,12 +1529,22 @@ pub unsafe extern "C" fn rt_method_call(
             Some(mc) if mc.class == Rc::as_ptr(&o.class) && mc.scope == scope => Some(mc),
             _ => None,
         };
+        let key = (Rc::as_ptr(&o.class) as usize, scope as usize);
         let hit = hit.or_else(|| {
-            // Miss: look the method up and (if it compiles) cache it.
-            let m = o.class.find_method_from(site.lname, f.class.as_deref())?.clone();
-            if !it.member_visible(f.class.as_deref(), m.vis, &m.declaring) {
-                return None;
-            }
+            // Miss: look the method up (or take the interpreted one found
+            // before) and, if it compiles, cache it.
+            let known = site.interp.borrow().as_ref().filter(|e| (e.0, e.1) == key).map(|e| e.2.clone());
+            let m = match known {
+                Some(m) => m,
+                None => {
+                    let m = o.class.find_method_from(site.lname, f.class.as_deref())?.clone();
+                    if !it.member_visible(f.class.as_deref(), m.vis, &m.declaring) {
+                        return None;
+                    }
+                    *site.interp.borrow_mut() = Some((key.0, key.1, m.clone()));
+                    m
+                }
+            };
             let (entry, decl_class) = method_entry(it, &m)?;
             let mc = MethodCache {
                 class: Rc::as_ptr(&o.class),
@@ -1571,6 +1585,15 @@ pub unsafe extern "C" fn rt_method_call(
             });
             if let Some(st) = r {
                 return st;
+            }
+        } else {
+            // Not compiled (yet): the interpreter, without another lookup.
+            let known = site.interp.borrow().as_ref().filter(|e| (e.0, e.1) == key).map(|e| e.2.clone());
+            if let Some(m) = known.filter(|m| matches!(m.body, crate::class::MethodBody::User(f) if f.body.is_some())) {
+                let vals = take_args(args, n);
+                let o = o.clone();
+                let r = with_refs(crate::call::method_params(&m), vals, locals, |pos| it.invoke_method(Some(o.clone()), &m, o.class.clone(), pos, vec![]));
+                return status(it, r, |v| put(dst, v));
             }
         }
     }
