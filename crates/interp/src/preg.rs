@@ -27,6 +27,76 @@ struct Compiled {
     utf: bool,
     /// A spare capture buffer (taken while in use: callbacks may reenter).
     spare: RefCell<Option<CaptureLocations>>,
+    /// Patterns with (*MARK:name) & co: the same pattern compiled
+    /// directly, to read which mark a match passed.
+    marker: Option<Marker>,
+}
+
+/// A raw PCRE2 pattern and match data (the pcre2 crate does not expose
+/// the mark of a match).
+struct Marker {
+    code: *mut pcre2_sys::pcre2_code_8,
+    md: *mut pcre2_sys::pcre2_match_data_8,
+    utf: bool,
+}
+
+impl Marker {
+    fn new(src: &[u8], options: u32) -> Option<Marker> {
+        let (mut err, mut off) = (0i32, 0usize);
+        // SAFETY: plain PCRE2 calls; the pointers are checked and freed in Drop.
+        unsafe {
+            let code = pcre2_sys::pcre2_compile_8(src.as_ptr(), src.len(), options, &mut err, &mut off, std::ptr::null_mut());
+            if code.is_null() {
+                return None;
+            }
+            let md = pcre2_sys::pcre2_match_data_create_from_pattern_8(code, std::ptr::null_mut());
+            if md.is_null() {
+                pcre2_sys::pcre2_code_free_8(code);
+                return None;
+            }
+            Some(Marker { code, md, utf: options & pcre2_sys::PCRE2_UTF != 0 })
+        }
+    }
+
+    /// The mark set by the match found searching `subj` from `at`.
+    fn mark(&self, subj: &[u8], at: usize) -> Option<Vec<u8>> {
+        let opts = if self.utf { pcre2_sys::PCRE2_NO_UTF_CHECK } else { 0 };
+        // SAFETY: code and match data are live; the mark is a
+        // NUL-terminated string owned by the match data.
+        unsafe {
+            let rc = pcre2_sys::pcre2_match_8(self.code, subj.as_ptr(), subj.len(), at, opts, self.md, std::ptr::null_mut());
+            if rc < 0 {
+                return None;
+            }
+            let m = pcre2_sys::pcre2_get_mark_8(self.md);
+            if m.is_null() {
+                return None;
+            }
+            Some(std::ffi::CStr::from_ptr(m as *const std::ffi::c_char).to_bytes().to_vec())
+        }
+    }
+}
+
+impl Drop for Marker {
+    fn drop(&mut self) {
+        // SAFETY: created in Marker::new, freed once.
+        unsafe {
+            pcre2_sys::pcre2_match_data_free_8(self.md);
+            pcre2_sys::pcre2_code_free_8(self.code);
+        }
+    }
+}
+
+/// Whether a pattern can set a mark: (*MARK:x), (*:x), (*PRUNE:x), (*THEN:x).
+fn has_marks(src: &[u8]) -> bool {
+    src.windows(3).any(|w| w == b"(*:") || [&b"(*MARK:"[..], b"(*PRUNE:", b"(*THEN:"].iter().any(|v| src.windows(v.len()).any(|w| w == *v))
+}
+
+/// Add PHP's "MARK" entry when the match found from `at` passed a mark.
+fn add_mark(c: &Compiled, arr: &mut PhpArray, subj: &[u8], at: usize) {
+    if let Some(m) = c.marker.as_ref().and_then(|mk| mk.mark(subj, at)) {
+        arr.insert(Key::Str(crate::value::pstr("MARK")), Value::bytes(m));
+    }
 }
 
 impl Compiled {
@@ -94,23 +164,29 @@ fn compile(it: &Interp, fname: &str, pat: &[u8]) -> R<Option<Rc<Compiled>>> {
     let mut b = RegexBuilder::new();
     b.jit_if_available(true);
     let (mut prefix, mut anchored, mut utf, mut extended) = (String::new(), false, false, false);
+    let mut options = 0u32;
     for &f in &pat[end + 1..] {
         match f {
             b'i' => {
                 b.caseless(true);
+                options |= pcre2_sys::PCRE2_CASELESS;
             }
             b'm' => {
                 b.multi_line(true);
+                options |= pcre2_sys::PCRE2_MULTILINE;
             }
             b's' => {
                 b.dotall(true);
+                options |= pcre2_sys::PCRE2_DOTALL;
             }
             b'x' => {
                 b.extended(true);
+                options |= pcre2_sys::PCRE2_EXTENDED;
                 extended = true;
             }
             b'u' => {
                 b.utf(true).ucp(true);
+                options |= pcre2_sys::PCRE2_UTF | pcre2_sys::PCRE2_UCP;
                 utf = true;
             }
             b'U' => prefix.push_str("(?U)"),
@@ -170,7 +246,8 @@ fn compile(it: &Interp, fname: &str, pat: &[u8]) -> R<Option<Rc<Compiled>>> {
         }
     };
     let names = re.capture_names().to_vec();
-    let c = Rc::new(Compiled { re, names, utf, spare: RefCell::new(None) });
+    let marker = if has_marks(&src) { Marker::new(text.as_bytes(), options) } else { None };
+    let c = Rc::new(Compiled { re, names, utf, spare: RefCell::new(None), marker });
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache.len() > 4096 {
@@ -271,7 +348,7 @@ fn char_len(c: &Compiled, subj: &[u8], i: usize) -> usize {
 
 /// Every match, Perl /g style: after an empty match the search resumes
 /// one character later.
-fn each_match(c: &Compiled, subj: &[u8], limit: i64, mut g: impl FnMut(&CaptureLocations) -> R<()>) -> R<Result<usize, ()>> {
+fn each_match(c: &Compiled, subj: &[u8], limit: i64, mut g: impl FnMut(&CaptureLocations, usize) -> R<()>) -> R<Result<usize, ()>> {
     let mut locs = c.locs();
     let mut at = 0;
     let mut n = 0;
@@ -282,7 +359,7 @@ fn each_match(c: &Compiled, subj: &[u8], limit: i64, mut g: impl FnMut(&CaptureL
             Err(()) => return Ok(Err(())),
         }
         let (s, e) = locs.get(0).unwrap();
-        g(&locs)?;
+        g(&locs, at)?;
         n += 1;
         at = if e == s { e + char_len(c, subj, e) } else { e };
     }
@@ -370,13 +447,14 @@ enum Rep<'a> {
 fn replace_one(it: &Interp, c: &Compiled, rep: &Rep, subj: &[u8], limit: i64, flags: i64, count: &mut i64) -> R<Option<Vec<u8>>> {
     let mut out = Vec::with_capacity(subj.len());
     let mut last = 0;
-    let r = each_match(c, subj, limit, |locs| {
+    let r = each_match(c, subj, limit, |locs, at| {
         let (s, e) = locs.get(0).unwrap();
         out.extend_from_slice(&subj[last..s]);
         match rep {
             Rep::Str(r) => expand(r, locs, subj, &mut out),
             Rep::Call(cb) => {
-                let arr = groups(c, locs, subj, flags, false);
+                let mut arr = groups(c, locs, subj, flags, false);
+                add_mark(c, &mut arr, subj, at);
                 let v = it.call_callable(cb, vec![Value::array(arr)], vec![])?;
                 out.extend_from_slice(&it.to_str(&v)?);
             }
@@ -455,7 +533,16 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let mut locs = c.locs();
         let want = a.len() > 2;
         let (r, arr) = match find(&c, &mut locs, &subj, off as usize) {
-            Ok(true) => (Value::Int(1), if want { groups(&c, &locs, &subj, flags, false) } else { PhpArray::new() }),
+            Ok(true) => (
+                Value::Int(1),
+                if want {
+                    let mut g = groups(&c, &locs, &subj, flags, false);
+                    add_mark(&c, &mut g, &subj, off as usize);
+                    g
+                } else {
+                    PhpArray::new()
+                },
+            ),
             Ok(false) => (Value::Int(0), PhpArray::new()),
             Err(()) => (Value::Bool(false), PhpArray::new()),
         };
@@ -488,11 +575,9 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                     }
                 }
                 let (s0, e0) = locs.get(0).unwrap();
-                if flags & SET_ORDER != 0 {
-                    sets.push(Value::array(groups(&c, &locs, tail, flags, false)));
-                } else {
-                    sets.push(Value::array(groups(&c, &locs, tail, flags, true)));
-                }
+                let mut g = groups(&c, &locs, tail, flags, flags & SET_ORDER == 0);
+                add_mark(&c, &mut g, tail, at);
+                sets.push(Value::array(g));
                 n += 1;
                 at = if e0 == s0 { e0 + char_len(&c, tail, e0) } else { e0 };
             }
@@ -513,6 +598,19 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                         out.insert(Key::Str(crate::value::pbytes(n.as_bytes())), Value::array(col.clone()));
                     }
                     out.insert(Key::Int(i as i64), Value::array(col));
+                }
+                // Marks: by match number, for the matches that passed one.
+                let mark = Key::Str(crate::value::pstr("MARK"));
+                let mut marks = PhpArray::new();
+                for (i, s) in sets.iter().enumerate() {
+                    if let Value::Array(s) = s {
+                        if let Some(m) = s.get(&mark) {
+                            marks.insert(Key::Int(i as i64), m);
+                        }
+                    }
+                }
+                if marks.len() > 0 {
+                    out.insert(mark, Value::array(marks));
                 }
                 out
             };

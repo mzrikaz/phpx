@@ -1033,6 +1033,7 @@ dependencies = [
  "md4",
  "memchr",
  "pcre2",
+ "pcre2-sys",
  "phpx-jit",
  "phpx-runtime",
  "phpx-syntax",

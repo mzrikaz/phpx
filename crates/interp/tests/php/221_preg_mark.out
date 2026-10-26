@@ -1,0 +1,77 @@
+int(1)
+array(3) {
+  [0]=>
+  string(17) "/app/abc/products"
+  [1]=>
+  string(3) "abc"
+  ["MARK"]=>
+  string(2) "30"
+}
+int(1)
+array(3) {
+  [0]=>
+  string(15) "/app/abc/brands"
+  [1]=>
+  string(3) "abc"
+  ["MARK"]=>
+  string(2) "45"
+}
+int(1)
+array(2) {
+  [0]=>
+  string(2) "/x"
+  ["MARK"]=>
+  string(2) "60"
+}
+int(0)
+array(0) {
+}
+int(1)
+array(2) {
+  [0]=>
+  string(2) "cd"
+  ["MARK"]=>
+  string(3) "bar"
+}
+array(2) {
+  [0]=>
+  array(2) {
+    [0]=>
+    string(1) "a"
+    ["MARK"]=>
+    string(1) "A"
+  }
+  [1]=>
+  array(2) {
+    [0]=>
+    string(1) "b"
+    ["MARK"]=>
+    string(1) "B"
+  }
+}
+array(2) {
+  [0]=>
+  array(3) {
+    [0]=>
+    string(1) "a"
+    [1]=>
+    string(1) "b"
+    [2]=>
+    string(1) "c"
+  }
+  ["MARK"]=>
+  array(2) {
+    [0]=>
+    string(1) "A"
+    [1]=>
+    string(1) "B"
+  }
+}
+[one][two]
+int(1)
+array(2) {
+  [0]=>
+  string(1) "X"
+  ["MARK"]=>
+  string(1) "A"
+}
