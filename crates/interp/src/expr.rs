@@ -362,6 +362,26 @@ impl Interp {
                     self.mark(f, i.span.start);
                 }
                 let cls = self.class_ref(f, class)?;
+                if let MemberName::Ident(i) = name {
+                    // Inline cache: same class and scope as last time here.
+                    let key = (Rc::as_ptr(&cls) as usize, f.class.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize));
+                    let site = i as *const _ as usize;
+                    let hit = self.method_sites.borrow().get(&site).filter(|e| (e.0, e.1) == key).map(|e| e.2.clone());
+                    let m = match hit {
+                        Some(m) => Some(m),
+                        None => {
+                            let m = cls.find_method(&i.name.to_ascii_lowercase()).filter(|m| self.member_visible(f.class.as_deref(), m.vis, &m.declaring)).cloned();
+                            if let Some(m) = &m {
+                                self.method_sites.borrow_mut().insert(site, (key.0, key.1, m.clone()));
+                            }
+                            m
+                        }
+                    };
+                    if let Some(m) = m {
+                        let (pos, named) = self.eval_args_for(f, args, crate::call::method_params(&m))?;
+                        return self.static_invoke(f, class, cls, &m, pos, named);
+                    }
+                }
                 let name = self.member_name(f, name)?;
                 let params = cls.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m));
                 let (pos, named) = self.eval_args_for(f, args, params)?;

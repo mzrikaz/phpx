@@ -97,6 +97,11 @@ pub fn method_params(m: &Method) -> Option<&'static [ast::Param]> {
     }
 }
 
+/// `self::`, `parent::` and `static::` forward the called class.
+fn is_forwarding(cref: &ast::ClassRef) -> bool {
+    matches!(cref, ast::ClassRef::Name(n) if ["self", "parent", "static"].iter().any(|w| n.eq_ignore_ascii_case(w)))
+}
+
 /// __call/__callStatic's `$arguments`: the positional ones, then named
 /// ones under their names.
 fn magic_args(pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> Value {
@@ -237,7 +242,17 @@ impl Interp {
     }
 
     fn named_class(&self, f: &Frame, n: &str) -> R<Rc<Class>> {
-        match &*n.to_ascii_lowercase() {
+        let special = |w: &str| n.eq_ignore_ascii_case(w);
+        let key = if special("self") {
+            "self"
+        } else if special("static") {
+            "static"
+        } else if special("parent") {
+            "parent"
+        } else {
+            ""
+        };
+        match key {
             "self" => f.class.clone().ok_or_else(|| self.error("Error", "Cannot use \"self\" when no class scope is active")),
             "static" => f
                 .static_class
@@ -1322,21 +1337,13 @@ impl Interp {
         pos: Vec<Value>,
         named: Vec<(Rc<str>, Value)>,
     ) -> R<Value> {
-        let forwarding = matches!(cref, ast::ClassRef::Name(n) if matches!(&*n.to_ascii_lowercase(), "self" | "parent" | "static"));
+        let forwarding = is_forwarding(cref);
         let lname = name.to_ascii_lowercase();
         let this_fits = f.this.as_ref().filter(|o| o.class.is_subclass_of(&cls)).cloned();
         match cls.find_method(&lname).cloned() {
             Some(m) => {
                 self.check_method_visible(f, &cls, &m)?;
-                if m.is_static {
-                    let sc = if forwarding { f.static_class.clone().unwrap_or(cls.clone()) } else { cls.clone() };
-                    self.invoke_method(None, &m, sc, pos, named)
-                } else if let Some(this) = this_fits {
-                    let sc = this.class.clone();
-                    self.invoke_method(Some(this), &m, sc, pos, named)
-                } else {
-                    Err(self.error("Error", &format!("Non-static method {}::{}() cannot be called statically", cls.name, m.name)))
-                }
+                self.static_invoke(f, cref, cls, &m, pos, named)
             }
             None => {
                 if let (Some(this), Some(_)) = (&this_fits, cls.find_method("__call")) {
@@ -1349,6 +1356,22 @@ impl Interp {
                 }
                 Err(self.error("Error", &format!("Call to undefined method {}::{name}()", cls.name)))
             }
+        }
+    }
+
+    /// `C::m()` with `m` found on `cls` and visible: a static call, or an
+    /// instance call on a compatible `$this`.
+    pub(crate) fn static_invoke(&self, f: &Frame, cref: &'static ast::ClassRef, cls: Rc<Class>, m: &Rc<Method>, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
+        if m.is_static {
+            let sc = if is_forwarding(cref) { f.static_class.clone().unwrap_or(cls) } else { cls };
+            return self.invoke_method(None, m, sc, pos, named);
+        }
+        match f.this.as_ref().filter(|o| o.class.is_subclass_of(&cls)).cloned() {
+            Some(this) => {
+                let sc = this.class.clone();
+                self.invoke_method(Some(this), m, sc, pos, named)
+            }
+            None => Err(self.error("Error", &format!("Non-static method {}::{}() cannot be called statically", cls.name, m.name))),
         }
     }
 
