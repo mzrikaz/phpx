@@ -537,6 +537,36 @@ impl Interp {
         self.call_callable(&callable, pos, named)
     }
 
+    #[inline]
+    fn inline_builtin(&self, f: &mut Frame, bname: &'static str, fun: crate::interp::BuiltinFn, arg: &'static ast::Expr) -> Option<R<Value>> {
+        let test: fn(&Value) -> Option<Value> = match bname {
+            "is_null" => |v| Some(Value::Bool(matches!(v, Value::Null))),
+            "is_array" => |v| Some(Value::Bool(matches!(v, Value::Array(_)))),
+            "is_string" => |v| Some(Value::Bool(matches!(v, Value::Str(_)))),
+            "is_int" | "is_integer" | "is_long" => |v| Some(Value::Bool(matches!(v, Value::Int(_)))),
+            "is_bool" => |v| Some(Value::Bool(matches!(v, Value::Bool(_)))),
+            "is_float" | "is_double" => |v| Some(Value::Bool(matches!(v, Value::Float(_)))),
+            "is_object" => |v| Some(Value::Bool(matches!(v, Value::Object(_)))),
+            "count" | "sizeof" => |v| match v {
+                Value::Array(a) => Some(Value::Int(a.len() as i64)),
+                _ => None,
+            },
+            "strlen" => |v| match v {
+                Value::Str(s) => Some(Value::Int(s.len() as i64)),
+                _ => None,
+            },
+            _ => return None,
+        };
+        let v = match self.eval(f, arg) {
+            Ok(v) => v.into_deref(),
+            Err(e) => return Some(Err(e)),
+        };
+        Some(match test(&v) {
+            Some(r) => Ok(r),
+            None => crate::builtins::invoke(self, bname, crate::arginfo::spec(bname), fun, f, &mut [v]),
+        })
+    }
+
     /// Resolve a called name. Each call site's name lives at a unique
     /// (leaked) address; functions can't be redeclared, so resolving once
     /// is enough (PHP's run-time cache keeps a namespaced call's fallback
@@ -559,6 +589,15 @@ impl Interp {
 
     #[inline(never)]
     fn call_builtin_named(&self, f: &mut Frame, bname: &'static str, fun: crate::interp::BuiltinFn, args: &'static [ast::Arg]) -> R<Value> {
+        // Type tests, count() and strlen() answered inline, as compiled code
+        // does (the general path for anything they don't cover).
+        if let [a] = args {
+            if !a.spread && a.name.is_none() {
+                if let Some(r) = self.inline_builtin(f, bname, fun, &a.value) {
+                    return r;
+                }
+            }
+        }
         // Built-ins that read the caller's scope.
         match bname {
             "compact" => return self.compact(f, args),

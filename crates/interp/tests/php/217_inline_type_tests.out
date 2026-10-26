@@ -1,0 +1,11 @@
+[true,false,false,false,false,false,false,false,false]
+[false,true,false,false,false,false,false,false,false]
+[false,false,true,false,false,false,false,false,false]
+[false,false,false,true,false,false,false,true,false]
+[false,false,false,false,true,false,false,false,false]
+[false,false,false,false,false,true,false,false,true]
+[false,false,false,false,false,false,true,false,false]
+2 3 count(): Argument #1 ($value) must be of type Countable|array, string given
+3 5 3
+3 y
+shadowed
