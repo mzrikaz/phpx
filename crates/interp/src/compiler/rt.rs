@@ -2875,8 +2875,11 @@ pub unsafe extern "C" fn rt_clone(c: *mut Cx, v: *const Value, dst: *mut Value) 
 
 // ---- arrays & iteration ----------------------------------------------------------
 
-pub unsafe extern "C" fn rt_array_new(dst: *mut Value) {
-    put(dst, Value::array(PhpArray::new()));
+/// A new array for a literal of `n` items; `hash` when it has string keys
+/// (built as a hash table from the start, not converted on the first key).
+pub unsafe extern "C" fn rt_array_new(dst: *mut Value, n: u64, hash: u64) {
+    let n = n.min(64) as usize;
+    put(dst, Value::array(if hash != 0 { PhpArray::with_hash_capacity(n) } else { PhpArray::with_capacity(n) }));
 }
 
 /// Append an item to an array literal. `key` may be null; `val` is consumed.

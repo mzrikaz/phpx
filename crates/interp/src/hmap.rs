@@ -71,11 +71,21 @@ pub fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct HMap {
     entries: Vec<(Key, Value)>,
     /// Entry positions by key hash (None while the map is small).
     index: Option<HashTable<u32>>,
+}
+
+impl Clone for HMap {
+    /// A copy is almost always made to be written (copy-on-write): leave
+    /// room for a few more entries so the first insert doesn't reallocate.
+    fn clone(&self) -> HMap {
+        let mut entries = Vec::with_capacity(self.entries.len() + 4);
+        entries.extend(self.entries.iter().cloned());
+        HMap { entries, index: self.index.clone() }
+    }
 }
 
 pub type Values<'a> = std::iter::Map<std::slice::Iter<'a, (Key, Value)>, fn(&'a (Key, Value)) -> &'a Value>;
@@ -83,6 +93,15 @@ pub type Values<'a> = std::iter::Map<std::slice::Iter<'a, (Key, Value)>, fn(&'a 
 impl HMap {
     pub fn with_capacity(n: usize) -> HMap {
         HMap { entries: Vec::with_capacity(n), index: None }
+    }
+
+    /// Room for `n` more entries.
+    pub fn reserve(&mut self, n: usize) {
+        self.entries.reserve(n);
+        if let Some(t) = &mut self.index {
+            let entries = &self.entries;
+            t.reserve(n, |&j| hash_of(key_ref(&entries[j as usize].0)));
+        }
     }
 
     #[inline]

@@ -1340,7 +1340,11 @@ impl<'a> Lower<'a> {
             Array(items) => {
                 let t = self.alloc_temp();
                 let ta = self.temp_addr(t);
-                self.call("rt_array_new", &[ta]);
+                // String keys (or int keys out of order): a hash from the start.
+                let hash = items.iter().flatten().any(|it| it.key.as_ref().is_some_and(|k| !matches!(k.kind, Int(_))));
+                let n = self.iconst(items.len() as i64);
+                let h = self.iconst(hash as i64);
+                self.call("rt_array_new", &[ta, n, h]);
                 for it in items.iter().flatten() {
                     let key = match &it.key {
                         Some(k) => {

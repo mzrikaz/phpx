@@ -118,39 +118,12 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("array_values", |it, _, a| list(arr(it, a, 0, "array_values")?.values()));
     t.insert("array_merge", |it, _, a| {
-        let arrays = (0..a.len()).map(|i| arr(it, a, i, "array_merge")).collect::<R<Vec<_>>>()?;
-        let total: usize = arrays.iter().map(|x| x.len()).sum();
-        // Elements are copied as an array copy does (shared references
-        // stay references). Lists concatenate; a first array with only
-        // string keys is copied whole (its table as is), like PHP.
-        if arrays.iter().all(|x| x.is_list()) {
-            let mut out = PhpArray::with_capacity(total);
-            for x in &arrays {
-                for (_, v) in x.iter_raw() {
-                    out.push(copy_elem(v));
-                }
-            }
-            return Ok(Value::array(out));
+        if a.iter().all(|v| matches!(v, Value::Array(_))) {
+            return Ok(Value::array(merge_arrays(a)));
         }
-        let (mut out, rest) = match arrays.split_first() {
-            Some((first, rest)) if !first.has_int_keys() => {
-                let mut c = (**first).clone();
-                c.reset_next();
-                (c, rest)
-            }
-            _ => (PhpArray::with_hash_capacity(total), &arrays[..]),
-        };
-        for x in rest {
-            for (k, v) in x.iter_raw() {
-                match k {
-                    Key::Int(_) => {
-                        out.push(copy_elem(v));
-                    }
-                    Key::Str(_) => out.insert(k, copy_elem(v)),
-                }
-            }
-        }
-        Ok(Value::array(out))
+        // References or wrong types: dereferenced (or the TypeError).
+        let mut vals = (0..a.len()).map(|i| arr(it, a, i, "array_merge").map(Value::Array)).collect::<R<Vec<_>>>()?;
+        Ok(Value::array(merge_arrays(&mut vals)))
     });
     t.insert("array_merge_recursive", |it, _, a| {
         fn merge(dst: &mut PhpArray, src: &PhpArray) {
@@ -826,4 +799,46 @@ fn range(it: &Interp, a: &[Value]) -> R<Value> {
             list((0..count).map(|i| Value::Float(if lo <= hi { lo + i as f64 * step } else { lo - i as f64 * step })))
         }
     }
+}
+
+/// array_merge() of arrays. Elements are copied as an array copy does
+/// (shared references stay references). Lists concatenate; a first array
+/// with only string keys is the start of the result (its table as is, and
+/// extended in place when nothing else holds it), like PHP.
+fn merge_arrays(a: &mut [Value]) -> PhpArray {
+    let get = |v: &Value| match v {
+        Value::Array(x) => x.clone(),
+        _ => unreachable!(),
+    };
+    let total: usize = a.iter().map(|v| if let Value::Array(x) = v { x.len() } else { 0 }).sum();
+    if a.iter().all(|v| matches!(v, Value::Array(x) if x.is_list())) {
+        let mut out = PhpArray::with_capacity(total);
+        for v in a.iter() {
+            for (_, v) in get(v).iter_raw() {
+                out.push(copy_elem(v));
+            }
+        }
+        return out;
+    }
+    let (mut out, rest) = match a.split_first_mut() {
+        Some((Value::Array(first), rest)) if !first.has_int_keys() => {
+            let first = std::mem::replace(first, Rc::new(PhpArray::new()));
+            let mut c = Rc::try_unwrap(first).unwrap_or_else(|rc| (*rc).clone());
+            c.reserve(total - c.len());
+            c.reset_next();
+            (c, &*rest)
+        }
+        _ => (PhpArray::with_hash_capacity(total), &*a),
+    };
+    for v in rest {
+        for (k, v) in get(v).iter_raw() {
+            match k {
+                Key::Int(_) => {
+                    out.push(copy_elem(v));
+                }
+                Key::Str(_) => out.insert(k, copy_elem(v)),
+            }
+        }
+    }
+    out
 }

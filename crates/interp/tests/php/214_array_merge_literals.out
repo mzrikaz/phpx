@@ -1,0 +1,114 @@
+array(2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+}
+array(3) {
+  ["x"]=>
+  int(9)
+  ["y"]=>
+  int(2)
+  ["z"]=>
+  int(3)
+}
+array(2) {
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  int(2)
+}
+array(5) {
+  ["k"]=>
+  string(1) "v"
+  ["x"]=>
+  int(1)
+  ["y"]=>
+  string(1) "Y"
+  [0]=>
+  int(5)
+  [1]=>
+  int(6)
+}
+array(4) {
+  [0]=>
+  string(1) "a"
+  [1]=>
+  string(1) "b"
+  ["q"]=>
+  int(1)
+  [2]=>
+  string(1) "c"
+}
+array(0) {
+}
+array(0) {
+}
+array(1) {
+  ["a"]=>
+  int(1)
+}
+array(3) {
+  ["r"]=>
+  &int(100)
+  ["s"]=>
+  int(2)
+  ["t"]=>
+  int(3)
+}
+array(3) {
+  ["id"]=>
+  string(3) "int"
+  ["a"]=>
+  string(6) "string"
+  ["b"]=>
+  string(4) "bool"
+}
+array(2) {
+  ["a"]=>
+  string(6) "string"
+  ["b"]=>
+  string(4) "bool"
+}
+array(4) {
+  ["dyn"]=>
+  int(1499)
+  ["fixed"]=>
+  int(1)
+  [2]=>
+  string(3) "two"
+  [3]=>
+  string(1) "x"
+}
+array(4) {
+  [0]=>
+  string(4) "zero"
+  ["fixed"]=>
+  int(1)
+  [2]=>
+  string(3) "two"
+  [3]=>
+  string(1) "x"
+}
+array(4) {
+  [5]=>
+  string(4) "five"
+  ["fixed"]=>
+  int(1)
+  [2]=>
+  string(3) "two"
+  [6]=>
+  string(1) "x"
+}
+bool(false)
+array_merge(): Argument #2 must be of type array, string given
+array(2) {
+  ["p"]=>
+  int(1)
+  ["q"]=>
+  int(2)
+}
+array(1) {
+  ["p"]=>
+  int(1)
+}

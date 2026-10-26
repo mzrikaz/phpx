@@ -622,6 +622,15 @@ impl PhpArray {
         PhpArray::make(Store::Hash(crate::hmap::HMap::with_capacity(n)), i64::MIN, 0)
     }
 
+    /// Room for `n` more elements.
+    pub fn reserve(&mut self, n: usize) {
+        match &mut self.store {
+            Store::Packed(v) => v.reserve(n),
+            Store::Hash(m) => m.reserve(n),
+        }
+        self.sync();
+    }
+
     /// Whether any key is an int.
     pub fn has_int_keys(&self) -> bool {
         match &self.store {
