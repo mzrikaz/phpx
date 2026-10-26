@@ -1488,6 +1488,20 @@ impl Interp {
         value: &'static ast::Expr,
         body: &'static [Stmt],
     ) -> R<Flow> {
+        if let Some(sl) = array_iter::plain(it) {
+            array_iter::rewind(it, sl);
+            while let Some((k, v)) = array_iter::item(it, sl) {
+                if let Some(ke) = key {
+                    self.assign_to(f, ke, k)?;
+                }
+                self.assign_to(f, value, v)?;
+                if let Some(fl) = Self::loop_flow(self.exec_block(f, body)?) {
+                    return Ok(fl);
+                }
+                array_iter::next(it, sl);
+            }
+            return Ok(Flow::Normal);
+        }
         self.call_method(it, "rewind", vec![])?;
         while self.call_method(it, "valid", vec![])?.truthy() {
             let v = self.call_method(it, "current", vec![])?;
@@ -1602,4 +1616,73 @@ fn label_index(stmts: &[Stmt], label: &str) -> Option<usize> {
 
 pub fn qualify(ns: &str, name: &str) -> String {
     if ns.is_empty() { name.to_string() } else { format!("{ns}\\{name}") }
+}
+
+/// A plain `ArrayIterator` (the prelude class itself, not a subclass) is
+/// walked by reading its storage and position directly: each function
+/// does exactly what the class's rewind()/valid()+current()+key()/next()
+/// do, without calling them. Laravel iterates every collection through
+/// one, which made a foreach step cost four method calls.
+pub(crate) mod array_iter {
+    use crate::value::{Obj, Value};
+
+    /// Property slots of the iterator's storage, key cache and position.
+    #[derive(Clone, Copy)]
+    pub struct Slots {
+        storage: usize,
+        keys: usize,
+        pos: usize,
+    }
+
+    pub fn plain(o: &Obj) -> Option<Slots> {
+        if &*o.class.lname != "arrayiterator" {
+            return None;
+        }
+        let p = o.props.borrow();
+        let sh = p.shape();
+        let s = Slots { storage: sh.slot("storage")?, keys: sh.slot("__phpx_keys")?, pos: sh.slot("__phpx_pos")? };
+        matches!(p.get_index(s.storage).map(|(_, v)| v.deref()), Some(Value::Array(_))).then_some(s)
+    }
+
+    fn set(o: &Obj, slot: usize, v: Value) {
+        if let Some(cur) = o.props.borrow_mut().get_index_mut(slot) {
+            match cur {
+                Value::Ref(r) => *r.borrow_mut() = v,
+                cur => *cur = v,
+            }
+        }
+    }
+
+    fn pos(o: &Obj, s: Slots) -> Option<i64> {
+        match o.props.borrow().get_index(s.pos)?.1.deref() {
+            Value::Int(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    pub fn rewind(o: &Obj, s: Slots) {
+        set(o, s.keys, Value::Null);
+        set(o, s.pos, Value::Int(0));
+    }
+
+    /// The (key, value) at the position, None past the end.
+    pub fn item(o: &Obj, s: Slots) -> Option<(Value, Value)> {
+        let pos = usize::try_from(pos(o, s)?).ok()?;
+        let p = o.props.borrow();
+        let (k, v) = match p.get_index(s.storage)?.1 {
+            Value::Array(a) => a.get_index(pos)?,
+            Value::Ref(r) => match &*r.borrow() {
+                Value::Array(a) => a.get_index(pos)?,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        Some((k.to_value(), v))
+    }
+
+    pub fn next(o: &Obj, s: Slots) {
+        if let Some(n) = pos(o, s) {
+            set(o, s.pos, Value::Int(n.wrapping_add(1)));
+        }
+    }
 }

@@ -2660,6 +2660,8 @@ pub unsafe extern "C" fn rt_array_add(c: *mut Cx, arr: *mut Value, key: *const V
 pub enum Iter {
     Array { arr: Rc<PhpArray>, i: usize },
     Iterator { obj: Rc<Obj>, started: bool },
+    /// A plain ArrayIterator (see `interp::array_iter`).
+    ArrayIter { obj: Rc<Obj>, slots: crate::interp::array_iter::Slots, started: bool },
     Items { items: Vec<(Value, Value)>, i: usize },
 }
 
@@ -2674,11 +2676,15 @@ pub unsafe extern "C" fn rt_iter_new(c: *mut Cx, subject: *const Value, out: *mu
     let r: R<Option<Iter>> = (|| {
         Ok(Some(match &*subject {
             Value::Array(a) => Iter::Array { arr: a.clone(), i: 0 },
+            Value::Object(o) if let Some(slots) = crate::interp::array_iter::plain(o) => Iter::ArrayIter { obj: o.clone(), slots, started: false },
             Value::Object(o) if matches!(&*o.internal(), Internal::Generator(_)) || o.class.is_a("iterator") => {
                 Iter::Iterator { obj: o.clone(), started: false }
             }
             Value::Object(o) if o.class.is_a("iteratoraggregate") => match it.call_method(o, "getIterator", vec![])? {
-                Value::Object(inner) => Iter::Iterator { obj: inner, started: false },
+                Value::Object(inner) => match crate::interp::array_iter::plain(&inner) {
+                    Some(slots) => Iter::ArrayIter { obj: inner, slots, started: false },
+                    None => Iter::Iterator { obj: inner, started: false },
+                },
                 _ => return Err(it.error("TypeError", "getIterator() must return a Traversable")),
             },
             Value::Object(o) => {
@@ -2721,6 +2727,15 @@ pub unsafe extern "C" fn rt_iter_next(c: *mut Cx, iter: *mut Iter, key: *mut Val
                 let item = items.get(*i).cloned();
                 *i += 1;
                 item
+            }
+            Iter::ArrayIter { obj, slots, started } => {
+                if *started {
+                    crate::interp::array_iter::next(obj, *slots);
+                } else {
+                    crate::interp::array_iter::rewind(obj, *slots);
+                    *started = true;
+                }
+                crate::interp::array_iter::item(obj, *slots)
             }
             Iter::Iterator { obj, started } => {
                 if *started {

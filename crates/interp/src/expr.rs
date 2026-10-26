@@ -777,6 +777,14 @@ impl Interp {
             o.clone()
         };
         let mut out = vec![];
+        if let Some(sl) = crate::interp::array_iter::plain(&it) {
+            crate::interp::array_iter::rewind(&it, sl);
+            while let Some(kv) = crate::interp::array_iter::item(&it, sl) {
+                out.push(kv);
+                crate::interp::array_iter::next(&it, sl);
+            }
+            return Ok(out);
+        }
         self.call_method(&it, "rewind", vec![])?;
         while self.call_method(&it, "valid", vec![])?.truthy() {
             let v = self.call_method(&it, "current", vec![])?;
