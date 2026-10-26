@@ -1,0 +1,5 @@
+f(): Argument #1 ($x) must be of type Foo|array|string|int|float|bool|null, stdClass given
+Foo|array|string|int|float|bool|null
+g(): Argument #1 ($x) must be of type (A&B)|null, stdClass given
+g(): Argument #2 ($y) must be of type int, string given
+g(): Argument #3 ($z) must be of type ?Foo, int given

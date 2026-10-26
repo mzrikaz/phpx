@@ -111,11 +111,39 @@ fn is_ref_target(e: &ast::Expr) -> bool {
     matches!(e.kind, ast::ExprKind::Var(_) | ast::ExprKind::Index { .. } | ast::ExprKind::Prop { .. } | ast::ExprKind::StaticProp { .. })
 }
 
+/// A type as PHP prints it: built-in names in lower case, and a union's
+/// members in PHP's order (classes first as written, then static,
+/// callable, object, array, string, int, float, bool, ..., null).
 pub fn type_str(t: &Type) -> String {
+    const ORDER: &[&str] = &["static", "callable", "object", "array", "string", "int", "float", "bool", "false", "true", "void", "never", "mixed", "null"];
+    let named = |n: &str| {
+        let n = n.trim_start_matches('\\');
+        let l = n.to_ascii_lowercase();
+        match ORDER.iter().position(|t| *t == l) {
+            Some(r) => (r + 1, l),
+            None if l == "iterable" => (0, l),
+            None => (0, n.to_string()),
+        }
+    };
     match t {
-        Type::Named(n) => n.trim_start_matches('\\').to_string(),
+        Type::Named(n) => named(n).1,
         Type::Nullable(t) => format!("?{}", type_str(t)),
-        Type::Union(ts) => ts.iter().map(type_str).collect::<Vec<_>>().join("|"),
+        Type::Union(ts) => {
+            let mut parts: Vec<(usize, usize, String)> = ts
+                .iter()
+                .enumerate()
+                .map(|(i, t)| match t {
+                    Type::Named(n) => {
+                        let (r, s) = named(n);
+                        (r, i, s)
+                    }
+                    Type::Intersection(_) => (0, i, format!("({})", type_str(t))),
+                    t => (0, i, type_str(t)),
+                })
+                .collect();
+            parts.sort();
+            parts.into_iter().map(|p| p.2).collect::<Vec<_>>().join("|")
+        }
         Type::Intersection(ts) => ts.iter().map(type_str).collect::<Vec<_>>().join("&"),
     }
 }
