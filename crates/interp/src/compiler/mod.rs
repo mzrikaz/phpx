@@ -562,6 +562,8 @@ impl Native {
             captured_slots: t.captured.iter().map(|c| a.locals.index[c] as usize).collect(),
             ret: t.ret,
             ret_quick: rt::Quick::of(t.ret),
+            param_ok: t.params.iter().map(|_| Default::default()).collect(),
+            ret_ok: Default::default(),
             quick: t.params.iter().map(|p| rt::Quick::of(p.ty.as_ref())).collect(),
         });
         let simple = spec.simple;

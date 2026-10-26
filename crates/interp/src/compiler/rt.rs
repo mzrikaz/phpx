@@ -56,6 +56,10 @@ pub struct LocalsSpec {
     pub captured_slots: Vec<usize>,
     pub ret: Option<&'static ast::Type>,
     pub ret_quick: (Quick, bool),
+    /// Class-typed parameters and return type: the (object class, static
+    /// class) last accepted unchanged, which the same check accepts again.
+    pub param_ok: Vec<std::cell::Cell<(usize, usize)>>,
+    pub ret_ok: std::cell::Cell<(usize, usize)>,
     /// Uses func_get_args()/func_num_args(): binding keeps the arguments
     /// in the frame.
     pub func_args: bool,
@@ -69,10 +73,20 @@ pub unsafe extern "C" fn rt_check_ret(c: *mut Cx, out: *mut Value, spec: *const 
     if Quick::accepts(spec.ret_quick, &*out) {
         return 0;
     }
+    let key = obj_type_key(&*out, f);
+    if key.is_some_and(|k| k == spec.ret_ok.get()) {
+        return 0;
+    }
     let Some(ty) = spec.ret else { return 0 };
     let v = take(out);
+    let given = if key.is_some() { Some(v.clone()) } else { None };
     match it.check_return_type(ty, v, &spec.ctx, spec.class.as_ref(), f.static_class.as_ref(), &spec.display) {
         Ok(v) => {
+            if let (Some(k), Some(Value::Object(g)), Value::Object(o)) = (key, &given, &v) {
+                if Rc::ptr_eq(g, o) {
+                    spec.ret_ok.set(k);
+                }
+            }
             put(out, v);
             0
         }
@@ -83,8 +97,18 @@ pub unsafe extern "C" fn rt_check_ret(c: *mut Cx, out: *mut Value, spec: *const 
     }
 }
 
+/// For an object: (its class, the frame's static class), the inputs a
+/// class-typed check depends on (`static` resolves against the latter).
+#[inline]
+fn obj_type_key(v: &Value, f: &Frame) -> Option<(usize, usize)> {
+    match v {
+        Value::Object(o) => Some((Rc::as_ptr(&o.class) as usize, f.static_class.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize))),
+        _ => None,
+    }
+}
+
 /// A declared parameter type, reduced for a fast acceptance test.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Quick {
     Untyped,
     Int,
@@ -264,11 +288,20 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
                 }
             }
         };
+        let okey = obj_type_key(&v, f);
         let v = match &p.ty {
             _ if Quick::accepts(spec.quick[i], &v) => v,
+            _ if okey.is_some_and(|k| k == spec.param_ok[i].get()) => v,
             Some(ty) if !(v.is_null() && matches!(p.default.as_ref().map(|d| &d.kind), Some(ast::ExprKind::Null))) => {
                 match it.coerce(v.clone(), ty, &spec.ctx, spec.class.as_ref(), f.static_class.as_ref(), strict()) {
-                    Ok(Some(v)) => v,
+                    Ok(Some(nv)) => {
+                        if let (Some(k), Value::Object(a), Value::Object(b)) = (okey, &v, &nv) {
+                            if Rc::ptr_eq(a, b) {
+                                spec.param_ok[i].set(k);
+                            }
+                        }
+                        nv
+                    }
                     Ok(None) => {
                         *it.pending.borrow_mut() = Some(it.param_type_error(&spec.display, i, p, ty, &v, spec.ctx.file));
                         return 1;
