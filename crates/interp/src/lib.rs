@@ -64,6 +64,7 @@ mod random;
 mod intl;
 mod fileinfo;
 mod splfs;
+mod spl_iter;
 mod mbcase;
 mod mbcase_table;
 mod db;

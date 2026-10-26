@@ -200,54 +200,27 @@ class EmptyIterator implements Iterator
 
 class IteratorIterator implements OuterIterator
 {
-    private $__phpx_inner;
-    private $__phpx_valid = false;
-    private $__phpx_key = null;
-    private $__phpx_current = null;
+    // The inner iterator, the cached element and the stepping methods
+    // are native (spl_iter.rs).
 
     public function __construct(Traversable $iterator, ?string $class = null)
     {
         while ($iterator instanceof IteratorAggregate) {
             $iterator = $iterator->getIterator();
         }
-        $this->__phpx_inner = $iterator;
+        $this->__phpx_init($iterator);
     }
 
-    public function getInnerIterator(): ?Iterator { return $this->__phpx_inner; }
-    /** @internal Refresh the cached element from the inner iterator. */
-    protected function __phpx_fetch(): void
-    {
-        $in = $this->__phpx_inner;
-        $this->__phpx_valid = $in->valid();
-        if ($this->__phpx_valid) {
-            $this->__phpx_key = $in->key();
-            $this->__phpx_current = $in->current();
-        } else {
-            $this->__phpx_key = null;
-            $this->__phpx_current = null;
-        }
-    }
-    public function rewind(): void { $this->__phpx_inner->rewind(); $this->__phpx_fetch(); }
-    public function valid(): bool { return $this->__phpx_valid; }
-    public function key(): mixed { return $this->__phpx_key; }
-    public function current(): mixed { return $this->__phpx_current; }
-    public function next(): void { $this->__phpx_inner->next(); $this->__phpx_fetch(); }
-    public function __call($name, $args) { return $this->__phpx_inner->$name(...$args); }
+    public function __call($name, $args) { return $this->getInnerIterator()->$name(...$args); }
 }
 
 abstract class FilterIterator extends IteratorIterator
 {
+    // rewind() and next() skip what accept() rejects (spl_iter.rs).
+
     abstract public function accept(): bool;
 
     public function __construct(Iterator $iterator) { parent::__construct($iterator); }
-    private function __phpx_skip(): void
-    {
-        while ($this->valid() && !$this->accept()) {
-            parent::next();
-        }
-    }
-    public function rewind(): void { parent::rewind(); $this->__phpx_skip(); }
-    public function next(): void { parent::next(); $this->__phpx_skip(); }
 }
 
 class CallbackFilterIterator extends FilterIterator
@@ -478,128 +451,22 @@ class RecursiveIteratorIterator implements OuterIterator
     public const CHILD_FIRST = 2;
     public const CATCH_GET_CHILD = 16;
 
-    private $__phpx_mode;
-    private $__phpx_root;
-    private $__phpx_max = -1;
-    /** Per depth: the iterator, "element already yielded before its
-     *  children" (SELF_FIRST) and "children done" (CHILD_FIRST). */
-    private $__phpx_stack = [];
-    private $__phpx_self = [];
-    private $__phpx_done = [];
+    // The walk's state and the stepping methods are native (spl_iter.rs);
+    // the hooks below run only when a subclass overrides them.
 
     public function __construct(Traversable $iterator, int $mode = self::LEAVES_ONLY, int $flags = 0)
     {
         while ($iterator instanceof IteratorAggregate) {
             $iterator = $iterator->getIterator();
         }
-        $this->__phpx_root = $iterator;
-        $this->__phpx_mode = $mode;
+        $this->__phpx_init($iterator, $mode);
     }
 
-    public function getDepth(): int { return max(0, count($this->__phpx_stack) - 1); }
-    public function getSubIterator(?int $level = null): ?RecursiveIterator
-    {
-        return $this->__phpx_stack[$level ?? count($this->__phpx_stack) - 1] ?? null;
-    }
-    public function getInnerIterator(): Iterator { return $this->__phpx_top() ?? $this->__phpx_root; }
-    /** The innermost iterator (null before rewind()). */
-    private function __phpx_top() { return $this->__phpx_stack[count($this->__phpx_stack) - 1] ?? null; }
-    public function setMaxDepth(int $maxDepth = -1): void { $this->__phpx_max = $maxDepth; }
-    public function getMaxDepth(): int|false { return $this->__phpx_max < 0 ? false : $this->__phpx_max; }
-    public function callHasChildren(): bool { return $this->getInnerIterator()->hasChildren(); }
-    public function callGetChildren(): ?RecursiveIterator { return $this->getInnerIterator()->getChildren(); }
     public function beginIteration() {}
     public function endIteration() {}
     public function beginChildren(): void {}
     public function endChildren(): void {}
     public function nextElement(): void {}
-
-    private function __phpx_canDescend($it): bool
-    {
-        return ($this->__phpx_max < 0 || count($this->__phpx_stack) - 1 < $this->__phpx_max) && $it->hasChildren();
-    }
-    private function __phpx_descend($it): void
-    {
-        $child = $it->getChildren();
-        $child->rewind();
-        $this->__phpx_stack[] = $child;
-        $this->__phpx_self[] = false;
-        $this->__phpx_done[] = false;
-        $this->beginChildren();
-    }
-    /** Advance the iterator at the top of the stack to its next element. */
-    private function __phpx_advance(): void
-    {
-        $d = count($this->__phpx_stack) - 1;
-        $this->__phpx_stack[$d]->next();
-        $this->__phpx_self[$d] = false;
-        $this->__phpx_done[$d] = false;
-    }
-    /** Move to the next element to yield (or the end). */
-    private function __phpx_settle(): void
-    {
-        while (true) {
-            $d = count($this->__phpx_stack) - 1;
-            $it = $this->__phpx_stack[$d];
-            if (!$it->valid()) {
-                if ($d == 0) {
-                    $this->endIteration();
-                    return;
-                }
-                array_pop($this->__phpx_stack);
-                array_pop($this->__phpx_self);
-                array_pop($this->__phpx_done);
-                $this->endChildren();
-                if ($this->__phpx_mode == self::CHILD_FIRST) {
-                    $this->__phpx_done[$d - 1] = true;
-                    $this->nextElement();
-                    return;
-                }
-                $this->__phpx_advance();
-                continue;
-            }
-            if (!$this->__phpx_done[$d] && $this->__phpx_canDescend($it)) {
-                if ($this->__phpx_mode == self::SELF_FIRST && !$this->__phpx_self[$d]) {
-                    $this->__phpx_self[$d] = true;
-                    $this->nextElement();
-                    return;
-                }
-                $this->__phpx_descend($it);
-                continue;
-            }
-            $this->nextElement();
-            return;
-        }
-    }
-    public function rewind(): void
-    {
-        $this->__phpx_root->rewind();
-        $this->__phpx_stack = [$this->__phpx_root];
-        $this->__phpx_self = [false];
-        $this->__phpx_done = [false];
-        $this->beginIteration();
-        $this->__phpx_settle();
-    }
-    public function valid(): bool
-    {
-        $it = $this->__phpx_top();
-        return $it !== null && $it->valid();
-    }
-    public function key(): mixed { $it = $this->__phpx_top(); return $it ? $it->key() : null; }
-    public function current(): mixed { $it = $this->__phpx_top(); return $it ? $it->current() : null; }
-    public function next(): void
-    {
-        $d = count($this->__phpx_stack) - 1;
-        $it = $this->__phpx_stack[$d];
-        if ($this->__phpx_self[$d] && !$this->__phpx_done[$d] && $this->__phpx_canDescend($it)) {
-            // SELF_FIRST: the parent was yielded; its children come next.
-            $this->__phpx_done[$d] = true;
-            $this->__phpx_descend($it);
-        } else {
-            $this->__phpx_advance();
-        }
-        $this->__phpx_settle();
-    }
     public function __call($name, $args) { return $this->getInnerIterator()->$name(...$args); }
 }
 

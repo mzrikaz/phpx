@@ -1,0 +1,49 @@
+mode 0:
+a=1
+ c=2
+  e=3
+  f=4
+g=5
+mode 1:
+a=1
+b=array
+ c=2
+ d=array
+  e=3
+  f=4
+g=5
+h=array
+mode 2:
+a=1
+ c=2
+  e=3
+  f=4
+ d=array
+b=array
+g=5
+h=array
+int(1)
+a b c d g h 
+bool(false)
+[begin].a.b[in d=1].c.d[out].g.h[in d=1][out][end]
+RecursiveArrayIterator RecursiveArrayIterator NULL c
+1,3,5,7,9
+1,3
+3,4,5
+1,2,3,1,2,3,1
+p+q+r.
+23
+1,2,3
+k1=v1 k2=v2 
+ArrayIterator 7,8 2
+bool(false)
+NULL
+NULL
+bool(true)
+int(0)
+int(7)
+3,4,5
+b d h 
+M,N
+Trying to clone an uncloneable object of class IteratorIterator
+Trying to clone an uncloneable object of class RecursiveIteratorIterator

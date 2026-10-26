@@ -42,7 +42,8 @@ pub fn table() -> HashMap<(&'static str, &'static str), NativeMethod> {
         .chain(crate::random::natives())
         .chain(crate::intl::natives())
         .chain(crate::fileinfo::natives())
-        .chain(crate::splfs::natives()) {
+        .chain(crate::splfs::natives())
+        .chain(crate::spl_iter::natives()) {
         t.insert((class, name), f);
     }
     t.insert(("concurrency", "static run"), concurrency_run);
