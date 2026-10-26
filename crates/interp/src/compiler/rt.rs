@@ -1162,11 +1162,33 @@ pub struct PropSite {
     pub wslot: std::cell::Cell<usize>,
     pub wscope: std::cell::Cell<usize>,
     pub name: &'static str,
+    /// Typed-property write cache (checked here, not by generated code):
+    /// shape, slot, scope and the declared type, for values that need no
+    /// coercion.
+    pub tshape: std::cell::Cell<usize>,
+    pub tslot: std::cell::Cell<usize>,
+    pub tscope: std::cell::Cell<usize>,
+    pub tquick: std::cell::Cell<(Quick, bool)>,
+    /// Class-typed property: the object class last stored unchanged.
+    pub tclass: std::cell::Cell<usize>,
 }
 
 impl PropSite {
     pub fn new(name: &'static str) -> PropSite {
-        PropSite { shape: Default::default(), slot: Default::default(), scope: Default::default(), wshape: Default::default(), wslot: Default::default(), wscope: Default::default(), name }
+        PropSite {
+            shape: Default::default(),
+            slot: Default::default(),
+            scope: Default::default(),
+            wshape: Default::default(),
+            wslot: Default::default(),
+            wscope: Default::default(),
+            name,
+            tshape: Default::default(),
+            tslot: Default::default(),
+            tscope: Default::default(),
+            tquick: std::cell::Cell::new((Quick::Other, false)),
+            tclass: Default::default(),
+        }
     }
 }
 
@@ -1218,6 +1240,21 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
     let (it, f) = cx(c);
     let site = &*site;
     let v = take(val);
+    if let Value::Object(o) = &*obj {
+        let fits = Quick::accepts(site.tquick.get(), &v) || matches!(&v, Value::Object(x) if Rc::as_ptr(&x.class) as usize == site.tclass.get());
+        if site.tshape.get() != 0 && shape_key(o) == Some(site.tshape.get()) && site.tscope.get() == scope_key(f) && fits {
+            let mut props = o.props.borrow_mut();
+            if let Some(cur) = props.get_index_mut(site.tslot.get()) {
+                if !matches!(cur, Value::Ref(_)) {
+                    let old = std::mem::replace(cur, v.clone());
+                    drop(props);
+                    drop(old);
+                    put(dst, v);
+                    return 0;
+                }
+            }
+        }
+    }
     let Value::Object(o) = &*obj else {
         let e = it.error("Error", &format!("Attempt to assign property \"{}\" on {}", site.name, (*obj).type_name()));
         *it.pending.borrow_mut() = Some(e);
@@ -1225,10 +1262,34 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
     };
     let r = it.set_prop(f, o, site.name, v.clone());
     if r.is_ok() {
-        let plain = match o.class.find_prop(&it.prop_key(f, o, site.name)) {
+        // An object stored unchanged: its class passes this property's
+        // type check (class types never coerce objects).
+        if let Value::Object(x) = &v {
+            let key = it.prop_key(f, o, site.name);
+            if matches!(o.props.borrow().get(&key), Some(Value::Object(y)) if Rc::ptr_eq(x, y)) {
+                site.tclass.set(Rc::as_ptr(&x.class) as usize);
+            }
+        }
+        let decl = o.class.find_prop(&it.prop_key(f, o, site.name));
+        let plain = match &decl {
             Some(d) => d.ty.is_none() && !d.readonly && it.member_visible(f.class.as_deref(), d.vis, &d.declaring),
             None => true,
         };
+        // A typed property: cache its slot and type for values of exactly
+        // that type (others are coerced or rejected on the general path).
+        let typed = decl.filter(|d| d.ty.is_some() && !d.readonly && it.member_visible(f.class.as_deref(), d.vis, &d.declaring)).map(|d| Quick::of(d.ty));
+        if let Some(q) = typed {
+            let key = it.prop_key(f, o, site.name);
+            let props = o.props.borrow();
+            if let (Some((i, _, cur)), Some(k)) = (props.get_full(&key), shape_key(o)) {
+                if !matches!(cur, Value::Ref(_)) {
+                    site.tshape.set(k);
+                    site.tslot.set(i);
+                    site.tscope.set(scope_key(f));
+                    site.tquick.set(q);
+                }
+            }
+        }
         if plain {
             let key = it.prop_key(f, o, site.name);
             let props = o.props.borrow();
