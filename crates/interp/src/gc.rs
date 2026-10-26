@@ -21,7 +21,7 @@ use std::rc::Rc;
 use rustc_hash::FxHashMap;
 
 use crate::interp::Callable;
-use crate::value::{Internal, Obj, Value, DESTRUCT_PENDING, DESTRUCT_QUEUE};
+use crate::value::{destruct_pending, Internal, Obj, Value, DESTRUCT_QUEUE};
 
 const MIN_THRESHOLD: usize = 10_000;
 
@@ -80,7 +80,7 @@ impl State {
         if n >= self.threshold.get() && self.enabled.get() && !self.due.get() {
             self.due.set(true);
             // Runs at the next statement boundary, with the destructors.
-            DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+            destruct_pending().store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
@@ -291,7 +291,7 @@ pub fn collect() -> usize {
             let o = (*o).clone();
             let _ = DESTRUCT_QUEUE.try_with(|q| q.borrow_mut().push(o));
         }
-        DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+        destruct_pending().store(true, std::sync::atomic::Ordering::Relaxed);
         ST.with(|st| st.due.set(true));
         return 0;
     }

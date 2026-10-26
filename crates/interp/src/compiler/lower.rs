@@ -683,7 +683,7 @@ impl<'a> Lower<'a> {
 
     /// Queued destructors only (after releasing a temporary object).
     fn destruct_check(&mut self) {
-        let flag = self.iconst(&crate::value::DESTRUCT_PENDING as *const _ as i64);
+        let flag = self.iconst(crate::value::destruct_pending() as *const _ as i64);
         let pending = self.b.ins().load(types::I8, flags(), flag, 0);
         let (run, cont) = (self.b.create_block(), self.b.create_block());
         self.b.ins().brif(pending, run, &[], cont, &[]);
@@ -697,7 +697,7 @@ impl<'a> Lower<'a> {
     /// Statement boundary: queued destructors, cycle collection, memory and
     /// time limits (one load + branch when nothing is pending).
     fn boundary_check(&mut self) {
-        let flag = self.iconst(&crate::value::DESTRUCT_PENDING as *const _ as i64);
+        let flag = self.iconst(crate::value::destruct_pending() as *const _ as i64);
         let pending = self.b.ins().load(types::I8, flags(), flag, 0);
         let (run, cont) = (self.b.create_block(), self.b.create_block());
         self.b.ins().brif(pending, run, &[], cont, &[]);
@@ -1750,7 +1750,7 @@ impl<'a> Lower<'a> {
                     Some(h) => {
                         let t = self.alloc_temp();
                         let (try_b, generic, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
-                        let flag = self.iconst(&crate::value::BUILTIN_SHADOWED as *const _ as i64);
+                        let flag = self.iconst(crate::value::builtin_shadowed() as *const _ as i64);
                         let shadowed = self.b.ins().load(types::I8, flags(), flag, 0);
                         self.b.ins().brif(shadowed, generic, &[], try_b, &[]);
                         self.b.switch_to_block(try_b);
@@ -2212,7 +2212,7 @@ impl<'a> Lower<'a> {
         let t = self.alloc_temp();
         let (fast, slow, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
         self.b.set_cold_block(slow);
-        let flag = self.iconst(&crate::value::BUILTIN_SHADOWED as *const _ as i64);
+        let flag = self.iconst(crate::value::builtin_shadowed() as *const _ as i64);
         let shadowed = self.b.ins().load(types::I8, flags(), flag, 0);
         self.b.ins().brif(shadowed, slow, &[], fast, &[]);
         // Generic call: also the fallback for the cases the fast code skips.

@@ -4,7 +4,8 @@
 //! opcache) is excluded from the count.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+use std::cell::Cell;
+use std::sync::atomic::Ordering::Relaxed;
 
 pub struct Counting;
 
@@ -20,12 +21,16 @@ thread_local! {
     /// Bytes not charged to the script (parsed code).
     static EXCLUDED_C: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
 }
-static LIMIT: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// memory_limit as configured (for messages).
-static CONFIGURED: AtomicUsize = AtomicUsize::new(usize::MAX);
-static OVER: AtomicBool = AtomicBool::new(false);
-/// Size of the allocation that crossed the limit.
-static TRIED: AtomicUsize = AtomicUsize::new(0);
+// The limit, like the counters, is per thread (each server worker's
+// request has its own memory_limit).
+thread_local! {
+    static LIMIT: Cell<usize> = const { Cell::new(usize::MAX) };
+    /// memory_limit as configured (for messages).
+    static CONFIGURED: Cell<usize> = const { Cell::new(usize::MAX) };
+    static OVER: Cell<bool> = const { Cell::new(false) };
+    /// Size of the allocation that crossed the limit.
+    static TRIED: Cell<usize> = const { Cell::new(0) };
+}
 
 #[global_allocator]
 static GLOBAL: Counting = Counting;
@@ -40,11 +45,11 @@ fn charge(size: usize) {
     if u > PEAK_C.with(|p| p.get()) {
         PEAK_C.with(|p| p.set(u));
         let charged = (u - EXCLUDED_C.with(|e| e.get())).max(0) as usize;
-        if charged > LIMIT.load(Relaxed) && !OVER.load(Relaxed) {
-            OVER.store(true, Relaxed);
-            TRIED.store(size, Relaxed);
+        if charged > LIMIT.with(|l| l.get()) && !OVER.with(|o| o.get()) {
+            OVER.with(|o| o.set(true));
+            TRIED.with(|t| t.set(size));
             // Reported at the next statement boundary.
-            crate::value::DESTRUCT_PENDING.store(true, Relaxed);
+            crate::value::destruct_pending().store(true, Relaxed);
         }
     }
 }
@@ -200,7 +205,7 @@ unsafe impl GlobalAlloc for Counting {
 /// The limit was crossed and not yet reported (code that produces a lot
 /// of data in one go, like var_dump, stops early).
 pub fn over() -> bool {
-    OVER.load(Relaxed)
+    OVER.with(|o| o.get())
 }
 
 /// Bytes charged to the script now.
@@ -241,10 +246,10 @@ pub fn uncharged<T>(f: impl FnOnce() -> T) -> T {
 
 /// (configured, enforced); None = unlimited.
 pub fn set_limit(limit: Option<(usize, usize)>) {
-    CONFIGURED.store(limit.map_or(usize::MAX, |l| l.0), Relaxed);
-    LIMIT.store(limit.map_or(usize::MAX, |l| l.1), Relaxed);
+    CONFIGURED.with(|c| c.set(limit.map_or(usize::MAX, |l| l.0)));
+    LIMIT.with(|c| c.set(limit.map_or(usize::MAX, |l| l.1)));
     if limit.is_none_or(|l| used() <= l.1) {
-        OVER.store(false, Relaxed);
+        OVER.with(|o| o.set(false));
     }
 }
 
@@ -252,19 +257,19 @@ pub fn set_limit(limit: Option<(usize, usize)>) {
 /// Clears the flag and lifts the limit so shutdown code can run (PHP does
 /// the same).
 pub fn take_over() -> Option<(usize, usize)> {
-    if !OVER.swap(false, Relaxed) {
+    if !OVER.with(|o| o.replace(false)) {
         return None;
     }
-    LIMIT.store(usize::MAX, Relaxed);
-    Some((CONFIGURED.load(Relaxed), TRIED.load(Relaxed)))
+    LIMIT.with(|l| l.set(usize::MAX));
+    Some((CONFIGURED.with(|c| c.get()), TRIED.with(|t| t.get())))
 }
 
 /// Would allocating `bytes` more exceed the limit? Some(limit) if so.
 /// Built-ins that allocate on behalf of the script (str_repeat, ...) check
 /// first, so a huge request fails cleanly instead of exhausting the host.
 pub fn would_exceed(bytes: usize) -> Option<usize> {
-    let l = LIMIT.load(Relaxed);
-    (l != usize::MAX && used().saturating_add(bytes) > l).then(|| CONFIGURED.load(Relaxed))
+    let l = LIMIT.with(|l| l.get());
+    (l != usize::MAX && used().saturating_add(bytes) > l).then(|| CONFIGURED.with(|c| c.get()))
 }
 
 /// "128M" / "1G" / "512K" / "-1" / bytes, like PHP's ini quantity parsing.

@@ -536,15 +536,34 @@ impl PhpArray {
 // ---- objects ---------------------------------------------------------------
 
 
-/// Objects whose last reference died and that have a `__destruct`: the
-/// interpreter runs them at the next statement boundary (where an
-/// exception from a destructor can propagate). DESTRUCT_PENDING is a plain
-/// global so compiled code can test it with one load.
-pub static DESTRUCT_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Work waiting for the next statement boundary on this thread: queued
+/// destructors, a cycle collection, an exceeded memory or time limit
+/// (where an exception or fatal error can surface). One flag per thread,
+/// at a fixed address so compiled code (also per thread) tests it with
+/// one load.
+pub fn destruct_pending() -> &'static std::sync::atomic::AtomicBool {
+    THREAD_FLAGS.with(|f| f.0)
+}
 
-/// Set once any namespaced user function has a built-in's name; compiled
-/// code then stops inlining built-ins (`ns\strlen` could take precedence).
-pub static BUILTIN_SHADOWED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Set once a namespaced user function of this request has a built-in's
+/// name; compiled code then stops inlining built-ins (`ns\strlen` could
+/// take precedence).
+pub fn builtin_shadowed() -> &'static std::sync::atomic::AtomicBool {
+    THREAD_FLAGS.with(|f| f.1)
+}
+
+/// Every thread's pending flag (the timeout watcher raises them all).
+pub static ALL_PENDING: std::sync::Mutex<Vec<&'static std::sync::atomic::AtomicBool>> = std::sync::Mutex::new(Vec::new());
+
+thread_local! {
+    static THREAD_FLAGS: (&'static std::sync::atomic::AtomicBool, &'static std::sync::atomic::AtomicBool) = {
+        let pending: &'static std::sync::atomic::AtomicBool = Box::leak(Box::new(std::sync::atomic::AtomicBool::new(false)));
+        if let Ok(mut all) = ALL_PENDING.lock() {
+            all.push(pending);
+        }
+        (pending, Box::leak(Box::new(std::sync::atomic::AtomicBool::new(false))))
+    };
+}
 
 thread_local! {
     pub static DESTRUCT_QUEUE: RefCell<Vec<Rc<Obj>>> = const { RefCell::new(Vec::new()) };
@@ -768,7 +787,7 @@ impl Drop for Obj {
             });
             crate::gc::register(&o);
             if DESTRUCT_QUEUE.try_with(|q| q.borrow_mut().push(o)).is_ok() {
-                DESTRUCT_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+                destruct_pending().store(true, std::sync::atomic::Ordering::Relaxed);
                 return;
             }
             // Couldn't queue (thread ending): `o` drops as destructed and

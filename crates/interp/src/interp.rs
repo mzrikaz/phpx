@@ -483,7 +483,7 @@ impl Interp {
                 None
             } else {
                 phpx_jit::Jit::new().map(|mut j| {
-                    j.set_interrupt_flag(&crate::value::DESTRUCT_PENDING as *const _ as usize);
+                    j.set_interrupt_flag(crate::value::destruct_pending() as *const _ as usize);
                     j
                 })
             }),
@@ -843,7 +843,7 @@ impl Interp {
         if !ctx.ns.is_empty() && self.builtins.contains_key(&*f.name.name.to_ascii_lowercase()) {
             // A namespaced function shadows a built-in for unqualified calls
             // in that namespace: compiled code stops inlining built-ins.
-            crate::value::BUILTIN_SHADOWED.store(true, std::sync::atomic::Ordering::Relaxed);
+            crate::value::builtin_shadowed().store(true, std::sync::atomic::Ordering::Relaxed);
         }
         self.functions.borrow_mut().insert(key, Rc::new(UserFn { name: Rc::from(full), decl: f, ctx: ctx.clone() }));
     }
@@ -851,7 +851,7 @@ impl Interp {
     // ---- statements --------------------------------------------------
 
     pub fn exec_block(&self, f: &mut Frame, stmts: &'static [Stmt]) -> R<Flow> {
-        if stmts.is_empty() && crate::value::DESTRUCT_PENDING.load(std::sync::atomic::Ordering::Relaxed) {
+        if stmts.is_empty() && crate::value::destruct_pending().load(std::sync::atomic::Ordering::Relaxed) {
             // Empty loop bodies still notice time/memory limits.
             self.run_destructors()?;
         }
@@ -912,8 +912,8 @@ impl Interp {
     }
 
     pub fn run_destructors(&self) -> R<()> {
-        use crate::value::{DESTRUCT_PENDING, DESTRUCT_QUEUE};
-        while DESTRUCT_PENDING.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        use crate::value::DESTRUCT_QUEUE;
+        while crate::value::destruct_pending().swap(false, std::sync::atomic::Ordering::Relaxed) {
             if let Some((limit, tried)) = crate::alloc::take_over() {
                 return Err(self.memory_fatal(limit, tried));
             }
@@ -953,7 +953,7 @@ impl Interp {
 
     /// Hot statements only; see `eval` for why the rest is split out.
     pub fn exec(&self, f: &mut Frame, s: &'static Stmt) -> R<Flow> {
-        if crate::value::DESTRUCT_PENDING.load(std::sync::atomic::Ordering::Relaxed) {
+        if crate::value::destruct_pending().load(std::sync::atomic::Ordering::Relaxed) {
             self.run_destructors()?;
         }
         // Built-in classes written in PHP (the prelude, file 0) behave like
