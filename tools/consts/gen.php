@@ -2,11 +2,11 @@
 // Generate crates/interp/src/consts_table.rs: the constants of the
 // extensions phpx implements, as PHP itself defines them.
 //
-//     php -n tools/consts/gen.php > crates/interp/src/consts_table.rs
+//     php -n -d extension=intl tools/consts/gen.php > crates/interp/src/consts_table.rs
 //
 // Constants phpx defines itself take precedence over these.
 
-$exts = ['Core', 'standard', 'pcre', 'date', 'json', 'SPL', 'ctype', 'filter', 'hash', 'mbstring', 'zlib', 'random', 'iconv', 'session', 'tokenizer', 'libxml', 'dom', 'xml', 'openssl'];
+$exts = ['Core', 'standard', 'pcre', 'date', 'json', 'SPL', 'ctype', 'filter', 'hash', 'mbstring', 'zlib', 'random', 'iconv', 'session', 'tokenizer', 'libxml', 'dom', 'xml', 'openssl', 'intl'];
 $skip = ['TRUE', 'FALSE', 'NULL'];
 
 function lit(string $s): string
