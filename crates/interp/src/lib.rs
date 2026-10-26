@@ -225,10 +225,8 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
             Err(Ctrl::Exit(c)) => c,
             Err(Ctrl::Throw(e)) => crate::errors::uncaught(&main_it, e),
         };
-        main_it.globals.set(std::ptr::null_mut());
-        drop(frame);
-        main_it.close_all_generators();
-        // Shutdown functions, then destruct what the globals held.
+        // Shutdown functions run with the global scope still there (they
+        // read $_SERVER & co), then what the globals held is destructed.
         let code = match main_it.run_shutdown() {
             Ok(Some(c)) => c,
             Err(Ctrl::Throw(e)) if code == 0 => {
@@ -238,6 +236,9 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
             }
             _ => code,
         };
+        main_it.globals.set(std::ptr::null_mut());
+        drop(frame);
+        main_it.close_all_generators();
         let code = match main_it.run_destructors() {
             Err(Ctrl::Throw(e)) if code == 0 => {
                 main_it.flush();
