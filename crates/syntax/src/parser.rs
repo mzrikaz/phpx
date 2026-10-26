@@ -1389,8 +1389,10 @@ impl Parser {
         }
         let ret = self.return_type()?;
         let (body, is_generator) = self.function_body(|p| p.block())?;
-        let c = Closure { span: start, params, uses, ret, body, by_ref, is_generator, is_static, attrs };
-        Ok(Expr::new(ExprKind::Closure(Box::new(c)), self.since(start)))
+        // (The whole closure: Reflection's end line reads its end.)
+        let span = self.since(start);
+        let c = Closure { span, params, uses, ret, body, by_ref, is_generator, is_static, attrs };
+        Ok(Expr::new(ExprKind::Closure(Box::new(c)), span))
     }
 
     fn new_expr(&mut self) -> PResult<Expr> {
