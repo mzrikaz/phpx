@@ -1,0 +1,156 @@
+array(0) {
+}
+array(3) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+  [2]=>
+  int(3)
+}
+array(5) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  int(3)
+  [0]=>
+  string(1) "x"
+  ["c"]=>
+  int(4)
+  [1]=>
+  string(1) "y"
+}
+array(3) {
+  [0]=>
+  string(1) "a"
+  ["k"]=>
+  string(1) "c"
+  [1]=>
+  string(1) "d"
+}
+array(3) {
+  ["x"]=>
+  &int(9)
+  ["y"]=>
+  int(2)
+  ["z"]=>
+  int(3)
+}
+array(3) {
+  ["b"]=>
+  int(2)
+  [0]=>
+  string(1) "n"
+  [1]=>
+  string(4) "next"
+}
+array(3) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  int(2)
+  ["c"]=>
+  int(3)
+}
+array(4) {
+  ["a"]=>
+  int(0)
+  ["b"]=>
+  int(2)
+  ["c"]=>
+  int(3)
+  ["d"]=>
+  int(4)
+}
+int(6)
+int(6)
+int(1)
+int(2)
+bool(true)
+bool(true)
+int(3)
+bool(true)
+bool(true)
+int(19)
+bool(false)
+bool(false)
+NULL
+bool(true)
+bool(true)
+string(5) "seven"
+bool(true)
+bool(true)
+string(5) "seven"
+bool(false)
+bool(false)
+NULL
+bool(true)
+bool(true)
+string(3) "one"
+bool(true)
+bool(true)
+string(3) "one"
+bool(false)
+bool(true)
+string(4) "none"
+bool(true)
+bool(true)
+string(3) "neg"
+bool(true)
+bool(true)
+string(3) "neg"
+bool(false)
+bool(false)
+string(4) "none"
+array(3) {
+  [0]=>
+  bool(true)
+  [1]=>
+  bool(true)
+  [2]=>
+  bool(true)
+}
+array(3) {
+  [0]=>
+  bool(true)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(true)
+}
+bool(true)
+array(3) {
+  [0]=>
+  bool(true)
+  [1]=>
+  bool(true)
+  [2]=>
+  bool(true)
+}
+array(3) {
+  [0]=>
+  bool(true)
+  [1]=>
+  bool(true)
+  [2]=>
+  bool(true)
+}
+bool(true)
+array(3) {
+  [0]=>
+  bool(false)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(false)
+}
+array(3) {
+  [0]=>
+  bool(false)
+  [1]=>
+  bool(false)
+  [2]=>
+  bool(false)
+}
+bool(false)
+yynnnyynnnyynnn

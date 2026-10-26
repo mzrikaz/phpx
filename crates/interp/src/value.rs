@@ -277,7 +277,9 @@ impl<T, A: ExactSizeIterator<Item = T>, B: ExactSizeIterator<Item = T>> ExactSiz
 
 /// Copy-on-write element copy: a reference only this array still holds
 /// (refcount 1) becomes a plain value, like PHP.
-fn copy_elem(v: &Value) -> Value {
+/// An element as an array copy holds it: a reference only the source
+/// holds becomes its value.
+pub fn copy_elem(v: &Value) -> Value {
     match v {
         Value::Ref(s) if Rc::strong_count(s) == 1 => s.borrow().clone(),
         other => other.clone(),
@@ -630,6 +632,19 @@ impl PhpArray {
         match &self.store {
             Store::Packed(_) => true,
             Store::Hash(m) => m.keys().enumerate().all(|(i, k)| *k == Key::Int(i as i64)),
+        }
+    }
+
+    /// Empty hash-stored array with room for `n` elements.
+    pub fn with_hash_capacity(n: usize) -> Self {
+        PhpArray::make(Store::Hash(FxIndexMap::with_capacity_and_hasher(n, Default::default())), i64::MIN, 0)
+    }
+
+    /// Whether any key is an int.
+    pub fn has_int_keys(&self) -> bool {
+        match &self.store {
+            Store::Packed(v) => !v.is_empty(),
+            Store::Hash(m) => m.keys().any(|k| matches!(k, Key::Int(_))),
         }
     }
 

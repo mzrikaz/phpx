@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use crate::builtins::{arg, arr, callable, has, int};
 use crate::interp::{BuiltinFn, Ctrl, Frame, Interp, R};
-use crate::value::{compare, identical, loose_eq, Key, PStr, PhpArray, Value};
+use crate::value::{compare, copy_elem, identical, loose_eq, Key, PStr, PhpArray, Value};
 
 fn list(vals: impl IntoIterator<Item = Value>) -> R<Value> {
     Ok(Value::array(PhpArray::from_list(vals)))
@@ -118,14 +118,35 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("array_values", |it, _, a| list(arr(it, a, 0, "array_values")?.values()));
     t.insert("array_merge", |it, _, a| {
-        let mut out = PhpArray::new();
-        for i in 0..a.len() {
-            for (k, v) in arr(it, a, i, "array_merge")?.iter() {
+        let arrays = (0..a.len()).map(|i| arr(it, a, i, "array_merge")).collect::<R<Vec<_>>>()?;
+        let total: usize = arrays.iter().map(|x| x.len()).sum();
+        // Elements are copied as an array copy does (shared references
+        // stay references). Lists concatenate; a first array with only
+        // string keys is copied whole (its table as is), like PHP.
+        if arrays.iter().all(|x| x.is_list()) {
+            let mut out = PhpArray::with_capacity(total);
+            for x in &arrays {
+                for (_, v) in x.iter_raw() {
+                    out.push(copy_elem(v));
+                }
+            }
+            return Ok(Value::array(out));
+        }
+        let (mut out, rest) = match arrays.split_first() {
+            Some((first, rest)) if !first.has_int_keys() => {
+                let mut c = (**first).clone();
+                c.reset_next();
+                (c, rest)
+            }
+            _ => (PhpArray::with_hash_capacity(total), &arrays[..]),
+        };
+        for x in rest {
+            for (k, v) in x.iter_raw() {
                 match k {
                     Key::Int(_) => {
-                        out.push(v.clone());
+                        out.push(copy_elem(v));
                     }
-                    Key::Str(_) => out.insert(k.clone(), v.clone()),
+                    Key::Str(_) => out.insert(k, copy_elem(v)),
                 }
             }
         }
