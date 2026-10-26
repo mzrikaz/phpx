@@ -732,6 +732,42 @@ impl Interp {
         }
     }
 
+    /// is_callable(): whether `v` names something callable, without
+    /// building the exceptions to_callable() would throw.
+    pub fn is_callable_value(&self, f: &Frame, v: &Value) -> R<bool> {
+        let has_method = |class: &Rc<Class>, m: &str, instance: bool| {
+            let m = m.strip_prefix("parent::").unwrap_or(m).to_ascii_lowercase();
+            match class.find_method(&m) {
+                // Called statically, an instance method needs a fitting $this.
+                Some(method) => instance || method.is_static || f.this.as_ref().is_some_and(|t| t.class.is_subclass_of(class)),
+                None => class.find_method(if instance { "__call" } else { "__callstatic" }).is_some(),
+            }
+        };
+        Ok(match v {
+            Value::Ref(r) => return self.is_callable_value(f, &r.borrow()),
+            Value::Object(o) => matches!(&*o.internal(), Internal::Closure(_)) || o.class.find_method("__invoke").is_some(),
+            Value::Str(s) => {
+                let s = String::from_utf8_lossy(s).into_owned();
+                match s.split_once("::") {
+                    Some((cls, m)) => self.find_class(cls)?.is_some_and(|c| has_method(&c, m, false)),
+                    None => self.find_function(&f.ctx, &format!("\\{}", s.trim_start_matches('\\'))).is_some(),
+                }
+            }
+            Value::Array(a) if a.len() == 2 => {
+                let m = match a.get(&Key::Int(1)) {
+                    Some(Value::Str(m)) => String::from_utf8_lossy(&m).into_owned(),
+                    _ => return Ok(false),
+                };
+                match a.get(&Key::Int(0)) {
+                    Some(Value::Object(o)) => has_method(&o.class, &m, true),
+                    Some(Value::Str(c)) => self.find_class(&String::from_utf8_lossy(&c))?.is_some_and(|c| has_method(&c, &m, false)),
+                    _ => false,
+                }
+            }
+            _ => false,
+        })
+    }
+
     fn method_callable(&self, f: &Frame, this: Option<Rc<Obj>>, class: &Rc<Class>, m: &str) -> R<Callable> {
         let m = m.strip_prefix("parent::").map(|x| x.to_string()).unwrap_or_else(|| m.to_string());
         match class.find_method(&m.to_ascii_lowercase()) {

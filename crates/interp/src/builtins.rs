@@ -381,7 +381,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             _ => false,
         }))
     });
-    t.insert("is_callable", |it, f, a| Ok(Value::Bool(it.to_callable(f, &arg(a, 0)).is_ok())));
+    t.insert("is_callable", |it, f, a| Ok(Value::Bool(it.is_callable_value(f, &arg(a, 0))?)));
     t.insert("intval", |it, _, a| {
         if has(a, 1) {
             let base = int(it, a, 1)?;
