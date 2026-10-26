@@ -116,12 +116,34 @@ fn ser_end(b: &[u8], i: usize) -> Option<usize> {
     }
 }
 
+/// php_binary: the longest name, and the length byte's "undefined" flag.
+const PS_BIN_MAX: usize = 127;
+const PS_BIN_UNDEF: u8 = 128;
+
 fn encode(it: &Interp, data: &Value) -> R<Vec<u8>> {
     let Value::Array(a) = data.deref() else { return Ok(vec![]) };
-    if ini(it, "session.serialize_handler") == "php_serialize" {
+    let handler = ini(it, "session.serialize_handler");
+    if handler == "php_serialize" {
         return crate::ext::serialize(it, &Value::Array(a));
     }
     let mut out = vec![];
+    if handler == "php_binary" {
+        // Each variable: its name's length (one byte; longer names are
+        // skipped, as in PHP), the name, then the serialized value.
+        for (k, v) in a.iter() {
+            let name = match k {
+                Key::Int(n) => n.to_string().into_bytes(),
+                Key::Str(s) => s.to_vec(),
+            };
+            if name.len() > PS_BIN_MAX {
+                continue;
+            }
+            out.push(name.len() as u8);
+            out.extend_from_slice(&name);
+            out.extend_from_slice(&crate::ext::serialize(it, &v)?);
+        }
+        return Ok(out);
+    }
     for (k, v) in a.iter() {
         let name = match k {
             Key::Int(n) => n.to_string().into_bytes(),
@@ -153,6 +175,23 @@ fn decode(it: &Interp, data: &[u8]) -> R<Option<PhpArray>> {
     }
     let mut out = PhpArray::new();
     let mut i = 0;
+    if ini(it, "session.serialize_handler") == "php_binary" {
+        while i < data.len() {
+            // (PHP 8.5 masks the old "undefined" flag off the length and
+            // still expects a value.)
+            let n = (data[i] & !PS_BIN_UNDEF) as usize;
+            if i + n >= data.len() {
+                return Ok(None);
+            }
+            let name = &data[i + 1..i + 1 + n];
+            i += 1 + n;
+            let Some(end) = ser_end(data, i) else { return Ok(None) };
+            let v = crate::ext::unserialize(it, &data[i..end], None, 4096)?;
+            out.insert(Key::from_bytes(name), v);
+            i = end;
+        }
+        return Ok(Some(out));
+    }
     while i < data.len() {
         let Some(bar) = data[i..].iter().position(|&c| c == b'|') else { return Ok(None) };
         let name = &data[i..i + bar];
@@ -620,7 +659,16 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                 Ok(Value::Bool(true))
             }
             None => {
+                // As PHP: the session is destroyed (storage, data, status).
                 it.warn("session_decode(): Failed to decode session object. Session has been destroyed");
+                let id = STATE.with(|s| s.borrow().id.clone());
+                storage_destroy(it, &id)?;
+                *session_slot(it, f).borrow_mut() = Value::array(PhpArray::new());
+                STATE.with(|s| {
+                    let mut s = s.borrow_mut();
+                    s.status = NONE;
+                    s.id.clear();
+                });
                 Ok(Value::Bool(false))
             }
         }
