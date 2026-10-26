@@ -1640,6 +1640,9 @@ impl Interp {
             }
             None => Rc::from(name.as_str()),
         };
+        // Members are declared under the real name (an anonymous class's
+        // differs from its display name).
+        let decl_name: Rc<str> = anon_name.clone().unwrap_or_else(|| display.clone());
         let mut ancestors: Vec<Rc<str>> = vec![lname.clone()];
         let mut consts: IndexMap<Rc<str>, ConstSlot> = IndexMap::new();
         let mut methods: crate::value::FxIndexMap<Rc<str>, Rc<Method>> = Default::default();
@@ -1737,7 +1740,7 @@ impl Interp {
                         }
                         for p in &tc.props {
                             let mut np = p.clone();
-                            np.declaring = display.clone();
+                            np.declaring = decl_name.clone();
                             upsert_prop(&mut props, np, &mut shadowed);
                         }
                         for (k, sp) in &tc.static_props {
@@ -1796,7 +1799,7 @@ impl Interp {
                                 ty: ty.as_ref(),
                                 vis: Vis::of(modifiers),
                                 readonly: modifiers.readonly || c.modifiers.readonly,
-                                declaring: display.clone(),
+                                declaring: decl_name.clone(),
                                 ctx: ctx.clone(),
                             },
                             &mut shadowed,
@@ -1815,7 +1818,7 @@ impl Interp {
                                     ty: p.ty.as_ref(),
                                     vis: Vis::of(m),
                                     readonly: m.readonly || c.modifiers.readonly,
-                                    declaring: display.clone(),
+                                    declaring: decl_name.clone(),
                                     ctx: ctx.clone(),
                                 },
                                 &mut shadowed,

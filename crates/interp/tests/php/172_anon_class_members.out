@@ -1,0 +1,32 @@
+forMount Comp@anonymous self
+secret Comp@anonymous self
+t Comp@anonymous self
+base Comp other
+object(Comp@anonymous)#1 (3) {
+  ["base"]=>
+  int(1)
+  ["forMount"]=>
+  NULL
+  ["secret":"Comp@anonymous":private]=>
+  int(2)
+  ["t":protected]=>
+  uninitialized(int)
+}
+int(2)
+Comp@anonymous Object
+(
+    [base] => 1
+    [forMount] => 
+    [secret:Comp@anonymous:private] => 2
+)
+
+array(3) {
+  [0]=>
+  string(4) "base"
+  [1]=>
+  string(8) "forMount"
+  [2]=>
+  string(27) "\0Comp@anonymous\0X\0secret"
+}
+Cannot access protected property Comp@anonymous::$t
+Cannot access private property Comp@anonymous::$secret

@@ -129,6 +129,12 @@ pub struct Class {
     pub anon_name: Option<Rc<str>>,
 }
 
+/// A class name as messages and dumps show it: an anonymous class's real
+/// name stops at its NUL (PHP prints C strings there).
+pub fn display_name(name: &str) -> &str {
+    name.split('\0').next().unwrap_or(name)
+}
+
 impl Class {
     /// The name PHP code sees (get_class(), ::class, Reflection).
     pub fn php_name(&self) -> &Rc<str> {

@@ -147,7 +147,7 @@ fn type_desc(it: &Interp, ctx: &NsCtx, class: Option<&str>, t: &Type, implicit_n
             (l.clone(), l != "static")
         } else if l == "self" || l == "parent" {
             let cls = class.and_then(|c| class_by_lname(it, c));
-            let target = if l == "self" { cls.map(|c| c.name.to_string()) } else { cls.and_then(|c| c.parent.as_ref().map(|p| p.name.to_string())) };
+            let target = if l == "self" { cls.map(|c| c.php_name().to_string()) } else { cls.and_then(|c| c.parent.as_ref().map(|p| p.php_name().to_string())) };
             (target.unwrap_or(l.clone()), false)
         } else {
             (it.resolve_class_name(ctx, n), false)
@@ -394,7 +394,7 @@ fn builtin_desc(name: &str) -> Value {
 }
 
 fn method_desc(it: &Interp, cls: &Rc<Class>, m: &crate::class::Method) -> Value {
-    let declaring = class_by_lname(it, &m.declaring).map(|c| c.name.to_string()).unwrap_or_else(|| cls.name.to_string());
+    let declaring = class_by_lname(it, &m.declaring).map(|c| c.php_name().to_string()).unwrap_or_else(|| cls.php_name().to_string());
     let fid = match &m.body {
         MethodBody::User(f) => fn_id(Src::Func(f), &m.ctx, Some(m.declaring.clone())),
         MethodBody::Native(_) => -1,
@@ -463,7 +463,7 @@ fn props_desc(it: &Interp, cls: &Rc<Class>) -> Value {
         let r = rank(name, &declaring);
         out.push((r, assoc(vec![
             ("name", Value::str(name)),
-            ("class", Value::str(&declaring.name)),
+            ("class", Value::str(declaring.php_name())),
             ("vis", Value::Int(vis_flag(vis))),
             ("static", Value::Bool(is_static)),
             ("readonly", Value::Bool(readonly && !is_static)),
@@ -630,7 +630,7 @@ fn closure_desc(it: &Interp, c: &Callable, closure_name: Option<&str>) -> Value 
             if let Value::Array(a) = &mut d {
                 let a = std::rc::Rc::make_mut(a);
                 a.insert(Key::Str(pstr("this")), data.this.clone().map(Value::Object).unwrap_or(Value::Null));
-                a.insert(Key::Str(pstr("scope")), data.scope.as_ref().map(|c| Value::str(&c.name)).unwrap_or(Value::Null));
+                a.insert(Key::Str(pstr("scope")), data.scope.as_ref().map(|c| Value::str(c.php_name())).unwrap_or(Value::Null));
                 let mut used = PhpArray::new();
                 for (n, v, _) in &data.captured {
                     used.insert(Key::Str(pstr(n)), v.deref());

@@ -1703,11 +1703,10 @@ impl Interp {
     pub fn member_visible(&self, scope: Option<&crate::class::Class>, vis: Vis, declaring: &str) -> bool {
         match vis {
             Vis::Public => true,
-            Vis::Private => scope.is_some_and(|c| c.name.eq_ignore_ascii_case(declaring) || *c.lname == *declaring),
-            // (Anonymous classes declare members under their display name.)
+            Vis::Private => scope.is_some_and(|c| c.php_name().eq_ignore_ascii_case(declaring) || *c.lname == *declaring),
             Vis::Protected => scope.is_some_and(|c| {
                 let d = self.lower.get(declaring);
-                c.name.eq_ignore_ascii_case(declaring) || c.is_a(&d) || self.classes.borrow().get(&*d).is_some_and(|dc| dc.is_a(&c.lname))
+                c.php_name().eq_ignore_ascii_case(declaring) || c.is_a(&d) || self.classes.borrow().get(&*d).is_some_and(|dc| dc.is_a(&c.lname))
             }),
         }
     }
@@ -1769,7 +1768,7 @@ impl Interp {
             if matches!(d.default, crate::class::PropDefault::Uninit) {
                 return Err(self.error(
                     "Error",
-                    &format!("Typed property {}::${name} must not be accessed before initialization", d.declaring),
+                    &format!("Typed property {}::${name} must not be accessed before initialization", crate::class::display_name(&d.declaring)),
                 ));
             }
         }
@@ -1800,7 +1799,7 @@ impl Interp {
                     if o.props.borrow().contains_key(name) {
                         return Err(self.error("Error", &format!("Cannot modify readonly property {}::${name}", o.class.name)));
                     }
-                    let in_scope = f.class.as_ref().is_some_and(|c| c.name.eq_ignore_ascii_case(&d.declaring));
+                    let in_scope = f.class.as_ref().is_some_and(|c| c.php_name().eq_ignore_ascii_case(&d.declaring));
                     if !in_scope {
                         let scope = f.class.as_ref().map(|c| format!("scope {}", c.name)).unwrap_or_else(|| "global scope".into());
                         return Err(self.error("Error", &format!("Cannot initialize readonly property {}::${name} from {scope}", o.class.name)));

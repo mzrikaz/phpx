@@ -1255,7 +1255,7 @@ impl Out {
 /// Property name decoration for dumps: `"name":protected`, `"name":"Cls":private`.
 pub fn prop_label(o: &Obj, name: &str) -> (String, crate::class::Vis, Rc<str>) {
     match o.class.find_prop(name) {
-        Some(p) => (crate::call::plain_prop(name).to_string(), p.vis, p.declaring.clone()),
+        Some(p) => (crate::call::plain_prop(name).to_string(), p.vis, Rc::from(crate::class::display_name(&p.declaring))),
         None => (name.to_string(), crate::class::Vis::Public, o.class.name.clone()),
     }
 }
