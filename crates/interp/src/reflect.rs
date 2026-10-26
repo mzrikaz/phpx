@@ -561,7 +561,7 @@ fn class_desc(it: &Interp, cls: &Rc<Class>) -> Value {
         .collect();
     let backing = d.enum_type.as_ref().map(|t| Value::str(&crate::call::type_str(t).to_ascii_lowercase())).unwrap_or(Value::Null);
     assoc(vec![
-        ("name", Value::str(&cls.name)),
+        ("name", Value::str(cls.php_name())),
         ("kind", Value::Int(kind)),
         ("abstract", Value::Bool(cls.is_abstract || (cls.kind == ClassKind::Class && cls.methods.values().any(|m| m.is_abstract)))),
         ("explicit_abstract", Value::Bool(d.modifiers.abstract_)),

@@ -437,7 +437,7 @@ impl Interp {
             }
             "get_class" | "get_parent_class" if args.is_empty() => {
                 let c = if bname == "get_class" { f.class.clone() } else { f.class.as_ref().and_then(|c| c.parent.clone()) };
-                return Ok(c.map(|c| Value::str(&c.name)).unwrap_or(Value::Bool(false)));
+                return Ok(c.map(|c| Value::str(c.php_name())).unwrap_or(Value::Bool(false)));
             }
             _ => {}
         }
@@ -1348,12 +1348,12 @@ impl Interp {
             }
             if let ast::ClassRef::Dynamic(e) = cref {
                 return match self.eval(f, e)? {
-                    Value::Object(o) => Ok(Value::str(&o.class.name)),
+                    Value::Object(o) => Ok(Value::str(o.class.php_name())),
                     _ => Err(self.error("TypeError", "Cannot use \"::class\" on non-object")),
                 };
             }
             let cls = self.class_ref(f, cref)?;
-            return Ok(Value::str(&cls.name));
+            return Ok(Value::str(cls.php_name()));
         }
         let cls = self.class_ref(f, cref)?;
         let v = self.get_class_const(&cls, name)?;
@@ -1583,7 +1583,10 @@ impl Interp {
             return Ok(cls.clone());
         }
         let ctx = f.ctx.clone();
-        let cls = self.build_class(c, &ctx, Some(format!("class@anonymous#{}", self.anon_classes.borrow().len())))?;
+        // PHP's name: the display name, a NUL, then where it was declared.
+        let line = self.line_of(ctx.file, c.span.start);
+        let at = format!("{}:{line}${:x}", self.file_path(ctx.file), self.anon_classes.borrow().len());
+        let cls = self.build_class(c, &ctx, Some(at))?;
         self.anon_classes.borrow_mut().insert(key, cls.clone());
         Ok(cls)
     }
@@ -1594,13 +1597,14 @@ impl Interp {
         Ok(cls)
     }
 
-    fn build_class(&self, c: &'static ast::Class, ctx: &Rc<NsCtx>, anon_name: Option<String>) -> R<Rc<Class>> {
-        let name = match &anon_name {
+    /// `anon_at`: an anonymous class's declaration site (`file:line$n`).
+    fn build_class(&self, c: &'static ast::Class, ctx: &Rc<NsCtx>, anon_at: Option<String>) -> R<Rc<Class>> {
+        let name = match &anon_at {
             Some(n) => n.clone(),
             None => qualify(&ctx.ns, &c.name.as_ref().unwrap().name),
         };
-        let lname = self.lower.get(&name);
-        if anon_name.is_none() && self.classes.borrow().contains_key(&*lname) {
+        let mut lname = self.lower.get(&name);
+        if anon_at.is_none() && self.classes.borrow().contains_key(&*lname) {
             return Err(self.error("Error", &format!("Cannot declare class {name}, because the name is already in use")));
         }
 
@@ -1621,13 +1625,17 @@ impl Interp {
         }
         // An anonymous class is named after its parent or first interface
         // ("Base@anonymous"), like PHP's.
-        let display: Rc<str> = match &anon_name {
-            Some(_) => {
+        let mut anon_name = None;
+        let display: Rc<str> = match &anon_at {
+            Some(at) => {
                 let base = match (&parent, ifaces.first()) {
                     (Some(p), _) => p.name.to_string(),
                     (None, Some(i)) => self.resolve_class_name(ctx, i),
                     (None, None) => "class".to_string(),
                 };
+                let full = format!("{base}@anonymous\0{at}");
+                lname = self.lower.get(&full);
+                anon_name = Some(Rc::from(full));
                 Rc::from(format!("{base}@anonymous"))
             }
             None => Rc::from(name.as_str()),
@@ -1919,6 +1927,7 @@ impl Interp {
             enum_backed: c.enum_type.is_some(),
             decl: c,
             decl_ctx: ctx.clone(),
+            anon_name,
         });
         // Anonymous classes too, under their unique internal name: methods
         // find their scope through it.

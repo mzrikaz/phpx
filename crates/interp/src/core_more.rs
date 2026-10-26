@@ -20,7 +20,7 @@ fn declared(it: &Interp, kinds: &[ClassKind]) -> Value {
         }
     }
     seen.sort_by_key(|c| (c.decl_ctx.file, c.decl.span.start));
-    Value::array(PhpArray::from_list(seen.iter().map(|c| Value::str(&c.name)).collect::<Vec<_>>()))
+    Value::array(PhpArray::from_list(seen.iter().map(|c| Value::str(c.php_name())).collect::<Vec<_>>()))
 }
 
 fn included_files(it: &Interp) -> Value {

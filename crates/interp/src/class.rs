@@ -124,9 +124,17 @@ pub struct Class {
     /// doc comments, lines, modifiers).
     pub decl: &'static ast::Class,
     pub decl_ctx: Rc<NsCtx>,
+    /// An anonymous class's real name, `Base@anonymous\0file:line$n`
+    /// (get_class(), ::class); `name` is what messages and dumps show.
+    pub anon_name: Option<Rc<str>>,
 }
 
 impl Class {
+    /// The name PHP code sees (get_class(), ::class, Reflection).
+    pub fn php_name(&self) -> &Rc<str> {
+        self.anon_name.as_ref().unwrap_or(&self.name)
+    }
+
     pub fn is_enum(&self) -> bool {
         self.kind == ast::ClassKind::Enum
     }
