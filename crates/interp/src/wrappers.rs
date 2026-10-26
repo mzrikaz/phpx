@@ -71,7 +71,7 @@ fn call(it: &Interp, o: &Rc<Obj>, m: &str, args: Vec<Value>, func: &str) -> R<Op
         it.warn(&format!("{func}(): {}::{m} is not implemented!", o.class.name));
         return Ok(None);
     }
-    it.call_method(o, m, args).map(Some)
+    it.call_method_dyn(o, m, args).map(Some)
 }
 
 // ---- streams ---------------------------------------------------------------------
@@ -126,7 +126,7 @@ pub fn method(it: &Interp, o: &Rc<Obj>, m: &str, args: Vec<Value>) -> Option<Val
     if !has_method(o, m) {
         return None;
     }
-    match it.call_method(o, m, args) {
+    match it.call_method_dyn(o, m, args) {
         Ok(v) => Some(v),
         Err(e) => {
             crate::errors::defer(e);

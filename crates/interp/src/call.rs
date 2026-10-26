@@ -1570,8 +1570,34 @@ impl Interp {
         self.invoke_method(Some(o.clone()), &m, o.class.clone(), args, vec![])
     }
 
-    /// Internal method call (iterators, ArrayAccess, __toString...): no visibility check.
-    pub fn call_method(&self, o: &Rc<Obj>, name: &str, args: Vec<Value>) -> R<Value> {
+    /// Internal method call (iterators, ArrayAccess, __toString...): no
+    /// visibility check. The engine calls these by fixed names, so each
+    /// class remembers what a name resolved to (keyed by the name's
+    /// address: only `&'static str` names come here).
+    pub fn call_method(&self, o: &Rc<Obj>, name: &'static str, args: Vec<Value>) -> R<Value> {
+        let key = name.as_ptr() as usize;
+        let cached = o.class.internal_calls.borrow().iter().find(|e| e.0 == key && e.1 == name.len()).map(|e| e.2.clone());
+        let m = match cached {
+            Some(m) => m,
+            None => {
+                let lname = name.to_ascii_lowercase();
+                let m = o.class.find_method(&lname).cloned();
+                let mut c = o.class.internal_calls.borrow_mut();
+                if c.len() < 32 {
+                    c.push((key, name.len(), m.clone()));
+                }
+                m
+            }
+        };
+        match m {
+            Some(m) => self.invoke_method(Some(o.clone()), &m, o.class.clone(), args, vec![]),
+            None if o.class.find_method("__call").is_some() => self.magic_call(o, name, args, vec![]),
+            None => Err(self.error("Error", &format!("Call to undefined method {}::{name}()", o.class.name))),
+        }
+    }
+
+    /// call_method() for a name made at run time.
+    pub fn call_method_dyn(&self, o: &Rc<Obj>, name: &str, args: Vec<Value>) -> R<Value> {
         let lname = if name.bytes().any(|b| b.is_ascii_uppercase()) { std::borrow::Cow::Owned(name.to_ascii_lowercase()) } else { std::borrow::Cow::Borrowed(name) };
         match o.class.find_method(&lname).cloned() {
             Some(m) => self.invoke_method(Some(o.clone()), &m, o.class.clone(), args, vec![]),
@@ -1582,7 +1608,7 @@ impl Interp {
 
     /// call_method() for a caller that binds the result by reference: a
     /// `function &name()` hands back `Value::Ref`, anything else a value.
-    pub fn call_method_ref(&self, o: &Rc<Obj>, name: &str, args: Vec<Value>) -> R<Value> {
+    pub fn call_method_ref(&self, o: &Rc<Obj>, name: &'static str, args: Vec<Value>) -> R<Value> {
         let prev = self.want_ref.replace(Some(crate::interp::WANT_REF_ANY));
         let r = self.call_method(o, name, args);
         self.want_ref.set(prev);
@@ -2311,6 +2337,7 @@ impl Interp {
             traits: used_traits,
             prop_template: Default::default(),
             name_str: Default::default(),
+            internal_calls: Default::default(),
             ctor,
             plain_new,
             shadowed,

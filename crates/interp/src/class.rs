@@ -148,6 +148,10 @@ pub struct Class {
     pub prop_template: RefCell<Option<Vec<Option<crate::value::Value>>>>,
     /// `php_name()` as a PHP string, shared by `get_class()` results.
     pub name_str: std::cell::OnceCell<crate::value::PStr>,
+    /// What the engine's fixed-name internal calls resolved to here
+    /// (`Interp::call_method`): (name address, name length, method).
+    /// Methods never change after declaration.
+    pub internal_calls: RefCell<Vec<(usize, usize, Option<Rc<Method>>)>>,
     /// Private properties of ancestors that a subclass redeclared: each
     /// object keeps both, the ancestor's under a mangled key
     /// (declaring lname, plain name, mangled key).
