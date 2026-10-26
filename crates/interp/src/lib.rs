@@ -248,7 +248,7 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
         main_it.globals.set(std::ptr::null_mut());
         drop(frame);
         main_it.close_all_generators();
-        let code = match main_it.run_destructors() {
+        let code = match main_it.destruct_remaining() {
             Err(Ctrl::Throw(e)) if code == 0 => {
                 main_it.flush();
                 eprintln!("{}", main_it.uncaught_message(&e));

@@ -186,6 +186,21 @@ fn free_leftovers() {
     drop(live);
 }
 
+/// Every live object, in handle order (PHP's object store order).
+pub fn live_in_order() -> Vec<Rc<Obj>> {
+    ST.try_with(|st| {
+        st.store()
+            .iter()
+            .filter(|&&p| p != 0 && p & 1 == 0)
+            .map(|&p| unsafe {
+                Rc::increment_strong_count(p as *const Obj);
+                Rc::from_raw(p as *const Obj)
+            })
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 /// Object freed: give back its registry slot and (unless `keep_id`) its
 /// handle.
 pub fn release(o: &Obj, keep_id: bool) {

@@ -1,0 +1,8 @@
+end
+shutdown function
+destruct global
+destruct cycle-a
+destruct cycle-b
+destruct static
+destruct in-array
+destruct function-static

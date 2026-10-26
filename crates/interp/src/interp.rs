@@ -969,6 +969,21 @@ impl Interp {
         r
     }
 
+    /// Shutdown: after the queued destructors, every object still alive
+    /// (held by a static property, a cycle, ...) gets its `__destruct`
+    /// called in handle order, like PHP's zend_objects_store_call_destructors.
+    pub fn destruct_remaining(&self) -> R<()> {
+        self.run_destructors()?;
+        for o in crate::gc::live_in_order() {
+            if o.class.has_destruct && !o.destructed() {
+                o.set_destructed();
+                self.call_method(&o, "__destruct", vec![])?;
+                self.run_destructors()?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn run_destructors(&self) -> R<()> {
         use crate::value::DESTRUCT_QUEUE;
         while crate::value::destruct_pending().swap(false, std::sync::atomic::Ordering::Relaxed) {
