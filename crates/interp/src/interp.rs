@@ -385,7 +385,8 @@ pub struct Interp {
     pub ref_return_depth: Cell<usize>,
     /// Magic property methods running now: (object id, property, MAGIC_*).
     /// PHP's guards: inside `__get('x')`, `$this->x` is a plain access.
-    pub magic_guards: RefCell<Vec<(u32, Rc<str>, u8)>>,
+    /// Running magic property methods: (object id, property name, kind).
+    pub magic_guards: RefCell<Vec<(u32, Value, u8)>>,
     /// See `file_ctx`.
     pub file_ctxs: RefCell<Vec<Option<Rc<NsCtx>>>>,
     /// Native compiler for whole functions (None when disabled).

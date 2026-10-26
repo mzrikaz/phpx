@@ -17,7 +17,11 @@ pub(crate) const MAGIC_GET: u8 = 0;
 pub(crate) const MAGIC_SET: u8 = 1;
 pub(crate) const MAGIC_UNSET: u8 = 2;
 pub(crate) const MAGIC_ISSET: u8 = 3;
-const MAGIC_NAMES: [&str; 4] = ["__get", "__set", "__unset", "__isset"];
+pub(crate) const MAGIC_NAMES: [&str; 4] = ["__get", "__set", "__unset", "__isset"];
+
+fn guard_is(v: &Value, name: &str) -> bool {
+    matches!(v, Value::Str(s) if &**s == name.as_bytes())
+}
 
 /// How a quiet read of a missing magic property behaves (see magic_isset).
 pub(crate) const QUIET_READ: u8 = 0;
@@ -1768,17 +1772,21 @@ impl Interp {
     /// Whether `$o->name`'s magic method of `kind` runs: defined, and not
     /// already running for this object and property.
     pub(crate) fn has_magic(&self, o: &Rc<Obj>, kind: u8, name: &str) -> bool {
-        o.class.find_method(MAGIC_NAMES[kind as usize]).is_some() && !self.magic_guards.borrow().iter().any(|g| g.0 == o.id && g.2 == kind && &*g.1 == name)
+        o.class.magic[kind as usize].is_some() && !self.magic_guards.borrow().iter().any(|g| g.0 == o.id && g.2 == kind && guard_is(&g.1, name))
     }
 
     /// Run `$o`'s magic method of `kind` for property `name` under its guard.
     pub(crate) fn call_magic(&self, o: &Rc<Obj>, kind: u8, name: &str, extra: Option<Value>) -> R<Value> {
-        let mut args = vec![Value::str(name)];
+        let Some(m) = o.class.magic[kind as usize].clone() else {
+            return Err(self.error("Error", &format!("Call to undefined method {}::{}()", o.class.name, MAGIC_NAMES[kind as usize])));
+        };
+        let nv = Value::str(name);
+        let mut args = vec![nv.clone()];
         args.extend(extra);
-        self.magic_guards.borrow_mut().push((o.id, Rc::from(name), kind));
-        let r = self.call_method(o, MAGIC_NAMES[kind as usize], args);
+        self.magic_guards.borrow_mut().push((o.id, nv, kind));
+        let r = self.invoke_method(Some(o.clone()), &m, o.class.clone(), args, vec![]);
         let mut g = self.magic_guards.borrow_mut();
-        if let Some(i) = g.iter().rposition(|g| g.0 == o.id && g.2 == kind && &*g.1 == name) {
+        if let Some(i) = g.iter().rposition(|g| g.0 == o.id && g.2 == kind && guard_is(&g.1, name)) {
             g.remove(i);
         }
         r

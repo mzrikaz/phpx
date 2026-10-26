@@ -157,6 +157,8 @@ pub struct Class {
     /// An anonymous class's real name, `Base@anonymous\0file:line$n`
     /// (get_class(), ::class); `name` is what messages and dumps show.
     pub anon_name: Option<Rc<str>>,
+    /// __get, __set, __unset, __isset (indexed like MAGIC_NAMES).
+    pub magic: [Option<Rc<Method>>; 4],
     /// `php_name()` as a PHP string (::class, get_class()).
     pub name_value: crate::value::Value,
 }

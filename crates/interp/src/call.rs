@@ -1469,7 +1469,8 @@ impl Interp {
 
     /// Internal method call (iterators, ArrayAccess, __toString...): no visibility check.
     pub fn call_method(&self, o: &Rc<Obj>, name: &str, args: Vec<Value>) -> R<Value> {
-        match o.class.find_method(&name.to_ascii_lowercase()).cloned() {
+        let lname = if name.bytes().any(|b| b.is_ascii_uppercase()) { std::borrow::Cow::Owned(name.to_ascii_lowercase()) } else { std::borrow::Cow::Borrowed(name) };
+        match o.class.find_method(&lname).cloned() {
             Some(m) => self.invoke_method(Some(o.clone()), &m, o.class.clone(), args, vec![]),
             None if o.class.find_method("__call").is_some() => self.magic_call(o, name, args, vec![]),
             None => Err(self.error("Error", &format!("Call to undefined method {}::{name}()", o.class.name))),
@@ -2127,6 +2128,7 @@ impl Interp {
         }
         let shape = crate::props::Shape::declared(props.iter().map(|p| p.name.clone()).collect());
         let ctor = methods.get("__construct").cloned();
+        let magic = crate::expr::MAGIC_NAMES.map(|n| methods.get(n).cloned());
         let plain_new = c.kind == ClassKind::Class && !is_abstract && !ancestors.iter().any(|a| &**a == "throwable");
         let cls = Rc::new(Class {
             name: display.clone(),
@@ -2152,6 +2154,7 @@ impl Interp {
             decl: c,
             decl_ctx: ctx.clone(),
             name_value: Value::str(anon_name.as_deref().unwrap_or(&display)),
+            magic,
             anon_name,
         });
         // Anonymous classes too, under their unique internal name: methods
