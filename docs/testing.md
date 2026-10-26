@@ -160,3 +160,9 @@ ASAN_OPTIONS=detect_leaks=0 target-asan/x86_64-unknown-linux-gnu/debug/phpx scri
 allocator so ASan sees it. If ASan reports nothing yet the process still
 crashes, look for objects built field by field (`Obj::from_template`)
 that miss a newly added field.
+
+Expected under ASan: instrumented frames are much larger, so the
+parser's stack-depth guard can trip on small inputs ("Maximum call stack
+size reached during compilation"); in the differential suite this shows
+as `str_pad()`'s default argument being "not known" (its default is
+parsed from source). Only memory-error reports matter there.
