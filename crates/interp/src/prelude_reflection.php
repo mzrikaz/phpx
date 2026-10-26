@@ -347,7 +347,6 @@ class ReflectionMethod extends ReflectionFunctionAbstract
             'name' => $m['name'], 'params' => [], 'ret' => null, 'doc' => false, 'file' => false, 'start' => false,
             'end' => false, 'attrs' => [], 'byref' => false, 'generator' => false, 'static' => $m['static'], 'internal' => true,
         ];
-        $this->d['static'] = $m['static'];
         $this->name = $m['name'];
         $this->class = $m['class'];
     }
