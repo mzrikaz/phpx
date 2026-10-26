@@ -757,14 +757,9 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::Bool(true))
     });
     t.insert("cli_get_process_title", |_, _, _| Ok(PROCESS_TITLE.with(|t| Value::str(&t.borrow()))));
-    t.insert("phpinfo", |it, _, _| {
-        let mut out = String::from("phpinfo()\nPHP Version => 8.5.10\n\nSystem => ");
-        let mut u: libc::utsname = unsafe { std::mem::zeroed() };
-        unsafe { libc::uname(&mut u) };
-        let f = |b: &[libc::c_char]| unsafe { std::ffi::CStr::from_ptr(b.as_ptr()) }.to_string_lossy().into_owned();
-        out.push_str(&format!("{} {} {} {} {}\n", f(&u.sysname), f(&u.nodename), f(&u.release), f(&u.version), f(&u.machine)));
-        out.push_str("Server API => Command Line Interface\nVirtual Directory Support => disabled\nZend Extension Build => API420250925,NTS\nPHP Extension Build => API20250925,NTS\nThread Safety => disabled\nRuntime => phpx\n");
-        it.echo(out.as_bytes());
+    t.insert("phpinfo", |it, f, a| {
+        let flags = if has(a, 0) { int(it, a, 0)? } else { -1 };
+        crate::phpinfo::print(it, f, flags)?;
         Ok(Value::Bool(true))
     });
     t.insert("phpcredits", |it, _, _| {

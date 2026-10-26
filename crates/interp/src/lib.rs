@@ -33,6 +33,8 @@ mod ext;
 mod fs;
 mod gc;
 mod hmap;
+mod phpinfo;
+mod phpinfo_data;
 mod generator;
 mod ini;
 pub mod interp;

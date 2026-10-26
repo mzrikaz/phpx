@@ -185,6 +185,11 @@ impl Ini {
         self.values.get(k).map(String::as_str)
     }
 
+    /// The value at startup (phpinfo()'s "Master Value").
+    pub fn startup_value(&self, k: &str) -> Option<&str> {
+        self.startup.get(k).map(String::as_str)
+    }
+
     /// ini_set(): old value, or None for unknown keys (PHP returns false).
     pub fn set(&mut self, k: &str, v: &str) -> Option<String> {
         let old = self.values.get(k)?.clone();
