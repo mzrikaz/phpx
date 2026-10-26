@@ -358,7 +358,8 @@ impl Interp {
             Prop { .. } | MethodCall { .. } | Index { .. } | Call { .. } => self.eval_chain(f, e)?.unwrap_or(Value::Null),
             CallableRef(inner) => self.callable_ref(f, inner)?,
             StaticProp { class, name } => {
-                let sp = self.find_static_prop(f, class, &name.name)?;
+                let name = self.member_name(f, name)?;
+                let sp = self.find_static_prop(f, class, &name)?;
                 self.static_prop_slot(&sp)?
             }
             StaticCall { class, name, args } => {
@@ -1122,7 +1123,8 @@ impl Interp {
             }
             ExprKind::StaticProp { class, name } => {
                 let cls = self.class_ref(f, class)?;
-                match cls.static_props.get(&*name.name) {
+                let name = self.member_name(f, name)?;
+                match cls.static_props.get(&*name) {
                     Some(sp) => self.static_prop_slot(&sp.clone()).map(Some),
                     None => Ok(None),
                 }
@@ -1190,7 +1192,8 @@ impl Interp {
                 }
             }
             ExprKind::StaticProp { class, name } => {
-                let sp = self.find_static_prop(f, class, &name.name)?;
+                let name = self.member_name(f, name)?;
+                let sp = self.find_static_prop(f, class, &name)?;
                 self.static_prop_slot(&sp)?; // make sure it's initialized
                 Ok(Place { root: Root::Static(sp), path: vec![] })
             }

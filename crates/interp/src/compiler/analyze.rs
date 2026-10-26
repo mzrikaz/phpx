@@ -281,7 +281,10 @@ impl Analysis {
                 self.expr(object)?;
                 self.member(name)
             }
-            ExprKind::StaticProp { class, .. } => self.class_ref(class),
+            ExprKind::StaticProp { class, name } => {
+                self.class_ref(class)?;
+                self.member(name)
+            }
             _ => Err("write target"),
         }
     }
@@ -460,7 +463,11 @@ impl Analysis {
                 self.expr(base)?;
                 index.as_deref().map_or(Err("[] read"), |i| self.expr(i))
             }
-            ClassConst { class, .. } | StaticProp { class, .. } => self.class_ref(class),
+            ClassConst { class, .. } => self.class_ref(class),
+            StaticProp { class, name } => {
+                self.class_ref(class)?;
+                self.member(name)
+            }
             New { class, args } => {
                 self.class_ref(class)?;
                 self.args(args)

@@ -232,7 +232,11 @@ pub fn walk_expr<'a>(e: &'a Expr, fe: &mut dyn FnMut(&'a Expr), fm: &mut dyn FnM
             walk_member_name(name, fe, fm);
             walk_args(args, fe, fm);
         }
-        StaticProp { class, .. } | ClassConst { class, .. } => walk_class_ref(class, fe, fm),
+        StaticProp { class, name } => {
+            walk_class_ref(class, fe, fm);
+            walk_member_name(name, fe, fm);
+        }
+        ClassConst { class, .. } => walk_class_ref(class, fe, fm),
         StaticCall { class, name, args } => {
             walk_class_ref(class, fe, fm);
             walk_member_name(name, fe, fm);

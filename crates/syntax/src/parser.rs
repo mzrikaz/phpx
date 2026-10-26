@@ -1456,7 +1456,7 @@ impl Parser {
                     self.bump();
                     self.bump();
                     let v = self.var_ident()?;
-                    let name = Ident { name: v.name, span: v.span };
+                    let name = MemberName::Ident(Ident { name: v.name, span: v.span });
                     Expr::new(ExprKind::StaticProp { class: ClassRef::Name(n), name }, self.since(start))
                 } else {
                     let v = self.var_ident()?;
@@ -1470,7 +1470,7 @@ impl Parser {
                     } else if self.at_p("::") && matches!(self.peek_at(1), Tok::Var(_)) {
                         self.bump();
                         let v = self.var_ident()?;
-                        let name = Ident { name: v.name, span: v.span };
+                        let name = MemberName::Ident(Ident { name: v.name, span: v.span });
                         e = Expr::new(ExprKind::StaticProp { class: ClassRef::Dynamic(Box::new(e)), name }, self.since(start));
                     } else if self.at_p("[") {
                         self.bump();
@@ -1610,7 +1610,7 @@ impl Parser {
                                 let args = self.args()?.unwrap_or_default();
                                 e = Expr::new(ExprKind::StaticCall { class, name, args }, self.since(start));
                             } else {
-                                e = Expr::new(ExprKind::StaticProp { class, name: Ident { name: n, span } }, self.since(start));
+                                e = Expr::new(ExprKind::StaticProp { class, name: MemberName::Ident(Ident { name: n, span }) }, self.since(start));
                             }
                         }
                         Tok::Punct("{") => {
@@ -1622,8 +1622,16 @@ impl Parser {
                             e = Expr::new(ExprKind::StaticCall { class, name, args }, self.since(start));
                         }
                         Tok::Punct("$") => {
-                            self.variable_variable()?;
-                            e = Expr::new(ExprKind::Error, self.since(start));
+                            // `Foo::$$name` / `Foo::${expr}`: the property named by an expression.
+                            let vv = self.variable_variable()?;
+                            e = if self.at_p("(") {
+                                // `Foo::$$m()`: the value of `$$m` names the method.
+                                let args = self.args()?.unwrap_or_default();
+                                Expr::new(ExprKind::StaticCall { class, name: MemberName::Dynamic(Box::new(vv)), args }, self.since(start))
+                            } else {
+                                let ExprKind::VarVar(inner) = vv.kind else { unreachable!("variable_variable returns VarVar") };
+                                Expr::new(ExprKind::StaticProp { class, name: MemberName::Dynamic(inner) }, self.since(start))
+                            };
                         }
                         _ => {
                             let name = self.ident()?;

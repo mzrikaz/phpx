@@ -354,7 +354,8 @@ pub enum ExprKind {
     CallableRef(Box<Expr>),
     Prop { object: Box<Expr>, name: MemberName, nullsafe: bool },
     MethodCall { object: Box<Expr>, name: MemberName, args: Vec<Arg>, nullsafe: bool },
-    StaticProp { class: ClassRef, name: Ident },
+    /// `A::$x`, or `A::$$x` / `A::${expr}` with a dynamic name.
+    StaticProp { class: ClassRef, name: MemberName },
     StaticCall { class: ClassRef, name: MemberName, args: Vec<Arg> },
     /// `Foo::BAR`, `Foo::class`.
     ClassConst { class: ClassRef, name: Ident },

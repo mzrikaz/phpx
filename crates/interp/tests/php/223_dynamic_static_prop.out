@@ -1,0 +1,11 @@
+15
+bool(true)
+bool(false)
+42
+Array
+(
+    [x] => y
+)
+m called
+42
+Access to undeclared static property A::$missing

@@ -168,7 +168,7 @@ fn nullsafe_below(e: &Expr) -> bool {
 fn pure_place(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Var(_) => true,
-        ExprKind::StaticProp { class: ClassRef::Name(_), .. } => true,
+        ExprKind::StaticProp { class: ClassRef::Name(_), name: MemberName::Ident(_) } => true,
         ExprKind::Prop { object, name: MemberName::Ident(_), nullsafe: false } => pure_operand(object),
         ExprKind::Index { base, index: Some(i) } => pure_place(base) && pure_operand(i),
         _ => false,
@@ -1730,8 +1730,9 @@ impl<'a> Lower<'a> {
                 }
             }
             StaticProp { class, name } => {
+                let name = self.member(name)?;
                 let cr = self.class_ref_ptr(class)?;
-                let (np, nl) = self.name_parts(&name.name);
+                let (np, nl) = self.name_parts(name);
                 let site = self.class_site();
                 self.helper_value("rt_static_prop_get", |l| vec![l.cx, cr, np, nl, site])?
             }
@@ -2909,8 +2910,9 @@ impl<'a> Lower<'a> {
                 (Root { addr: oa, temp: Some(o) }, np)
             }
             ExprKind::StaticProp { class, name } => {
+                let name = self.member(name)?;
                 let cr = self.class_ref_ptr(class)?;
-                let (np, nl) = self.name_parts(&name.name);
+                let (np, nl) = self.name_parts(name);
                 let nl = self.b.ins().bor_imm_s(nl, super::rt::STATIC_ROOT as i64);
                 (Root { addr: cr, temp: None }, (np, nl))
             }
