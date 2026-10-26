@@ -68,7 +68,7 @@ impl Shape {
     pub fn slot(&self, name: &str) -> Option<usize> {
         if self.names.len() <= 8 {
             // Small shapes: a linear scan beats hashing.
-            return self.names.iter().position(|n| &**n == name);
+            return self.names.iter().position(|n| crate::hmap::bytes_eq(n.as_bytes(), name.as_bytes()));
         }
         self.index.get(name).map(|&i| i as usize)
     }

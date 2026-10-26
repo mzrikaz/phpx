@@ -195,7 +195,7 @@ impl Vars {
     fn pos(&self, name: &str) -> Option<usize> {
         match &self.index {
             Some(ix) => ix.get(name).copied(),
-            None => self.items.iter().position(|(n, _)| *n == name),
+            None => self.items.iter().position(|(n, _)| crate::hmap::bytes_eq(n.as_bytes(), name.as_bytes())),
         }
     }
 
@@ -208,7 +208,7 @@ impl Vars {
     #[inline]
     pub fn get_hinted(&self, name: &str, hint: &std::cell::Cell<u32>) -> Option<&Slot> {
         if let Some((n, s)) = self.items.get(hint.get() as usize) {
-            if *n == name {
+            if crate::hmap::bytes_eq(n.as_bytes(), name.as_bytes()) {
                 return Some(s);
             }
         }

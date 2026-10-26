@@ -36,8 +36,38 @@ fn key_ref(k: &Key) -> KeyRef<'_> {
 fn matches(e: &Key, k: KeyRef) -> bool {
     match (e, k) {
         (Key::Int(a), KeyRef::Int(b)) => *a == b,
-        (Key::Str(a), KeyRef::Str(b)) => a.len() == b.len() && **a == *b,
+        (Key::Str(a), KeyRef::Str(b)) => bytes_eq(a, b),
         _ => false,
+    }
+}
+
+/// Byte-string equality without a `memcmp` call for short strings (most
+/// array keys and property names): two overlapping word loads.
+#[inline(always)]
+pub fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    let n = a.len();
+    if n != b.len() {
+        return false;
+    }
+    if std::ptr::eq(a.as_ptr(), b.as_ptr()) {
+        return true;
+    }
+    let (pa, pb) = (a.as_ptr(), b.as_ptr());
+    // SAFETY: every load stays within the n bytes of both slices.
+    unsafe {
+        match n {
+            0 => true,
+            1..=3 => *pa == *pb && *pa.add(n / 2) == *pb.add(n / 2) && *pa.add(n - 1) == *pb.add(n - 1),
+            4..=7 => {
+                let w = |p: *const u8, i: usize| (p.add(i) as *const u32).read_unaligned();
+                w(pa, 0) == w(pb, 0) && w(pa, n - 4) == w(pb, n - 4)
+            }
+            8..=16 => {
+                let w = |p: *const u8, i: usize| (p.add(i) as *const u64).read_unaligned();
+                w(pa, 0) == w(pb, 0) && w(pa, n - 8) == w(pb, n - 8)
+            }
+            _ => a == b,
+        }
     }
 }
 
