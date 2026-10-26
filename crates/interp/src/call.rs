@@ -1207,6 +1207,7 @@ impl Interp {
         }
 
         let mut last_named: Option<usize> = None;
+        let had_named = !named.is_empty();
         let required = inv.params.iter().filter(|p| p.default.is_none() && !p.variadic).count();
         let mut pos_iter = pos.iter().cloned().enumerate().peekable();
         for (i, p) in inv.params.iter().enumerate() {
@@ -1223,8 +1224,8 @@ impl Interp {
                 let rest = match &p.ty {
                     Some(ty) => {
                         let mut checked = PhpArray::new();
-                        for (k, v) in rest.iter() {
-                            checked.insert(k.clone(), self.check_param(inv, i, p, ty, v.clone(), caller_strict)?);
+                        for (n, (k, v)) in rest.iter().enumerate() {
+                            checked.insert(k.clone(), self.check_param(inv, i + n, p, ty, v.clone(), caller_strict)?);
                         }
                         checked
                     }
@@ -1243,6 +1244,9 @@ impl Interp {
                 named.remove(at).1
             } else if let Some(d) = &p.default {
                 self.eval(&mut f, d)?
+            } else if had_named {
+                self.pos.set(saved_pos);
+                return Err(self.error("ArgumentCountError", &format!("{}(): Argument #{} (${pname}) not passed", inv.display, i + 1)));
             } else {
                 self.pos.set(saved_pos);
                 let (file, line) = self.here();
@@ -1365,7 +1369,9 @@ impl Interp {
     /// the call (not a built-in calling back). `pos` must still be the
     /// call site.
     pub fn param_type_error(&self, display: &str, i: usize, p: &ast::Param, ty: &Type, v: &Value, file: usize) -> Ctrl {
-        let mut msg = format!("{display}(): Argument #{} (${}) must be of type {}, {} given", i + 1, p.name.name, type_str(ty), v.debug_type());
+        // A variadic parameter's arguments are numbered, not named.
+        let which = if p.variadic { format!("#{}", i + 1) } else { format!("#{} (${})", i + 1, p.name.name) };
+        let mut msg = format!("{display}(): Argument {which} must be of type {}, {} given", type_str(ty), v.debug_type());
         if file == crate::interp::PRELUDE_FILE {
             // A built-in class's method: reported at the call, like PHP.
             return self.error("TypeError", &msg);
