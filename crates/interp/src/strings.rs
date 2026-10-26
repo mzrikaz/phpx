@@ -335,6 +335,25 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let st = s(it, a, 0)?;
         let flags = if has(a, 1) { int(it, a, 1)? } else { 3 | 8 };
         let double = !has(a, 3) || arg(a, 3).truthy();
+        let utf8_charset = !has(a, 2) || arg(a, 2).is_null() || it.to_str(&arg(a, 2))?.eq_ignore_ascii_case(b"utf-8");
+        // Invalid UTF-8: ENT_SUBSTITUTE replaces each bad sequence with
+        // U+FFFD, ENT_IGNORE drops it; otherwise the result is empty.
+        let st = match std::str::from_utf8(&st) {
+            Err(_) if utf8_charset => match flags & (8 | 4) {
+                0 => return Ok(Value::str("")),
+                f => {
+                    let mut fixed = Vec::with_capacity(st.len() + 8);
+                    for chunk in st.utf8_chunks() {
+                        fixed.extend_from_slice(chunk.valid().as_bytes());
+                        if !chunk.invalid().is_empty() && f & 8 != 0 {
+                            fixed.extend_from_slice("\u{FFFD}".as_bytes());
+                        }
+                    }
+                    crate::value::PStr::from(fixed)
+                }
+            },
+            _ => st,
+        };
         let mut out = vec![];
         let mut i = 0;
         while i < st.len() {
@@ -709,8 +728,20 @@ pub fn one_byte(c: u8) -> crate::value::PStr {
     ONE_BYTE.with(|t| t[c as usize].clone())
 }
 
+/// A string as mbstring decodes UTF-8: each invalid sequence becomes the
+/// substitute character `?`.
 fn utf8(b: &[u8]) -> std::borrow::Cow<'_, str> {
-    String::from_utf8_lossy(b)
+    if let Ok(s) = std::str::from_utf8(b) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(b.len());
+    for chunk in b.utf8_chunks() {
+        out.push_str(chunk.valid());
+        if !chunk.invalid().is_empty() {
+            out.push('?');
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 fn ord(o: std::cmp::Ordering) -> i64 {
