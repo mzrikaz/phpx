@@ -1274,8 +1274,7 @@ pub(crate) unsafe fn method_entry(it: &Interp, m: &Rc<crate::class::Method>) -> 
     let crate::class::MethodBody::User(func) = &m.body else { return None };
     let body = func.body.as_deref()?;
     let fn_id = *func as *const ast::Function as usize;
-    let decl_class = it.classes.borrow().get(&*m.declaring).cloned();
-    let display: Rc<str> = Rc::from(format!("{}::{}", decl_class.as_ref().map(|c| &*c.name).unwrap_or(""), m.name));
+    let (decl_class, display) = m.declared(&it.classes.borrow());
     let entry = it.native_entry(fn_id, || crate::compiler::Target {
         fn_id,
         display,

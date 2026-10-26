@@ -920,18 +920,17 @@ impl Interp {
                 crate::errors::check(fun(self, this.as_ref(), &static_class, pos.into_iter().map(Value::into_deref).collect()))
             }
             MethodBody::User(func) => {
-                let class = self.classes.borrow().get(&*m.declaring).cloned();
+                let (class, display) = m.declared(&self.classes.borrow());
                 let Some(body) = &func.body else {
                     let cname = class.as_ref().map(|c| c.name.to_string()).unwrap_or_default();
                     return Err(self.error("Error", &format!("Cannot call abstract method {cname}::{}()", m.name)));
                 };
-                let display = format!("{}::{}", class.as_ref().map(|c| &*c.name).unwrap_or(""), m.name);
                 self.invoke(
                     Invoke {
                         params: &func.params,
                         body: Body::Block(body),
                         ret: func.ret.as_ref(),
-                        display: Rc::from(display),
+                        display,
                         func: m.name.clone(),
                         this: if m.is_static { None } else { this },
                         class,
@@ -1867,6 +1866,7 @@ impl Interp {
                             vis: Vis::of(modifiers),
                             declaring: lname.clone(),
                             ctx: ctx.clone(),
+                            cache: Default::default(),
                         }),
                     );
                 }
@@ -1915,6 +1915,7 @@ impl Interp {
                         vis: Vis::Public,
                         declaring: lname.clone(),
                         ctx: ctx.clone(),
+                        cache: Default::default(),
                     }),
                 );
             }

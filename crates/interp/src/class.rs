@@ -66,6 +66,37 @@ pub struct Method {
     /// Lowercase name of the declaring class (`self::` inside the body).
     pub declaring: Rc<str>,
     pub ctx: Rc<NsCtx>,
+    /// The declaring class and `Class::method` display name, looked up on
+    /// the first call.
+    pub cache: MethodCache,
+}
+
+/// Per-method lookups done once. Cloning a method (a trait's, copied into
+/// a class) starts it empty: the copy has another declaring class.
+#[derive(Default)]
+pub struct MethodCache(std::cell::OnceCell<(std::rc::Weak<Class>, Rc<str>)>);
+
+impl Clone for MethodCache {
+    fn clone(&self) -> Self {
+        MethodCache::default()
+    }
+}
+
+impl Method {
+    /// (declaring class, `Class::method`).
+    pub fn declared(&self, classes: &rustc_hash::FxHashMap<Rc<str>, Rc<Class>>) -> (Option<Rc<Class>>, Rc<str>) {
+        if let Some((w, d)) = self.cache.0.get() {
+            if let Some(c) = w.upgrade() {
+                return (Some(c), d.clone());
+            }
+        }
+        let class = classes.get(&*self.declaring).cloned();
+        let display: Rc<str> = Rc::from(format!("{}::{}", class.as_ref().map(|c| &*c.name).unwrap_or(""), self.name));
+        if let Some(c) = &class {
+            let _ = self.cache.0.set((Rc::downgrade(c), display.clone()));
+        }
+        (class, display)
+    }
 }
 
 #[derive(Clone)]
