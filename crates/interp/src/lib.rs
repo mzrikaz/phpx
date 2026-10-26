@@ -63,7 +63,7 @@ mod mbcase;
 mod mbcase_table;
 mod db;
 mod pdo;
-mod phpprof;
+pub(crate) mod phpprof;
 mod process;
 mod reflect;
 pub mod server;
