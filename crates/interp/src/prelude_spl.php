@@ -501,7 +501,9 @@ class RecursiveIteratorIterator implements OuterIterator
     {
         return $this->__phpx_stack[$level ?? count($this->__phpx_stack) - 1] ?? null;
     }
-    public function getInnerIterator(): Iterator { return end($this->__phpx_stack) ?: $this->__phpx_root; }
+    public function getInnerIterator(): Iterator { return $this->__phpx_top() ?? $this->__phpx_root; }
+    /** The innermost iterator (null before rewind()). */
+    private function __phpx_top() { return $this->__phpx_stack[count($this->__phpx_stack) - 1] ?? null; }
     public function setMaxDepth(int $maxDepth = -1): void { $this->__phpx_max = $maxDepth; }
     public function getMaxDepth(): int|false { return $this->__phpx_max < 0 ? false : $this->__phpx_max; }
     public function callHasChildren(): bool { return $this->getInnerIterator()->hasChildren(); }
@@ -580,11 +582,11 @@ class RecursiveIteratorIterator implements OuterIterator
     }
     public function valid(): bool
     {
-        $it = end($this->__phpx_stack);
-        return $it !== false && $it->valid();
+        $it = $this->__phpx_top();
+        return $it !== null && $it->valid();
     }
-    public function key(): mixed { $it = end($this->__phpx_stack); return $it ? $it->key() : null; }
-    public function current(): mixed { $it = end($this->__phpx_stack); return $it ? $it->current() : null; }
+    public function key(): mixed { $it = $this->__phpx_top(); return $it ? $it->key() : null; }
+    public function current(): mixed { $it = $this->__phpx_top(); return $it ? $it->current() : null; }
     public function next(): void
     {
         $d = count($this->__phpx_stack) - 1;
