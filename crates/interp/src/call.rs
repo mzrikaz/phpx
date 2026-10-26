@@ -414,8 +414,9 @@ impl Interp {
     }
 
     /// Resolve a called name. Each call site's name lives at a unique
-    /// (leaked) address; user functions can't be redeclared, so resolving
-    /// once is enough.
+    /// (leaked) address; functions can't be redeclared, so resolving once
+    /// is enough (PHP's run-time cache keeps a namespaced call's fallback
+    /// to the global function the same way).
     #[inline(never)]
     pub(crate) fn resolve_call(&self, f: &Frame, name: &'static str) -> R<Callable> {
         let site = name.as_ptr() as usize;
@@ -425,9 +426,7 @@ impl Interp {
         let c = self.find_function(&f.ctx, name);
         match c {
             Some(c) => {
-                if let Callable::User(_) = &c {
-                    self.call_cache.borrow_mut().insert(site, c.clone());
-                }
+                self.call_cache.borrow_mut().insert(site, c.clone());
                 Ok(c)
             }
             None => Err(self.error("Error", &format!("Call to undefined function {}()", name.trim_start_matches('\\')))),
