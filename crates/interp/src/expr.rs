@@ -883,6 +883,26 @@ impl Interp {
         }
         if let MemberName::Ident(i) = name {
             self.mark(f, i.span.start);
+            // Inline cache: same class and scope as last time at this site.
+            if let Value::Object(o) = &base {
+                let key = (Rc::as_ptr(&o.class) as usize, f.class.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize));
+                let hit = self.method_sites.borrow().get(&(i as *const _ as usize)).filter(|e| (e.0, e.1) == key).map(|e| e.2.clone());
+                if let Some(m) = hit {
+                    let (pos, named) = self.eval_args_for(f, args, crate::call::method_params(&m))?;
+                    let o = o.clone();
+                    drop(base);
+                    let r = self.invoke_method(Some(o.clone()), &m, o.class.clone(), pos, named)?;
+                    drop(o);
+                    self.destruct_now()?;
+                    return Ok(Some(r));
+                }
+                let lname = i.name.to_ascii_lowercase();
+                if let Some(m) = o.class.find_method_from(&lname, f.class.as_deref()) {
+                    if self.member_visible(f.class.as_deref(), m.vis, &m.declaring) {
+                        self.method_sites.borrow_mut().insert(i as *const _ as usize, (key.0, key.1, m.clone()));
+                    }
+                }
+            }
         }
         let name = self.member_name(f, name)?;
         let params = match &base {

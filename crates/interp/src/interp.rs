@@ -325,6 +325,9 @@ pub struct Interp {
     pub autoloading: RefCell<HashSet<String>>,
     /// Call site (AST address) -> resolved user function.
     pub call_cache: RefCell<FxHashMap<usize, Callable>>,
+    /// `$obj->name()` call sites (by the name's AST address): the method
+    /// last found for (class, calling scope), visible from there.
+    pub method_sites: RefCell<FxHashMap<usize, (usize, usize, Rc<crate::class::Method>)>>,
     pub included: RefCell<HashSet<PathBuf>>,
     /// Declared classes per AST node, so hoisted declarations aren't redone.
     pub declared: RefCell<HashSet<usize>>,
@@ -401,6 +404,7 @@ impl Interp {
             writer: RefCell::new(writer),
             arrow_caps: RefCell::new(HashMap::new()),
             call_cache: RefCell::new(FxHashMap::default()),
+            method_sites: RefCell::new(FxHashMap::default()),
             autoloaders: RefCell::new(vec![]),
             composer: RefCell::new(None),
             generators: RefCell::new(vec![]),
