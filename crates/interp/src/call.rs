@@ -1419,9 +1419,14 @@ impl Interp {
                 }
                 if p.promote.is_some() {
                     if let Some(o) = &inv.this {
-                        // `private array &$x` promotes the reference: the
-                        // property and the caller's variable share the cell.
+                        // `private $x` promoted from `&$x` shares the caller's
+                        // reference; a readonly one can't (PHP's error).
+                        // (Writes through a reference to a typed property
+                        // aren't type-checked yet, here or for `&$o->prop`.)
                         let key = self.prop_key(&f, o, pname);
+                        if o.class.find_prop(&key).is_some_and(|d| d.readonly) {
+                            return Err(self.error("Error", &format!("Cannot indirectly modify readonly property {}::${key}", o.class.name)));
+                        }
                         o.props.borrow_mut().insert(Rc::from(&*key), Value::Ref(cell.clone()));
                     }
                 }

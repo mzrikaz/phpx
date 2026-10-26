@@ -73,6 +73,8 @@ Known places where phpx output can differ from PHP 8.5 today.
 | `serialize()` of references | A structure that contains itself through a reference raises the call-stack Error instead of producing `R:`/`r:` back-references | Implement reference tracking in `serialize` |
 | Compile-depth limit | PHP refuses source nested beyond ~10,000 levels (or 3,000 `if`s) at compile time; phpx accepts deeper nesting while the stack allows, then reports the same "Maximum call stack size ... reached during compilation" error | Acceptable (more lenient) |
 | Superglobals in CLI | `$_GET`, `$_POST`, `$_COOKIE`, `$_FILES`, `$_REQUEST` are empty arrays; `$_SESSION` is not set (like PHP CLI without a session) | HTTP server mode |
+| References kept by a callee, in compiled code | When a compiled function passes a local to a by-reference parameter and the callee keeps the reference (`function __construct(private array &$x)`, `$this->r = &$param`), the local gets the value back after the call but is not linked to the kept reference afterwards. The interpreter links them as PHP does | Let compiled locals hold references (write through them) |
+| Typed references | A reference bound to a typed property (`$r = &$o->intProp`, or a by-reference promoted parameter) accepts writes of any type; PHP throws `Cannot assign string to reference held by property ...` | Track type sources on references |
 | `ini_get` / `ini_set` | Minimal; most directives are not modelled | To verify per directive as CMSs need them |
 
 ## How compatibility is verified
