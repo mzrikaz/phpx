@@ -1,7 +1,7 @@
-//! Native Composer support. `require 'vendor/autoload.php'` loads Composer's
-//! generated maps (plain PHP files returning arrays) and registers a built-in
-//! autoloader, instead of running Composer's bootstrap (which relies on
-//! `$GLOBALS` and other dynamic features phpx drops).
+//! Native Composer support (opt-in: PHPX_NATIVE_COMPOSER=1). `require
+//! 'vendor/autoload.php'` loads Composer's generated maps (plain PHP files
+//! returning arrays) and registers a built-in autoloader instead of running
+//! Composer's bootstrap; there is no ClassLoader object then.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

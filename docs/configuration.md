@@ -8,7 +8,7 @@ setups work unchanged, and adds one optional file for phpx-only settings.
 | Runtime settings (`memory_limit`, `date.timezone`, `error_reporting`, ...) | `php.ini` (same syntax as PHP) | implemented |
 | One-off overrides | `phpx run -d key=value`, `-n` (ignore php.ini) | implemented |
 | In-script changes | `ini_set()`, `ini_get()`, `ini_restore()`, `ini_get_all()` | implemented |
-| Dependencies / autoload (the `package.json` of PHP) | `composer.json` + `vendor/autoload.php` | used as-is (native Composer autoloader) |
+| Dependencies / autoload (the `package.json` of PHP) | `composer.json` + `vendor/autoload.php` | used as-is (Composer's own autoloader; `PHPX_NATIVE_COMPOSER=1` swaps in a built-in one) |
 | phpx-only settings (server, workers, compiler tiers) | `phpx.json` next to `composer.json` | planned |
 
 ## php.ini lookup

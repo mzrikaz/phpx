@@ -13,7 +13,7 @@ compiler or the numeric JIT. Everything runs inside a green-thread runtime.
              │        │         │
              │        │         └─ stdlib: builtins/strings/arrays/json/preg/fs/streams,
              │        │            prelude.php (built-in classes), native.rs (native methods),
-             │        │            composer.rs (native Composer autoload)
+             │        │            composer.rs (opt-in native Composer autoload)
              │        │
              │        ├─ compiler/ (native compiler, Cranelift): whole functions,
              │        │   any value types, helpers in rt.rs, falls back to the interpreter
