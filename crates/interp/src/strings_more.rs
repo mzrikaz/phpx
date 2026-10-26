@@ -447,7 +447,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let st = s(it, a, 0)?;
         let mut out = Vec::with_capacity(st.len());
         for &c in st.iter() {
-            if b".\\+*?[^]$()".contains(&c) {
+            if matches!(c, b'.' | b'\\' | b'+' | b'*' | b'?' | b'[' | b'^' | b']' | b'$' | b'(' | b')') {
                 out.push(b'\\');
             }
             out.push(c);

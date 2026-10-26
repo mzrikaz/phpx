@@ -625,13 +625,19 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("preg_quote", |it, _, a| {
         let st = s(it, a, 0)?;
         let delim = if has(a, 1) && !arg(a, 1).is_null() { s(it, a, 1)?.first().copied() } else { None };
+        let special = |c: u8| {
+            matches!(c, b'.' | b'\\' | b'+' | b'*' | b'?' | b'[' | b'^' | b']' | b'$' | b'(' | b')' | b'{' | b'}' | b'=' | b'!' | b'<' | b'>' | b'|' | b':' | b'-' | b'#' | 0)
+                || Some(c) == delim
+        };
+        let Some(first) = st.iter().position(|&c| special(c)) else { return Ok(Value::Str(st)) };
         let mut out = Vec::with_capacity(st.len() + 8);
-        for &c in st.iter() {
+        out.extend_from_slice(&st[..first]);
+        for &c in &st[first..] {
             if c == 0 {
                 out.extend_from_slice(b"\\000");
                 continue;
             }
-            if b".\\+*?[^]$(){}=!<>|:-#".contains(&c) || Some(c) == delim {
+            if special(c) {
                 out.push(b'\\');
             }
             out.push(c);

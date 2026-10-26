@@ -398,8 +398,11 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         b(out)
     });
     t.insert("addslashes", |it, _, a| {
-        let mut out = vec![];
-        for &c in s(it, a, 0)?.iter() {
+        let st = s(it, a, 0)?;
+        let Some(first) = st.iter().position(|&c| matches!(c, b'\'' | b'"' | b'\\' | 0)) else { return Ok(Value::Str(st)) };
+        let mut out = Vec::with_capacity(st.len() + 4);
+        out.extend_from_slice(&st[..first]);
+        for &c in &st[first..] {
             match c {
                 b'\'' | b'"' | b'\\' => out.extend_from_slice(&[b'\\', c]),
                 0 => out.extend_from_slice(b"\\0"),
