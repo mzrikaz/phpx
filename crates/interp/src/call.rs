@@ -477,7 +477,10 @@ impl Interp {
             }
             "func_num_args" => return Ok(Value::Int(f.args.len() as i64)),
             "get_called_class" => {
-                return Ok(f.static_class.as_ref().map(|c| Value::str(&c.name)).unwrap_or(Value::Bool(false)))
+                return match &f.static_class {
+                    Some(c) => Ok(Value::str(&c.name)),
+                    None => Err(self.error("Error", "get_called_class() must be called from within a class")),
+                }
             }
             "get_class" | "get_parent_class" if args.is_empty() => {
                 let c = if bname == "get_class" { f.class.clone() } else { f.class.as_ref().and_then(|c| c.parent.clone()) };
@@ -1432,7 +1435,8 @@ impl Interp {
         match cls.static_props.get(name) {
             Some(sp) => {
                 if !self.member_visible(f.class.as_deref(), sp.vis, &sp.declaring) {
-                    return Err(self.error("Error", &format!("Cannot access non-public property {}::${name}", cls.name)));
+                    let word = if matches!(sp.vis, crate::class::Vis::Private) { "private" } else { "protected" };
+                    return Err(self.error("Error", &format!("Cannot access {word} property {}::${name}", cls.name)));
                 }
                 Ok(sp.clone())
             }
