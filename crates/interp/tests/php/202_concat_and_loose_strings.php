@@ -18,3 +18,11 @@ function run() {
     var_dump(get_class($anon) === get_class($anon), str_starts_with(get_class($anon), 'class@anonymous'), get_class($o), get_class(new ArrayObject([])));
 }
 run();
+class Bump { function __construct(private array &$ref) {} function __toString(): string { $this->ref['v'] = 'changed'; return 'B'; } }
+function order() {
+    $st = ['v' => 'orig'];
+    $b = new Bump($st);
+    $v = &$st['v'];
+    for ($i = 0; $i < 3; $i++) { $st['v'] = 'orig'; echo $b . '-' . $v . "\n"; }
+}
+order();

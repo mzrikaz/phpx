@@ -1416,13 +1416,15 @@ impl<'a> Lower<'a> {
             }
             Binary { op: BinOp::Concat, .. } => {
                 // `a . b . c`: evaluate the operands, then build the string
-                // once. Only operands that can't run code join a chain
-                // (string conversions keep PHP's order).
+                // once. The chain continues only past literal operands, so
+                // the result converts operands in PHP's order: PHP also
+                // evaluates both sides of a `.` before converting them,
+                // and literals have nothing to evaluate.
                 let mut parts = vec![];
                 let mut cur = e;
                 while let Binary { op: BinOp::Concat, left, right } = &cur.kind {
                     parts.push(&**right);
-                    let simple = |x: &Expr| matches!(x.kind, Str(_) | Bytes(_) | Int(_) | Var(_));
+                    let simple = |x: &Expr| matches!(x.kind, Str(_) | Bytes(_) | Int(_));
                     if !simple(right) || !matches!(&left.kind, Binary { op: BinOp::Concat, .. }) {
                         cur = left;
                         break;
