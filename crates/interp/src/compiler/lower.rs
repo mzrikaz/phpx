@@ -2832,7 +2832,18 @@ impl<'a> Lower<'a> {
                 let knv = self.iconst(kn as i64);
                 let ap = self.iconst(append as i64);
                 let ra = root.addr;
-                let r = self.helper_value("rt_place_assign", |l| vec![l.cx, ra, np, nl, ka, knv, ap, va])?;
+                // `$o->name[k] = v` / `$o->name[] = v`: cached slot.
+                let r = match &target.kind {
+                    ExprKind::Index { base, .. } if matches!(&base.kind, ExprKind::Prop { name: MemberName::Ident(_), nullsafe: false, .. }) => {
+                        let ExprKind::Prop { name: MemberName::Ident(name), .. } = &base.kind else { unreachable!() };
+                        let site = Box::new(super::rt::PropSite::new(&name.name));
+                        let sp = &*site as *const super::rt::PropSite as i64;
+                        self.psites.push(site);
+                        let sp = self.iconst(sp);
+                        self.helper_value("rt_prop_elem_assign", |l| vec![l.cx, ra, sp, ka, ap, va])?
+                    }
+                    _ => self.helper_value("rt_place_assign", |l| vec![l.cx, ra, np, nl, ka, knv, ap, va])?,
+                };
                 self.release(v);
                 self.release_ids(&kids);
                 self.release_root(root);

@@ -1,0 +1,28 @@
+3001 5 2999 2994
+string(5) "seven"
+string(8) "oh-seven"
+bool(false)
+string(3) "new"
+int(99)
+Array
+(
+    [0] => 1996
+    [1] => 1997
+    [2] => 1998
+    [3] => 1999
+)
+1999
+Cannot indirectly modify readonly property Box_::$ro
+array(1) {
+  ["x"]=>
+  int(1)
+}
+Cannot access offset of type string on string
+Cannot use a scalar value as an array
+int(5)
+q=1,w=2
+{"list":[0,2,4]}
+caught: Undefined array key "missing"
+caught: Undefined array key "missing"
+caught: Undefined array key "missing"
+done

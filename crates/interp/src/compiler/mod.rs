@@ -180,6 +180,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_instanceof_dyn: 4 => true,
     rt_instanceof: 4 => true,
     rt_place_assign: 9 => true,
+    rt_prop_elem_assign: 7 => true,
     rt_place_update: 9 => true,
     rt_unset_place: 6 => true,
     rt_call: 7 => true,

@@ -1083,15 +1083,25 @@ pub unsafe extern "C" fn rt_place_assign(
 /// not a plain array property (magic, readonly, hidden, a reference,
 /// ArrayAccess, missing...), so the general path runs.
 fn prop_elem_store(it: &Interp, f: &Frame, o: &Obj, name: &str, key: Option<&Value>, v: &Value) -> Option<R<()>> {
+    let i = prop_elem_slot(it, f, o, name)?;
+    elem_store_at(o, i, key, v)
+}
+
+/// Slot of a visible, writable property `name` of `o` (not yet checked
+/// to hold an array).
+fn prop_elem_slot(it: &Interp, f: &Frame, o: &Obj, name: &str) -> Option<usize> {
     let pkey = it.prop_key(f, o, name);
     if let Some(d) = o.class.find_prop(&pkey) {
         if d.readonly || !it.member_visible(f.class.as_deref(), d.vis, &d.declaring) {
             return None;
         }
     }
-    if !matches!(o.props.borrow().get(&pkey), Some(Value::Array(_))) {
-        return None;
-    }
+    o.props.borrow().get_full(&pkey).map(|(i, _, _)| i)
+}
+
+/// Store `v` at `key` (append if None) in the array held by slot `i`.
+/// None: the slot holds no array, or the key needs the general path.
+fn elem_store_at(o: &Obj, i: usize, key: Option<&Value>, v: &Value) -> Option<R<()>> {
     let k = match key {
         None => None,
         Some(Value::Int(n)) => Some(Key::Int(*n)),
@@ -1101,7 +1111,7 @@ fn prop_elem_store(it: &Interp, f: &Frame, o: &Obj, name: &str, key: Option<&Val
     };
     let old = {
         let mut props = o.props.borrow_mut();
-        let Some(Value::Array(a)) = props.get_mut(&pkey) else { return None };
+        let Some(Some(Value::Array(a))) = props.slot_mut(i) else { return None };
         let arr = Rc::make_mut(a);
         match k {
             None => {
@@ -1123,6 +1133,40 @@ fn prop_elem_store(it: &Interp, f: &Frame, o: &Obj, name: &str, key: Option<&Val
     // Dropped outside the borrow: it may run a destructor.
     drop(old);
     Some(Ok(()))
+}
+
+/// `$o->name[key] = val` / `$o->name[] = val` (`append`, no key) with a
+/// cache of the property's slot. `val` is consumed; the assigned value
+/// goes to `dst` if non-null.
+pub unsafe extern "C" fn rt_prop_elem_assign(c: *mut Cx, root: *mut Value, site: *const PropSite, keys: *const Value, append: u64, val: *mut Value, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    let site = &*site;
+    if let Value::Object(o) = &*root {
+        let key = if append != 0 { None } else { Some(&*keys) };
+        let shape = shape_key(o);
+        let hit = site.eshape.get() != 0 && shape == Some(site.eshape.get()) && site.escope.get() == scope_key(f);
+        let slot = if hit { Some(site.eslot.get()) } else { prop_elem_slot(it, f, o, site.name) };
+        if let Some(i) = slot {
+            let v = take(val);
+            if let Some(st) = elem_store_at(o, i, key, &v) {
+                if !hit {
+                    if let Some(k) = shape {
+                        site.eshape.set(k);
+                        site.eslot.set(i);
+                        site.escope.set(scope_key(f));
+                    }
+                }
+                return status(it, st, |_| {
+                    if !dst.is_null() {
+                        put(dst, v);
+                    }
+                });
+            }
+            put(val, v);
+        }
+    }
+    let name = site.name;
+    rt_place_assign(c, root, name.as_ptr(), name.len() as u64, keys, (append == 0) as u64, append, val, dst)
 }
 
 /// `$local[] = val` / `$local[key] = val` (`key` may be null for append).
@@ -1194,6 +1238,11 @@ pub struct PropSite {
     pub tquick: std::cell::Cell<(Quick, bool)>,
     /// Class-typed property: the object class last stored unchanged.
     pub tclass: std::cell::RefCell<Option<Rc<crate::class::Class>>>,
+    /// Element-write cache (`$o->name[k] = v`): shape, slot and scope of a
+    /// visible, writable property (checked here, not by generated code).
+    pub eshape: std::cell::Cell<usize>,
+    pub eslot: std::cell::Cell<usize>,
+    pub escope: std::cell::Cell<usize>,
 }
 
 impl PropSite {
@@ -1211,6 +1260,9 @@ impl PropSite {
             tscope: Default::default(),
             tquick: std::cell::Cell::new((Quick::Other, false)),
             tclass: Default::default(),
+            eshape: Default::default(),
+            eslot: Default::default(),
+            escope: Default::default(),
         }
     }
 }
@@ -3318,7 +3370,7 @@ impl MethodSite {
 
 impl PropSite {
     pub fn reset(&self) {
-        for c in [&self.shape, &self.slot, &self.scope, &self.wshape, &self.wslot, &self.wscope, &self.tshape, &self.tslot, &self.tscope] {
+        for c in [&self.shape, &self.slot, &self.scope, &self.wshape, &self.wslot, &self.wscope, &self.tshape, &self.tslot, &self.tscope, &self.eshape, &self.eslot, &self.escope] {
             c.set(0);
         }
         *self.tclass.borrow_mut() = None;
