@@ -288,7 +288,21 @@ impl Clone for PhpArray {
     fn clone(&self) -> Self {
         let store = match &self.store {
             Store::Packed(v) => Store::Packed(v.iter().map(copy_elem).collect()),
-            Store::Hash(m) => Store::Hash(m.iter().map(|(k, v)| (k.clone(), copy_elem(v))).collect()),
+            Store::Hash(m) => {
+                // Copies the hash table as is (no rehashing), then drops
+                // references nothing else shares (the source held the only
+                // other count).
+                let mut c = m.clone();
+                for v in c.values_mut() {
+                    if let Value::Ref(s) = v {
+                        if Rc::strong_count(s) == 2 {
+                            let inner = s.borrow().clone();
+                            *v = inner;
+                        }
+                    }
+                }
+                Store::Hash(c)
+            }
         };
         PhpArray::make(store, self.next_free, self.pos.get())
     }
