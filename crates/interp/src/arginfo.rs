@@ -27,6 +27,12 @@ const MIXED: u16 = 1 << 10;
 const BOOL: u16 = FALSE | TRUE;
 const SCALAR: u16 = BOOL | INT | FLOAT | STRING;
 
+/// " ($name)" after "Argument #n" in messages; nothing for a variadic
+/// parameter (PHP doesn't name those).
+fn arg_label(p: &Param) -> String {
+    if p.variadic { String::new() } else { format!(" (${})", p.name) }
+}
+
 pub struct Param {
     pub name: &'static str,
     /// PHP's type string, for messages.
@@ -147,7 +153,7 @@ impl Spec {
     fn type_error(&self, it: &Interp, i: usize, p: &Param, v: &Value) -> crate::interp::Ctrl {
         it.error(
             "TypeError",
-            &format!("{}(): Argument #{} (${}) must be of type {}, {} given", self.name, i + 1, p.name, p.ty, v.debug_type()),
+            &format!("{}(): Argument #{}{} must be of type {}, {} given", self.name, i + 1, arg_label(p), p.ty, v.debug_type()),
         )
     }
 
@@ -227,7 +233,7 @@ impl Spec {
             Value::Array(_) | Value::Object(_) => return Ok(()),
             _ => "no array or string given".to_string(),
         };
-        Err(it.error("TypeError", &format!("{}(): Argument #{} (${}) must be a valid callback{or_null}, {why}", self.name, i + 1, p.name)))
+        Err(it.error("TypeError", &format!("{}(): Argument #{}{} must be a valid callback{or_null}, {why}", self.name, i + 1, arg_label(p))))
     }
 
     /// Positional arguments for a call with named ones: each name goes to
