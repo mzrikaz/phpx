@@ -1,0 +1,347 @@
+attributes,data,later,view
+title unset
+Comp comp
+E1L2
+5 5
+array(2) {
+  [0]=>
+  array(2) {
+    ["later"]=>
+    string(2) "L2"
+    ["n"]=>
+    string(3) "dyn"
+  }
+  [1]=>
+  array(9) {
+    [0]=>
+    string(10) "attributes"
+    [1]=>
+    string(4) "data"
+    [2]=>
+    string(3) "dyn"
+    [3]=>
+    string(3) "ex1"
+    [4]=>
+    string(5) "later"
+    [5]=>
+    string(1) "n"
+    [6]=>
+    string(1) "r"
+    [7]=>
+    string(3) "ret"
+    [8]=>
+    string(4) "view"
+  }
+}
+attributes,data,later,view
+title unset
+E1L2
+5 5
+array(3) {
+  [0]=>
+  array(2) {
+    ["later"]=>
+    string(2) "L2"
+    ["n"]=>
+    string(3) "dyn"
+  }
+  [1]=>
+  array(9) {
+    [0]=>
+    string(10) "attributes"
+    [1]=>
+    string(4) "data"
+    [2]=>
+    string(3) "dyn"
+    [3]=>
+    string(3) "ex1"
+    [4]=>
+    string(5) "later"
+    [5]=>
+    string(1) "n"
+    [6]=>
+    string(1) "r"
+    [7]=>
+    string(3) "ret"
+    [8]=>
+    string(4) "view"
+  }
+  [2]=>
+  string(2) "L2"
+}
+attributes,later,view,x
+title unset
+E1L2
+5 5
+array(2) {
+  ["later"]=>
+  string(2) "L2"
+  ["n"]=>
+  string(3) "dyn"
+}
+name(U)|__data,__path,attributes,user
+name(given)|__data,__path,attributes,user
+name(U)|__data,__path,attributes,user
+attributes,data,later,view
+title unset
+Comp comp
+E1L2
+5 5
+array(2) {
+  [0]=>
+  array(2) {
+    ["later"]=>
+    string(2) "L2"
+    ["n"]=>
+    string(3) "dyn"
+  }
+  [1]=>
+  array(9) {
+    [0]=>
+    string(10) "attributes"
+    [1]=>
+    string(4) "data"
+    [2]=>
+    string(3) "dyn"
+    [3]=>
+    string(3) "ex1"
+    [4]=>
+    string(5) "later"
+    [5]=>
+    string(1) "n"
+    [6]=>
+    string(1) "r"
+    [7]=>
+    string(3) "ret"
+    [8]=>
+    string(4) "view"
+  }
+}
+attributes,data,later,view
+title unset
+E1L2
+5 5
+array(3) {
+  [0]=>
+  array(2) {
+    ["later"]=>
+    string(2) "L2"
+    ["n"]=>
+    string(3) "dyn"
+  }
+  [1]=>
+  array(9) {
+    [0]=>
+    string(10) "attributes"
+    [1]=>
+    string(4) "data"
+    [2]=>
+    string(3) "dyn"
+    [3]=>
+    string(3) "ex1"
+    [4]=>
+    string(5) "later"
+    [5]=>
+    string(1) "n"
+    [6]=>
+    string(1) "r"
+    [7]=>
+    string(3) "ret"
+    [8]=>
+    string(4) "view"
+  }
+  [2]=>
+  string(2) "L2"
+}
+attributes,later,view,x
+title unset
+E1L2
+5 5
+array(2) {
+  ["later"]=>
+  string(2) "L2"
+  ["n"]=>
+  string(3) "dyn"
+}
+name(U)|__data,__path,attributes,user
+name(given)|__data,__path,attributes,user
+name(U)|__data,__path,attributes,user
+attributes,data,later,view
+title unset
+Comp comp
+E1L2
+5 5
+array(2) {
+  [0]=>
+  array(2) {
+    ["later"]=>
+    string(2) "L2"
+    ["n"]=>
+    string(3) "dyn"
+  }
+  [1]=>
+  array(9) {
+    [0]=>
+    string(10) "attributes"
+    [1]=>
+    string(4) "data"
+    [2]=>
+    string(3) "dyn"
+    [3]=>
+    string(3) "ex1"
+    [4]=>
+    string(5) "later"
+    [5]=>
+    string(1) "n"
+    [6]=>
+    string(1) "r"
+    [7]=>
+    string(3) "ret"
+    [8]=>
+    string(4) "view"
+  }
+}
+attributes,data,later,view
+title unset
+E1L2
+5 5
+array(3) {
+  [0]=>
+  array(2) {
+    ["later"]=>
+    string(2) "L2"
+    ["n"]=>
+    string(3) "dyn"
+  }
+  [1]=>
+  array(9) {
+    [0]=>
+    string(10) "attributes"
+    [1]=>
+    string(4) "data"
+    [2]=>
+    string(3) "dyn"
+    [3]=>
+    string(3) "ex1"
+    [4]=>
+    string(5) "later"
+    [5]=>
+    string(1) "n"
+    [6]=>
+    string(1) "r"
+    [7]=>
+    string(3) "ret"
+    [8]=>
+    string(4) "view"
+  }
+  [2]=>
+  string(2) "L2"
+}
+attributes,later,view,x
+title unset
+E1L2
+5 5
+array(2) {
+  ["later"]=>
+  string(2) "L2"
+  ["n"]=>
+  string(3) "dyn"
+}
+name(U)|__data,__path,attributes,user
+name(given)|__data,__path,attributes,user
+name(U)|__data,__path,attributes,user
+attributes,data,later,view
+title unset
+Comp comp
+E1L2
+5 5
+array(2) {
+  [0]=>
+  array(2) {
+    ["later"]=>
+    string(2) "L2"
+    ["n"]=>
+    string(3) "dyn"
+  }
+  [1]=>
+  array(9) {
+    [0]=>
+    string(10) "attributes"
+    [1]=>
+    string(4) "data"
+    [2]=>
+    string(3) "dyn"
+    [3]=>
+    string(3) "ex1"
+    [4]=>
+    string(5) "later"
+    [5]=>
+    string(1) "n"
+    [6]=>
+    string(1) "r"
+    [7]=>
+    string(3) "ret"
+    [8]=>
+    string(4) "view"
+  }
+}
+attributes,data,later,view
+title unset
+E1L2
+5 5
+array(3) {
+  [0]=>
+  array(2) {
+    ["later"]=>
+    string(2) "L2"
+    ["n"]=>
+    string(3) "dyn"
+  }
+  [1]=>
+  array(9) {
+    [0]=>
+    string(10) "attributes"
+    [1]=>
+    string(4) "data"
+    [2]=>
+    string(3) "dyn"
+    [3]=>
+    string(3) "ex1"
+    [4]=>
+    string(5) "later"
+    [5]=>
+    string(1) "n"
+    [6]=>
+    string(1) "r"
+    [7]=>
+    string(3) "ret"
+    [8]=>
+    string(4) "view"
+  }
+  [2]=>
+  string(2) "L2"
+}
+attributes,later,view,x
+title unset
+E1L2
+5 5
+array(2) {
+  ["later"]=>
+  string(2) "L2"
+  ["n"]=>
+  string(3) "dyn"
+}
+name(U)|__data,__path,attributes,user
+name(given)|__data,__path,attributes,user
+name(U)|__data,__path,attributes,user
+string(2) "L5"
+array(3) {
+  [0]=>
+  string(1) "L"
+  [1]=>
+  string(1) "G"
+  [2]=>
+  int(5)
+}
+string(1) "L"
+bool(false)

@@ -126,8 +126,12 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_fast_lcfirst: 3 => true,
     rt_fast_str_repeat: 3 => true,
     rt_store_locals: 3 => false,
-    rt_bind_slots: 4 => true,
-    rt_unbind_slots: 2 => false,
+    rt_bind_slots: 5 => true,
+    rt_unbind_slots: 4 => false,
+    rt_eval_ast: 7 => true,
+    rt_unset_local: 6 => false,
+    rt_scope_refresh: 6 => false,
+    rt_exec_ast: 7 => true,
     rt_call_push: 4 => false,
     rt_call_pop: 1 => false,
     rt_declare_class: 2 => true,
@@ -537,6 +541,13 @@ impl Native {
             } else {
                 None
             };
+            l.top_rcs = top_rcs;
+            l.top_def = top_level.then(|| l.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, nlocals.max(1) as u32, 0)));
+            let top_def = l.top_def;
+            l.top_epoch = top_level.then(|| l.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3)));
+            let top_epoch = l.top_epoch;
+            l.spec_addr = spec_addr;
+            l.escapes = escapes;
             match t.body {
                 Body::Block(stmts) => {
                     l.stmts(stmts)?;
@@ -573,10 +584,11 @@ impl Native {
                     l.call("rt_call_pop", &[rec]);
                 }
                 l.cleanup(nlocals);
-                if let Some(rcs) = top_rcs {
+                if let (Some(rcs), Some(def)) = (top_rcs, top_def) {
                     let ra = l.b.ins().stack_addr(types::I64, rcs, 0);
-                    let n = l.b.ins().iconst(types::I64, nlocals as i64);
-                    l.call("rt_unbind_slots", &[ra, n]);
+                    let da = l.b.ins().stack_addr(types::I64, def, 0);
+                    let sp = l.b.ins().iconst(types::I64, spec_addr);
+                    l.call("rt_unbind_slots", &[cxv, ra, da, sp]);
                 }
                 let s = l.b.ins().iconst(types::I64, status);
                 l.b.ins().return_(&[s]);
@@ -615,7 +627,12 @@ impl Native {
                 (Some(ptrs), Some(rcs)) => {
                     let pa = l.b.ins().stack_addr(types::I64, ptrs, 0);
                     let ra = l.b.ins().stack_addr(types::I64, rcs, 0);
-                    l.call("rt_bind_slots", &[cxv, pa, ra, sp]).unwrap()
+                    let da = l.b.ins().stack_addr(types::I64, top_def.unwrap(), 0);
+                    let st = l.call("rt_bind_slots", &[cxv, pa, ra, da, sp]).unwrap();
+                    let ep = l.b.ins().iconst(types::I64, crate::interp::scope_epoch_addr() as i64);
+                    let now = l.b.ins().load(types::I64, cranelift_codegen::ir::MemFlagsData::trusted(), ep, 0);
+                    l.b.ins().stack_store(types::I64, now, top_epoch.unwrap(), 0);
+                    st
                 }
                 _ => {
                     let la = l.b.ins().stack_addr(types::I64, locals_slot, 0);

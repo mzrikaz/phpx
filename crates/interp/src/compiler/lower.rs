@@ -50,6 +50,20 @@ pub struct Lower<'a> {
     /// and `$GLOBALS` in called functions see them); this slot holds a
     /// pointer to each cell's Value.
     pub top_ptrs: Option<StackSlot>,
+    /// Top level: each local's cell (strong references), for handing the
+    /// scope to the interpreter (`escapes`).
+    pub top_rcs: Option<StackSlot>,
+    /// Top level: one byte per local, set once it is assigned (a variable
+    /// bound to no frame variable joins the frame only then).
+    pub top_def: Option<StackSlot>,
+    /// Top level: the scope epoch the cells were last checked against.
+    pub top_epoch: Option<StackSlot>,
+    /// Set while lowering the object of a chain element: where a `?->`
+    /// below jumps when its object is null.
+    chain_skip: Option<Block>,
+    pub spec_addr: i64,
+    /// Expressions and statements the interpreter runs (see Analysis).
+    pub escapes: std::collections::HashSet<usize>,
     /// Every temporary location (slot, offset), for init and cleanup.
     pub temps: Vec<(StackSlot, i32)>,
     free: Vec<usize>,
@@ -133,6 +147,23 @@ impl ByRef {
     }
 }
 
+/// A chain element (property, method call, element read) with a `?->`
+/// somewhere in the chain below it.
+fn nullsafe_below(e: &Expr) -> bool {
+    fn has(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Prop { object, nullsafe, .. } | ExprKind::MethodCall { object, nullsafe, .. } => *nullsafe || has(object),
+            ExprKind::Index { base, .. } => has(base),
+            _ => false,
+        }
+    }
+    match &e.kind {
+        ExprKind::Prop { object, .. } | ExprKind::MethodCall { object, .. } => has(object),
+        ExprKind::Index { base, index: Some(_) } => has(base),
+        _ => false,
+    }
+}
+
 /// A write target that can be evaluated again without side effects.
 fn pure_place(e: &Expr) -> bool {
     match &e.kind {
@@ -188,6 +219,12 @@ impl<'a> Lower<'a> {
             locals,
             locals_slot,
             top_ptrs: None,
+            top_rcs: None,
+            top_def: None,
+            top_epoch: None,
+            chain_skip: None,
+            spec_addr: 0,
+            escapes: Default::default(),
             temps: vec![],
             free: vec![],
             iters: vec![],
@@ -255,6 +292,14 @@ impl<'a> Lower<'a> {
         match self.top_ptrs {
             Some(p) => self.b.ins().stack_load(types::I64, types::I64, p, (i * 8) as i32),
             None => self.b.ins().stack_addr(types::I64, self.locals_slot, (i * 16) as i32),
+        }
+    }
+
+    /// Top level: local `i` now holds an assigned value.
+    fn mark_defined(&mut self, i: u32) {
+        if let Some(def) = self.top_def {
+            let one = self.b.ins().iconst(types::I8, 1);
+            self.b.ins().stack_store(types::I64, one, def, i as i32);
         }
     }
 
@@ -430,6 +475,7 @@ impl<'a> Lower<'a> {
     /// Move the value in slot `src` into local `i` (src left empty, but
     /// not returned to the temp pool).
     fn move_slot_to_local(&mut self, i: u32, src: CValue) {
+        self.mark_defined(i);
         let dst = self.local_addr(i);
         self.clear(dst);
         self.copy16(dst, src);
@@ -442,6 +488,7 @@ impl<'a> Lower<'a> {
                 return;
             }
         }
+        self.mark_defined(i);
         let dst = self.local_addr(i);
         self.clear(dst);
         self.store_into(dst, op);
@@ -562,7 +609,66 @@ impl<'a> Lower<'a> {
         self.boundary_check();
         self.set_pos(s.span.start);
         self.stmt_start = s.span.start;
+        self.epoch_check()?;
+        if self.escapes.contains(&(s as *const Stmt as usize)) {
+            return self.escape_stmt(s);
+        }
         self.stmt_body(s)
+    }
+
+    /// File code: if variables were unbound or rebound since the cells
+    /// were last checked (by a function, an include, ...), follow them.
+    fn epoch_check(&mut self) -> L<()> {
+        let Some(es) = self.top_epoch else { return Ok(()) };
+        let addr = self.iconst(crate::interp::scope_epoch_addr() as i64);
+        let now = self.b.ins().load(types::I64, flags(), addr, 0);
+        let seen = self.b.ins().stack_load(types::I64, types::I64, es, 0);
+        let same = self.b.ins().icmp(IntCC::Equal, now, seen);
+        let (refresh, cont) = (self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(same, cont, &[], refresh, &[]);
+        self.b.set_cold_block(refresh);
+        self.b.switch_to_block(refresh);
+        let [pa, ra, da, sp] = self.scope_args()?;
+        let ea = self.b.ins().stack_addr(types::I64, es, 0);
+        self.call("rt_scope_refresh", &[self.cx, pa, ra, da, sp, ea]);
+        self.b.ins().jump(cont, &[]);
+        self.b.switch_to_block(cont);
+        Ok(())
+    }
+
+    /// The scope arguments of the escape helpers: (ptrs, cells, spec).
+    fn scope_args(&mut self) -> L<[CValue; 4]> {
+        let (Some(ptrs), Some(rcs), Some(def)) = (self.top_ptrs, self.top_rcs, self.top_def) else { return Err("escape outside file code") };
+        let pa = self.b.ins().stack_addr(types::I64, ptrs, 0);
+        let ra = self.b.ins().stack_addr(types::I64, rcs, 0);
+        let da = self.b.ins().stack_addr(types::I64, def, 0);
+        let sp = self.iconst(self.spec_addr);
+        Ok([pa, ra, da, sp])
+    }
+
+    /// An expression the interpreter evaluates on the frame.
+    fn escape_expr(&mut self, e: &'static Expr) -> L<Op> {
+        let [pa, ra, da, sp] = self.scope_args()?;
+        let ep = self.iconst(e as *const Expr as i64);
+        self.helper_value("rt_eval_ast", |l| vec![l.cx, ep, pa, ra, da, sp])
+    }
+
+    /// A statement the interpreter runs on the frame (a `return` in it
+    /// returns from the file).
+    fn escape_stmt(&mut self, s: &'static Stmt) -> L<()> {
+        let [pa, ra, da, sp] = self.scope_args()?;
+        let stp = self.iconst(s as *const Stmt as i64);
+        let out = self.out;
+        let st = self.call("rt_exec_ast", &[self.cx, stp, pa, ra, da, sp, out]).unwrap();
+        let bad = self.b.ins().icmp_imm_s(IntCC::Equal, st, 1);
+        let (ok, ret_chk) = (self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(bad, self.unwind, &[], ret_chk, &[]);
+        self.b.switch_to_block(ret_chk);
+        let ret = self.b.ins().icmp_imm_s(IntCC::Equal, st, 3);
+        let target = self.exit_ret.unwrap_or(self.exit_ok);
+        self.b.ins().brif(ret, target, &[], ok, &[]);
+        self.b.switch_to_block(ok);
+        Ok(())
     }
 
     /// Before a call: point diagnostics and the call's stack frame at
@@ -627,7 +733,7 @@ impl<'a> Lower<'a> {
                         match op {
                             // Locals are dropped on exit anyway: move, don't
                             // copy (unless a finally may still read them).
-                            Op::Local(i) if !finally => {
+                            Op::Local(i) if !finally && self.top_ptrs.is_none() => {
                                 let la = self.local_addr(i);
                                 self.copy16(out, la);
                                 self.store_tag(la, tag::NULL);
@@ -784,6 +890,13 @@ impl<'a> Lower<'a> {
             StmtKind::Unset(es) => {
                 for e in es {
                     match &e.kind {
+                        ExprKind::Var(n) if self.top_ptrs.is_some() => {
+                            // A frame variable: unbound, not just emptied.
+                            let i = self.locals.index[n.as_str()];
+                            let [pa, ra, da, sp] = self.scope_args()?;
+                            let iv = self.iconst(i as i64);
+                            self.call("rt_unset_local", &[self.cx, pa, ra, da, sp, iv]);
+                        }
                         ExprKind::Var(n) => {
                             let i = self.locals.index[n.as_str()];
                             let a = self.local_addr(i);
@@ -874,6 +987,7 @@ impl<'a> Lower<'a> {
             let dst = match &c.var {
                 Some(v) => {
                     let i = self.locals.index[v.name.as_str()];
+                    self.mark_defined(i);
                     self.local_addr(i)
                 }
                 None => self.iconst(0),
@@ -1140,10 +1254,43 @@ impl<'a> Lower<'a> {
     }
 
     pub fn expr(&mut self, e: &'static Expr) -> L<Op> {
-        use ExprKind::*;
         if crate::value::stack_low() {
             return Err("expression nested too deeply");
         }
+        if !self.escapes.is_empty() && self.escapes.contains(&(e as *const Expr as usize)) {
+            return self.escape_expr(e);
+        }
+        // A `?->` on null skips the rest of its chain: the outermost element
+        // of a chain with one below it owns the block they jump to.
+        let inherited = self.chain_skip.take();
+        if inherited.is_none() && nullsafe_below(e) {
+            let t = self.alloc_temp();
+            let (skip, merge) = (self.b.create_block(), self.b.create_block());
+            let r = self.expr_kind(e, Some(skip))?;
+            let ta = self.temp_addr(t);
+            self.store_into(ta, r);
+            self.b.ins().jump(merge, &[]);
+            self.b.switch_to_block(skip);
+            let ta = self.temp_addr(t);
+            self.store_tag(ta, tag::NULL);
+            self.b.ins().jump(merge, &[]);
+            self.b.switch_to_block(merge);
+            let ta = self.temp_addr(t);
+            return Ok(Op::Ptr(ta, Some(t)));
+        }
+        self.expr_kind(e, inherited)
+    }
+
+    /// The object (or base) of a chain element, inside the chain `chain`.
+    fn chain_expr(&mut self, e: &'static Expr, chain: Option<Block>) -> L<Op> {
+        self.chain_skip = chain;
+        let r = self.expr(e);
+        self.chain_skip = None;
+        r
+    }
+
+    fn expr_kind(&mut self, e: &'static Expr, chain: Option<Block>) -> L<Op> {
+        use ExprKind::*;
         Ok(match &e.kind {
             Int(n) => Op::Int(self.iconst(*n)),
             Float(f) => Op::Float(self.b.ins().f64const(*f)),
@@ -1492,7 +1639,7 @@ impl<'a> Lower<'a> {
             }
             Match { subject, arms } => self.match_expr(subject, arms)?,
             Prop { object, name: MemberName::Dynamic(ne), nullsafe: false } => {
-                let o = self.expr(object)?;
+                let o = self.chain_expr(object, chain)?;
                 let o = self.own(o);
                 let o = self.materialize(o);
                 let nv = self.expr(ne)?;
@@ -1505,7 +1652,7 @@ impl<'a> Lower<'a> {
             }
             Prop { object, name, nullsafe } => {
                 let name = self.member(name)?;
-                let o = self.expr(object)?;
+                let o = self.chain_expr(object, chain)?;
                 let o = self.materialize(o);
                 let oa = self.addr(o).unwrap();
                 let (np, nl) = self.name_parts(name);
@@ -1513,12 +1660,12 @@ impl<'a> Lower<'a> {
                 let sp = &*site as *const super::rt::PropSite as i64;
                 self.psites.push(site);
                 let _ = (np, nl);
-                let r = if *nullsafe { self.nullsafe(oa, |l| l.prop_read(oa, sp))? } else { self.prop_read(oa, sp)? };
+                let r = if *nullsafe { self.nullsafe(oa, chain, |l| l.prop_read(oa, sp))? } else { self.prop_read(oa, sp)? };
                 self.release(o);
                 r
             }
             Index { base, index } => {
-                let b = self.expr(base)?;
+                let b = self.chain_expr(base, chain)?;
                 let b = self.materialize(b);
                 let k = self.expr(index.as_deref().ok_or("[] read")?)?;
                 let k = self.materialize(k);
@@ -1626,7 +1773,7 @@ impl<'a> Lower<'a> {
                 r
             }
             MethodCall { object, name: MemberName::Dynamic(ne), args, nullsafe: false } => {
-                let o = self.expr(object)?;
+                let o = self.chain_expr(object, chain)?;
                 let o = self.own(o);
                 let o = self.materialize(o);
                 let nv = self.expr(ne)?;
@@ -1647,7 +1794,7 @@ impl<'a> Lower<'a> {
                     MemberName::Ident(i) => i.span.start,
                     MemberName::Dynamic(d) => d.span.start,
                 };
-                let o = self.expr(object)?;
+                let o = self.chain_expr(object, chain)?;
                 let o = self.own(o);
                 let o = self.materialize(o);
                 let oa = self.addr(o).unwrap();
@@ -1657,7 +1804,7 @@ impl<'a> Lower<'a> {
                 let sp = &*site as *const super::rt::MethodSite as i64;
                 self.msites.push(site);
                 let r = if *nullsafe {
-                    self.nullsafe(oa, |l| {
+                    self.nullsafe(oa, chain, |l| {
                         let (aa, la, n_) = l.args(args, ByRef::Unknown)?;
                         l.mark_call(name_off, args);
                         let sp = l.iconst(sp);
@@ -2261,7 +2408,17 @@ impl<'a> Lower<'a> {
     }
 
     /// `?->`: if the object is null the whole call/fetch is null (args unevaluated).
-    fn nullsafe(&mut self, oa: CValue, f: impl FnOnce(&mut Self) -> L<Op>) -> L<Op> {
+    /// `?->`: run `f` unless the object at `oa` is null; inside a chain
+    /// (`chain`), null skips to the chain's end.
+    fn nullsafe(&mut self, oa: CValue, chain: Option<Block>, f: impl FnOnce(&mut Self) -> L<Op>) -> L<Op> {
+        if let Some(skip) = chain {
+            let tg = self.load_tag(oa);
+            let is_null = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::NULL as i64);
+            let run = self.b.create_block();
+            self.b.ins().brif(is_null, skip, &[], run, &[]);
+            self.b.switch_to_block(run);
+            return f(self);
+        }
         let t = self.alloc_temp();
         let tg = self.load_tag(oa);
         let is_null = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::NULL as i64);
@@ -2338,7 +2495,11 @@ impl<'a> Lower<'a> {
                 None
             };
             let la = match (self.local_of(&a.value), wb) {
-                (Some(l), _) => self.local_addr(l),
+                (Some(l), _) => {
+                    // (Passing by reference defines the variable.)
+                    self.mark_defined(l);
+                    self.local_addr(l)
+                }
                 (None, Some(t)) => self.temp_addr(t),
                 (None, None) => self.iconst(0),
             };
@@ -2556,6 +2717,7 @@ impl<'a> Lower<'a> {
             Some(k) => self.addr(k).unwrap(),
             None => self.iconst(0),
         };
+        self.mark_defined(i);
         let la = self.local_addr(i);
         let r = if want {
             self.helper_value("rt_local_store", |l| vec![l.cx, la, ka, va])?
@@ -2691,6 +2853,9 @@ impl<'a> Lower<'a> {
         let (root, name) = match &cur.kind {
             ExprKind::Var(n) => {
                 let i = self.locals.index[n.as_str()];
+                if !for_unset {
+                    self.mark_defined(i);
+                }
                 (Root { addr: self.local_addr(i), temp: None }, (self.iconst(0), self.iconst(0)))
             }
             ExprKind::Prop { object, name, nullsafe: false } => {
@@ -2738,6 +2903,7 @@ impl<'a> Lower<'a> {
     fn assign_op(&mut self, op: BinOp, target: &'static Expr, value: &'static Expr) -> L<Op> {
         if let ExprKind::Var(n) = &target.kind {
             let i = self.locals.index[n.as_str()];
+            self.mark_defined(i);
             match op {
                 BinOp::Concat => {
                     let v = self.expr(value)?;
@@ -2844,6 +3010,7 @@ impl<'a> Lower<'a> {
     fn incdec_local(&mut self, expr: &'static Expr, inc: bool, prefix: bool, want: bool) -> L<Op> {
         let ExprKind::Var(n) = &expr.kind else { unreachable!() };
         let i = self.locals.index[n.as_str()];
+        self.mark_defined(i);
         let la = self.local_addr(i);
         let tg = self.load_tag(la);
         let is_int = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::INT as i64);

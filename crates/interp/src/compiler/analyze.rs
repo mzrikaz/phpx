@@ -36,13 +36,45 @@ pub struct Analysis {
     pub uses_this: bool,
     /// Compiling a file's top-level code (declarations allowed).
     pub top_level: bool,
+    /// Top level: expressions and statements the interpreter runs on the
+    /// frame (by address), where locals are the frame's own variables.
+    pub escapes: std::collections::HashSet<usize>,
+}
+
+/// Rejections the top level can hand to the interpreter instead.
+fn escapable(why: Reject) -> bool {
+    !matches!(why, "generator" | "parse error node" | "expression nested too deeply")
+}
+
+/// A statement the interpreter can run in place: control never leaves it
+/// through break/continue (return is passed on).
+fn flow_contained(s: &[Stmt], depth: usize) -> bool {
+    use StmtKind::*;
+    s.iter().all(|s| match &s.kind {
+        Break(l) | Continue(l) => match l.as_ref().map(|e| &e.kind) {
+            None => depth >= 1,
+            Some(ExprKind::Int(n)) => (*n as usize) <= depth,
+            _ => false,
+        },
+        If { then, elseifs, else_, .. } => {
+            flow_contained(then, depth) && elseifs.iter().all(|(_, b)| flow_contained(b, depth)) && else_.as_deref().is_none_or(|b| flow_contained(b, depth))
+        }
+        While { body, .. } | DoWhile { body, .. } | For { body, .. } | Foreach { body, .. } => flow_contained(body, depth + 1),
+        Switch { cases, .. } => cases.iter().all(|c| flow_contained(&c.body, depth + 1)),
+        Block(b) => flow_contained(b, depth),
+        Try { body, catches, finally } => {
+            flow_contained(body, depth) && catches.iter().all(|c| flow_contained(&c.body, depth)) && finally.as_deref().is_none_or(|b| flow_contained(b, depth))
+        }
+        Function(_) | Class(_) | Const(_) | Label(_) | Goto(_) => false,
+        _ => true,
+    })
 }
 
 /// Scope-reading built-ins: they need named variables.
 const SCOPE_FNS: &[&str] = &["compact", "eval", "get_defined_vars", "func_get_args", "func_num_args", "extract"];
 
 pub fn analyze_mode(params: &'static [ast::Param], captured: &[&'static str], body: Body, top_level: bool) -> Result<Analysis, Reject> {
-    let mut a = Analysis { locals: Locals::default(), uses_this: false, top_level };
+    let mut a = Analysis { locals: Locals::default(), uses_this: false, top_level, escapes: Default::default() };
     if let (true, Body::Block(stmts)) = (top_level, body) {
         // Only declarations directly in the segment are hoisted/declared
         // in order; conditional ones (inside if/loops) must stay interpreted.
@@ -118,6 +150,16 @@ impl Analysis {
     }
 
     fn stmt(&mut self, s: &'static Stmt) -> Result<(), Reject> {
+        match self.stmt_inner(s) {
+            Err(why) if self.top_level && escapable(why) && flow_contained(std::slice::from_ref(s), 0) => {
+                self.escapes.insert(s as *const Stmt as usize);
+                Ok(())
+            }
+            r => r,
+        }
+    }
+
+    fn stmt_inner(&mut self, s: &'static Stmt) -> Result<(), Reject> {
         use StmtKind::*;
         match &s.kind {
             Expr(e) | Return(Some(e)) => self.expr(e),
@@ -262,12 +304,24 @@ impl Analysis {
     }
 
     fn expr(&mut self, e: &'static Expr) -> Result<(), Reject> {
+        match self.expr_inner(e) {
+            Err(why) if self.top_level && escapable(why) => {
+                self.escapes.insert(e as *const Expr as usize);
+                Ok(())
+            }
+            r => r,
+        }
+    }
+
+    fn expr_inner(&mut self, e: &'static Expr) -> Result<(), Reject> {
         use ExprKind::*;
         if crate::value::stack_low() {
             return Err("expression nested too deeply");
         }
         match &e.kind {
             Int(_) | Float(_) | Str(_) | Bytes(_) | Bool(_) | Null | Name(_) | MagicConst(_) => Ok(()),
+            // (File code reads `$this` through the interpreter.)
+            Var(n) if n == "this" && self.top_level => Err("$this in included file code"),
             Var(n) if n == "this" => {
                 self.uses_this = true;
                 Ok(())
@@ -337,11 +391,18 @@ impl Analysis {
                 Index { .. } | Prop { nullsafe: false, .. } | StaticProp { .. } => self.place_base(expr),
                 _ => Err("++/-- target"),
             },
+            // The left of `??` and empty()'s operand are read quietly: a
+            // failing one hands the whole expression over, not just itself.
+            Binary { op: ast::BinOp::Coalesce, left, right } => {
+                self.quiet(left)?;
+                self.expr(right)
+            }
+            Empty(expr) => self.quiet(expr),
             Binary { left, right, .. } => {
                 self.expr(left)?;
                 self.expr(right)
             }
-            Unary { expr, .. } | Cast { expr, .. } | Print(expr) | Clone(expr) | Throw(expr) | Empty(expr) => self.expr(expr),
+            Unary { expr, .. } | Cast { expr, .. } | Print(expr) | Clone(expr) | Throw(expr) => self.expr(expr),
             Ternary { cond, then, else_ } => {
                 self.expr(cond)?;
                 if let Some(t) = then {
@@ -434,6 +495,7 @@ impl Analysis {
     /// Operand of isset()/??: locals, index/prop chains.
     fn quiet(&mut self, e: &'static Expr) -> Result<(), Reject> {
         match &e.kind {
+            ExprKind::Var(n) if n == "this" && self.top_level => Err("$this in included file code"),
             ExprKind::Var(n) if n == "this" => {
                 self.uses_this = true;
                 Ok(())
@@ -450,7 +512,8 @@ impl Analysis {
                 self.quiet(object)?;
                 self.member(name)
             }
-            _ => self.expr(e),
+            // (Not escaped by itself: the interpreter would read it loudly.)
+            _ => self.expr_inner(e),
         }
     }
 }

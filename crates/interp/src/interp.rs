@@ -157,6 +157,22 @@ pub struct Vars {
 
 const VARS_INDEX_AT: usize = 24;
 
+thread_local! {
+    /// Bumped whenever a variable is unbound or bound to another cell:
+    /// compiled file code, which holds its variables' cells, re-reads
+    /// them when it changed (unset($GLOBALS['x']) in a function, ...).
+    static SCOPE_EPOCH: Cell<u64> = const { Cell::new(0) };
+}
+
+fn bump_scope_epoch() {
+    SCOPE_EPOCH.with(|e| e.set(e.get().wrapping_add(1)));
+}
+
+/// Address of this thread's scope epoch (for generated code).
+pub fn scope_epoch_addr() -> *const u64 {
+    SCOPE_EPOCH.with(|e| e.as_ptr() as *const u64)
+}
+
 impl Vars {
     fn pos(&self, name: &str) -> Option<usize> {
         match &self.index {
@@ -189,6 +205,9 @@ impl Vars {
 
     pub fn insert(&mut self, name: &'static str, s: Slot) {
         if let Some(i) = self.pos(name) {
+            if !Rc::ptr_eq(&self.items[i].1, &s) {
+                bump_scope_epoch();
+            }
             self.items[i].1 = s;
             return;
         }
@@ -202,6 +221,7 @@ impl Vars {
 
     pub fn remove(&mut self, name: &str) {
         if let Some(i) = self.pos(name) {
+            bump_scope_epoch();
             self.items.remove(i);
             if self.index.is_some() {
                 self.index = Some(self.items.iter().enumerate().map(|(i, (n, _))| (*n, i)).collect());

@@ -307,22 +307,168 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
 /// segments, includes and catch blocks see them, like PHP).
 /// Top level: point each local at its frame variable cell (created if
 /// missing). Holds a strong count on each cell until rt_unbind_slots.
-pub unsafe extern "C" fn rt_bind_slots(c: *mut Cx, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, spec: *const LocalsSpec) -> u64 {
-    let (_, f) = cx(c);
+/// Top level: point each local at its frame variable cell. In the global
+/// scope missing variables are created (functions reach them through
+/// `global` and $GLOBALS); elsewhere a missing one gets a cell of its own
+/// that joins the frame once assigned (at exit, or before the interpreter
+/// looks at the scope). `def` marks the locals that are defined (compiled
+/// code sets it on every assignment), so never-assigned variables stay
+/// undefined. Holds a strong count on each cell until rt_unbind_slots.
+pub unsafe extern "C" fn rt_bind_slots(c: *mut Cx, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, def: *mut u8, spec: *const LocalsSpec) -> u64 {
+    let (it, f) = cx(c);
+    let global = std::ptr::eq(it.globals.get(), f);
     for (i, name) in (*spec).names.iter().enumerate() {
-        let s = f.var_slot(name);
+        let (s, defined) = match (*name, f.vars.get(name)) {
+            ("this", _) => (slot(f.this.clone().map_or(Value::Null, Value::Object)), true),
+            (_, Some(s)) => (s.clone(), true),
+            _ if global => (f.var_slot(name), false),
+            _ => (slot(Value::Null), false),
+        };
+        *def.add(i) = defined as u8;
         *ptrs.add(i) = s.as_ptr();
         *rcs.add(i) = Rc::into_raw(s);
     }
     0
 }
 
-pub unsafe extern "C" fn rt_unbind_slots(rcs: *mut *const RefCell<Value>, n: u64) {
-    for i in 0..n as usize {
+/// Before the interpreter looks at the scope: assigned locals not in the
+/// frame join it. In the global scope (where every local is bound),
+/// never-assigned ones nothing else shares leave it meanwhile.
+unsafe fn scope_attach(it: &Interp, f: &mut Frame, rcs: *mut *const RefCell<Value>, def: *const u8, spec: &LocalsSpec) {
+    let global = std::ptr::eq(it.globals.get(), f);
+    for (i, name) in spec.names.iter().enumerate() {
+        let p = *rcs.add(i);
+        if p.is_null() || *name == "this" {
+            continue;
+        }
+        let defined = *def.add(i) != 0;
+        if global {
+            // (Shared by just the frame and us.)
+            let ours = f.vars.get(name).is_some_and(|s| Rc::as_ptr(s) == p && Rc::strong_count(s) == 2);
+            if ours && !defined {
+                f.vars.remove(name);
+            }
+            continue;
+        }
+        if !defined || f.vars.contains_key(name) {
+            continue;
+        }
+        Rc::increment_strong_count(p);
+        f.vars.insert(name, Rc::from_raw(p));
+    }
+}
+
+/// After the interpreter ran on the frame: follow variables it bound or
+/// rebound and forget ones it unset (the global scope binds every local
+/// again).
+unsafe fn scope_reattach(it: &Interp, f: &mut Frame, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, def: *mut u8, spec: &LocalsSpec) {
+    let global = std::ptr::eq(it.globals.get(), f);
+    for (i, name) in spec.names.iter().enumerate() {
+        let p = *rcs.add(i);
+        if *name == "this" {
+            continue;
+        }
+        let (new, defined) = match f.vars.get(name) {
+            Some(s) if Rc::as_ptr(s) != p => (s.clone(), true),
+            Some(_) => {
+                *def.add(i) = 1;
+                continue;
+            }
+            None if global => {
+                if *def.add(i) == 0 && !p.is_null() {
+                    // Hidden by scope_attach: bound again.
+                    Rc::increment_strong_count(p);
+                    f.vars.insert(name, Rc::from_raw(p));
+                    continue;
+                }
+                (f.var_slot(name), false)
+            }
+            None if *def.add(i) != 0 => (slot(Value::Null), false),
+            None => continue,
+        };
+        if !p.is_null() {
+            drop(Rc::from_raw(p));
+        }
+        *def.add(i) = defined as u8;
+        *ptrs.add(i) = new.as_ptr();
+        *rcs.add(i) = Rc::into_raw(new);
+    }
+}
+
+/// File code: variables changed binding since `*seen` (see SCOPE_EPOCH).
+pub unsafe extern "C" fn rt_scope_refresh(c: *mut Cx, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, def: *mut u8, spec: *const LocalsSpec, seen: *mut u64) {
+    let (it, f) = cx(c);
+    // (Assigned locals join the frame first: only a variable that was in
+    // it and is gone now was unset.)
+    if !std::ptr::eq(it.globals.get(), f) {
+        scope_attach(it, f, rcs, def, &*spec);
+    }
+    scope_reattach(it, f, ptrs, rcs, def, &*spec);
+    *seen = *crate::interp::scope_epoch_addr();
+}
+
+pub unsafe extern "C" fn rt_unbind_slots(c: *mut Cx, rcs: *mut *const RefCell<Value>, def: *const u8, spec: *const LocalsSpec) {
+    let (it, f) = cx(c);
+    if !std::ptr::eq(it.globals.get(), f) {
+        scope_attach(it, f, rcs, def, &*spec);
+    }
+    for i in 0..(*spec).names.len() {
         let p = *rcs.add(i);
         if !p.is_null() {
             drop(Rc::from_raw(p));
             *rcs.add(i) = ptr::null();
+        }
+    }
+}
+
+/// File code: `unset($local)`. The variable leaves the frame (references
+/// to its old cell keep their value); in the global scope a fresh cell
+/// stays bound for functions that reach it through `global`.
+pub unsafe extern "C" fn rt_unset_local(c: *mut Cx, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, def: *mut u8, spec: *const LocalsSpec, i: u64) {
+    let (it, f) = cx(c);
+    let i = i as usize;
+    let name = (&*spec).names[i];
+    let fresh = slot(Value::Null);
+    f.vars.remove(name);
+    if std::ptr::eq(it.globals.get(), f) {
+        f.vars.insert(name, fresh.clone());
+    }
+    let p = *rcs.add(i);
+    if !p.is_null() {
+        drop(Rc::from_raw(p));
+    }
+    *def.add(i) = 0;
+    *ptrs.add(i) = fresh.as_ptr();
+    *rcs.add(i) = Rc::into_raw(fresh);
+}
+
+/// File code: an expression the interpreter evaluates on the frame.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn rt_eval_ast(c: *mut Cx, e: *const ast::Expr, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, def: *mut u8, spec: *const LocalsSpec, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    scope_attach(it, f, rcs, def, &*spec);
+    let r = it.eval(f, &*e);
+    scope_reattach(it, f, ptrs, rcs, def, &*spec);
+    status(it, r, |v| put(dst, v))
+}
+
+/// File code: a statement the interpreter runs on the frame. 3 = it
+/// returned (value in `out`).
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn rt_exec_ast(c: *mut Cx, s: *const ast::Stmt, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, def: *mut u8, spec: *const LocalsSpec, out: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    scope_attach(it, f, rcs, def, &*spec);
+    let r = it.exec_block(f, std::slice::from_ref(&*s));
+    scope_reattach(it, f, ptrs, rcs, def, &*spec);
+    match crate::errors::check(r) {
+        Ok(crate::interp::Flow::Return(v)) => {
+            put(out, v);
+            3
+        }
+        Ok(_) => 0,
+        Err(e) => {
+            *it.pending.borrow_mut() = Some(e);
+            1
         }
     }
 }
