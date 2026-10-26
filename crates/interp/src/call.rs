@@ -852,7 +852,13 @@ impl Interp {
             Value::Array(a) if a.len() == 2 => {
                 let target = a.get(&Key::Int(0)).unwrap_or_default();
                 let m = a.get(&Key::Int(1)).unwrap_or_default();
-                let m = self.to_string_lossy(&m)?;
+                let m: std::borrow::Cow<str> = match &m {
+                    Value::Str(s) => match std::str::from_utf8(s) {
+                        Ok(s) => std::borrow::Cow::Borrowed(s),
+                        Err(_) => std::borrow::Cow::Owned(String::from_utf8_lossy(s).into_owned()),
+                    },
+                    other => std::borrow::Cow::Owned(self.to_string_lossy(other)?),
+                };
                 match target {
                     Value::Object(o) => {
                         let class = o.class.clone();
@@ -906,8 +912,9 @@ impl Interp {
     }
 
     fn method_callable(&self, f: &Frame, this: Option<Rc<Obj>>, class: &Rc<Class>, m: &str) -> R<Callable> {
-        let m = m.strip_prefix("parent::").map(|x| x.to_string()).unwrap_or_else(|| m.to_string());
-        match class.find_method(&m.to_ascii_lowercase()) {
+        let m = m.strip_prefix("parent::").unwrap_or(m);
+        let lname = if m.bytes().any(|b| b.is_ascii_uppercase()) { std::borrow::Cow::Owned(m.to_ascii_lowercase()) } else { std::borrow::Cow::Borrowed(m) };
+        match class.find_method(&lname) {
             Some(method) => {
                 let this = if method.is_static { None } else { this.or_else(|| f.this.clone()) };
                 let static_class = this.as_ref().map(|o| o.class.clone()).unwrap_or_else(|| class.clone());
@@ -919,7 +926,7 @@ impl Interp {
                 let this = this.or_else(|| f.this.clone().filter(|t| t.class.is_subclass_of(class)));
                 let magic = if this.is_some() { "__call" } else { "__callstatic" };
                 if class.find_method(magic).is_some() {
-                    return Ok(Callable::Magic { this, class: class.clone(), name: Rc::from(m.as_str()) });
+                    return Ok(Callable::Magic { this, class: class.clone(), name: Rc::from(m) });
                 }
                 Err(self.error("Error", &format!("Call to undefined method {}::{m}()", class.name)))
             }
