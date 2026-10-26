@@ -1,0 +1,51 @@
+array(6) {
+  [0]=>
+  string(2) "id"
+  [1]=>
+  string(11) "base-secret"
+  [2]=>
+  int(2499)
+  [3]=>
+  string(1) "L"
+  [4]=>
+  NULL
+  [5]=>
+  float(4.5)
+}
+array(6) {
+  [0]=>
+  string(4) "uuid"
+  [1]=>
+  string(11) "base-secret"
+  [2]=>
+  int(2499)
+  [3]=>
+  string(1) "C"
+  [4]=>
+  NULL
+  [5]=>
+  float(4.5)
+}
+array(6) {
+  [0]=>
+  string(2) "id"
+  [1]=>
+  string(11) "base-secret"
+  [2]=>
+  int(2499)
+  [3]=>
+  string(1) "L"
+  [4]=>
+  NULL
+  [5]=>
+  float(4.5)
+}
+int(1499)
+int(1499)
+NULL
+string(2) "id"
+string(9) "magic:key"
+int(6)
+Error: Typed property Base::$typed must not be accessed before initialization
+int(3)
+string(4) "anon"

@@ -101,3 +101,23 @@ echo implode(",", array_keys($out));
         assert_eq!(out, "P3,Q");
     }
 }
+
+#[test]
+fn getter_shortcuts_do_not_outlive_a_request() {
+    let src = r#"<?php
+function read($o) { return $o->get(); }
+if (file_get_contents('MODE_FILE') === 'x') {
+    $a = new class { public $p = 'x-prop'; function get() { return $this->p; } };
+    for ($i = 0; $i < LOOPS; $i++) { $r = read($a); }
+    echo $r;
+} else {
+    $b = new class { public $q = 'y-prop'; public $p = 'wrong'; function get() { return $this->q; } };
+    echo read($b);
+}
+"#
+    .replace("LOOPS", LOOPS);
+    let modes = "xyxyyxyxyy";
+    for (m, out) in modes.chars().zip(serve("getters", &src, modes)) {
+        assert_eq!(out, if m == 'x' { "x-prop" } else { "y-prop" }, "mode {m}");
+    }
+}

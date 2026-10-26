@@ -1728,9 +1728,96 @@ pub struct MethodSite {
     /// iterator wrapper's `$this->inner->current()`) finds them without a
     /// lookup by name and without replacing the main entry each call.
     pub poly: std::cell::RefCell<Vec<PolyEntry>>,
+    /// A trivial getter found here (`return $this->prop;` or a literal):
+    /// answered without calling it.
+    pub getter: std::cell::RefCell<Option<Getter>>,
 }
 
 const POLY: usize = 4;
+
+/// A method whose whole body is `return $this->prop;` (read from a slot
+/// of objects of one shape) or `return <literal>;`, for objects of
+/// `class` called from scope `scope`. The class is held, so its address
+/// can't be reused while this is cached (sites are reset per request).
+pub struct Getter {
+    class: Rc<crate::class::Class>,
+    scope: usize,
+    kind: GetterKind,
+}
+
+enum GetterKind {
+    Slot { shape: usize, slot: usize },
+    Const(Value),
+}
+
+/// What `m` returns if it is a trivial getter (see `Getter`).
+fn getter_body(m: &crate::class::Method) -> Option<&'static ast::Expr> {
+    let crate::class::MethodBody::User(func) = &m.body else { return None };
+    if m.is_static || !func.params.is_empty() || func.by_ref || func.is_generator || func.ret.is_some() {
+        return None;
+    }
+    match func.body.as_deref()? {
+        [ast::Stmt { kind: ast::StmtKind::Return(Some(e)), .. }] => Some(e),
+        _ => None,
+    }
+}
+
+/// Cache `m` at `site` for this object if it is a trivial getter.
+unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, f: &Frame, m: &Rc<crate::class::Method>) {
+    let Some(e) = getter_body(m) else { return };
+    let kind = match &e.kind {
+        ast::ExprKind::Int(n) => GetterKind::Const(Value::Int(*n)),
+        ast::ExprKind::Float(x) => GetterKind::Const(Value::Float(*x)),
+        ast::ExprKind::Bool(b) => GetterKind::Const(Value::Bool(*b)),
+        ast::ExprKind::Null => GetterKind::Const(Value::Null),
+        ast::ExprKind::Str(s) => GetterKind::Const(Value::str(s)),
+        ast::ExprKind::Prop { object, name: ast::MemberName::Ident(name), nullsafe: false }
+            if matches!(&object.kind, ast::ExprKind::Var(v) if &**v == "this") =>
+        {
+            // Read in the method's own scope, as its body would.
+            let (decl_class, _) = m.declared(&it.classes.borrow());
+            let mut mf = Frame::for_call(m.ctx.clone(), m.name.clone(), 0);
+            mf.class = decl_class;
+            let key = it.prop_key(&mf, o, &name.name);
+            if !it.prop_visible(&mf, o, &key) {
+                return;
+            }
+            let props = o.props.borrow();
+            let Some((slot, _, v)) = props.get_full(&key) else { return };
+            if matches!(v, Value::Ref(_)) {
+                return;
+            }
+            let Some(shape) = shape_key(o) else { return };
+            GetterKind::Slot { shape, slot }
+        }
+        _ => return,
+    };
+    *site.getter.borrow_mut() = Some(Getter { class: o.class.clone(), scope: scope_key(f), kind });
+    // Calls come here (not straight to compiled code) to take the shortcut.
+    site.direct.set(0);
+}
+
+/// The cached getter's answer for this object, if it applies.
+#[inline]
+unsafe fn getter_value(site: &MethodSite, o: &Obj, f: &Frame) -> Option<Value> {
+    let g = site.getter.borrow();
+    let g = g.as_ref()?;
+    if !Rc::ptr_eq(&g.class, &o.class) || g.scope != scope_key(f) {
+        return None;
+    }
+    match &g.kind {
+        GetterKind::Const(v) => Some(v.clone()),
+        GetterKind::Slot { shape, slot } => {
+            if shape_key(o) != Some(*shape) {
+                return None;
+            }
+            match o.props.borrow().get_index(*slot) {
+                Some((_, v)) if !matches!(v, Value::Ref(_)) => Some(v.clone()),
+                _ => None,
+            }
+        }
+    }
+}
 
 /// A polymorphic entry: the object class and calling scope it is for,
 /// the method, its compiled entry and declaring class. Classes are held
@@ -1755,6 +1842,7 @@ impl MethodSite {
             cached: Default::default(),
             interp: Default::default(),
             poly: Default::default(),
+            getter: Default::default(),
         }
     }
 }
@@ -2035,6 +2123,12 @@ pub unsafe extern "C" fn rt_method_call(
         return method_call_general(it, f, obj, name, args, n, locals, meta, dst);
     }
     if let Value::Object(o) = &*obj {
+        if n == 0 {
+            if let Some(v) = getter_value(site, o, f) {
+                put(dst, v);
+                return 0;
+            }
+        }
         let scope = f.class.as_ref().map_or(ptr::null(), Rc::as_ptr);
         let hit = match site.cached.get() {
             Some(mc) if mc.class == Rc::as_ptr(&o.class) && mc.scope == scope => Some(mc),
@@ -2111,6 +2205,9 @@ pub unsafe extern "C" fn rt_method_call(
             // Keyed the way generated code reads them: the raw Rc words.
             site.direct_class.set(*(std::ptr::addr_of!(o.class) as *const usize));
             site.direct_scope.set(scope_key(f));
+            if n == 0 {
+                remember_getter(it, site, o, f, &m);
+            }
             Some(mc)
         });
         if let Some(mc) = hit {
@@ -2136,6 +2233,13 @@ pub unsafe extern "C" fn rt_method_call(
             // Not compiled (yet): the interpreter, without another lookup.
             let known = site.interp.borrow().as_ref().filter(|e| (e.0, e.1) == key).map(|e| e.2.clone());
             if let Some(m) = known.filter(|m| matches!(m.body, crate::class::MethodBody::User(f) if f.body.is_some())) {
+                if n == 0 && site.getter.borrow().is_none() {
+                    remember_getter(it, site, o, f, &m);
+                    if let Some(v) = getter_value(site, o, f) {
+                        put(dst, v);
+                        return 0;
+                    }
+                }
                 let vals = take_args(args, n);
                 let o = o.clone();
                 let r = with_refs(crate::call::method_params(&m), vals, locals, |pos| it.invoke_method(Some(o.clone()), &m, o.class.clone(), pos, vec![]));
@@ -3199,6 +3303,7 @@ impl MethodSite {
         self.cached.set(None);
         *self.interp.borrow_mut() = None;
         self.poly.borrow_mut().clear();
+        *self.getter.borrow_mut() = None;
     }
 }
 
