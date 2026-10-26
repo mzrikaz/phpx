@@ -18,7 +18,7 @@ use std::rc::Rc;
 use phpx_syntax::ast::{self, BinOp};
 
 use crate::interp::{slot, Callable, Ctrl, Frame, Interp, R};
-use crate::value::{Internal, Key, Obj, PhpArray, Value};
+use crate::value::{Internal, Key, KeyRef, Obj, PhpArray, Value};
 
 // Fast built-in entries are registered with the other helpers.
 pub use crate::trace::{rt_call_pop, rt_call_push};
@@ -659,8 +659,8 @@ pub unsafe extern "C" fn rt_index_get(c: *mut Cx, base: *const Value, key: *cons
     // Fast path: array with an int or plain string key that exists.
     if let Value::Array(a) = &*base {
         let found = match &*key {
-            Value::Int(n) => a.get(&Key::Int(*n)),
-            Value::Str(s) => a.get(&Key::from_pstr(s)),
+            Value::Int(n) => a.get_ref(KeyRef::Int(*n)),
+            Value::Str(s) => a.get_ref(KeyRef::from_bytes(s)),
             _ => None,
         };
         if let Some(v) = found {
@@ -690,7 +690,11 @@ pub unsafe extern "C" fn rt_quiet_index(c: *mut Cx, base: *const Value, key: *co
     let (it, _) = cx(c);
     let r: R<Option<Value>> = (|| {
         Ok(match &*base {
-            Value::Array(a) => a.get(&it.to_key(&*key)?),
+            Value::Array(a) => match &*key {
+                Value::Int(n) => a.get_ref(KeyRef::Int(*n)),
+                Value::Str(s) => a.get_ref(KeyRef::from_bytes(s)),
+                k => a.get(&it.to_key(k)?),
+            },
             Value::Str(s) => {
                 let i = match &*key {
                     Value::Int(n) => Some(*n),

@@ -96,10 +96,67 @@ pub mod tag {
     pub const PAYLOAD: i32 = 8;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Key {
     Int(i64),
     Str(PStr),
+}
+
+// Hashed by hand so a borrowed `KeyRef` hashes the same (lookups by
+// borrowed bytes then don't build an owned key).
+impl std::hash::Hash for Key {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        match self {
+            Key::Int(n) => KeyRef::Int(*n).hash(h),
+            Key::Str(s) => KeyRef::Str(s).hash(h),
+        }
+    }
+}
+
+/// A key to look up by, borrowing a string key's bytes.
+#[derive(Clone, Copy)]
+pub enum KeyRef<'a> {
+    Int(i64),
+    Str(&'a [u8]),
+}
+
+impl KeyRef<'_> {
+    /// Like `Key::from_bytes`, borrowing.
+    #[inline]
+    pub fn from_bytes(b: &[u8]) -> KeyRef<'_> {
+        match canonical_int(b) {
+            Some(n) => KeyRef::Int(n),
+            None => KeyRef::Str(b),
+        }
+    }
+}
+
+impl std::hash::Hash for KeyRef<'_> {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        match self {
+            KeyRef::Int(n) => {
+                h.write_u8(0);
+                h.write_i64(*n);
+            }
+            KeyRef::Str(b) => {
+                h.write_u8(1);
+                h.write(b);
+            }
+        }
+    }
+}
+
+impl indexmap::Equivalent<Key> for KeyRef<'_> {
+    #[inline]
+    fn equivalent(&self, k: &Key) -> bool {
+        match (self, k) {
+            (KeyRef::Int(a), Key::Int(b)) => a == b,
+            (KeyRef::Str(a), Key::Str(b)) => *a == &**b,
+            _ => false,
+        }
+    }
 }
 
 impl Key {
@@ -150,6 +207,9 @@ fn canonical_int(b: &[u8]) -> Option<i64> {
     }
     std::str::from_utf8(b).ok()?.parse().ok()
 }
+
+/// Hash arrays up to this size are searched linearly.
+const SCAN_MAX: usize = 8;
 
 /// Insertion-ordered map with a fast (non-cryptographic) hasher; PHP
 /// arrays and property tables don't need DoS-resistant hashing per lookup.
@@ -315,6 +375,42 @@ impl PhpArray {
             Store::Packed(v) => Self::packed_index(v.len(), k).map(|i| v[i].deref()),
             Store::Hash(m) => m.get(k).map(Value::deref),
         }
+    }
+
+    /// Element value by a borrowed key (references dereferenced).
+    #[inline]
+    pub fn get_ref(&self, k: KeyRef) -> Option<Value> {
+        match &self.store {
+            Store::Packed(v) => match k {
+                KeyRef::Int(n) if n >= 0 && (n as usize) < v.len() => Some(v[n as usize].deref()),
+                _ => None,
+            },
+            Store::Hash(m) => Self::hash_find(m, k).map(|i| m[i].deref()),
+        }
+    }
+
+    /// Whether a borrowed key is present.
+    #[inline]
+    pub fn contains_ref(&self, k: KeyRef) -> bool {
+        match &self.store {
+            Store::Packed(v) => matches!(k, KeyRef::Int(n) if n >= 0 && (n as usize) < v.len()),
+            Store::Hash(m) => Self::hash_find(m, k).is_some(),
+        }
+    }
+
+    /// Index of a key in hash storage. Small maps (most PHP arrays: options,
+    /// attributes, rows) are scanned: comparing a few keys is cheaper than
+    /// hashing one.
+    #[inline]
+    fn hash_find(m: &FxIndexMap<Key, Value>, k: KeyRef) -> Option<usize> {
+        if m.len() <= SCAN_MAX {
+            let keys = m.as_slice().keys();
+            return match k {
+                KeyRef::Int(n) => keys.into_iter().position(|e| matches!(e, Key::Int(x) if *x == n)),
+                KeyRef::Str(b) => keys.into_iter().position(|e| matches!(e, Key::Str(x) if x.len() == b.len() && **x == *b)),
+            };
+        }
+        m.get_index_of(&k)
     }
 
     pub fn contains(&self, k: &Key) -> bool {

@@ -12,7 +12,7 @@
 use std::ptr;
 
 use crate::strings::{find, substr_range};
-use crate::value::{compare, identical, loose_eq, pbytes, Key, PStr, PhpArray, Value};
+use crate::value::{compare, identical, loose_eq, pbytes, KeyRef, PStr, PhpArray, Value};
 
 /// PHP built-in name -> fast entry helper name (registered in `HELPERS`).
 pub fn lookup(name: &str, nargs: usize) -> Option<&'static str> {
@@ -99,12 +99,11 @@ pub unsafe extern "C" fn rt_fast_chr(args: *mut Value, n: u64, dst: *mut Value) 
 
 pub unsafe extern "C" fn rt_fast_key_exists(args: *mut Value, n: u64, dst: *mut Value) -> u64 {
     let Value::Array(a) = arg(args, 1) else { return DECLINE };
-    let key = match arg(args, 0) {
-        Value::Int(i) => Key::Int(*i),
-        Value::Str(s) => Key::from_pstr(s),
+    let found = match arg(args, 0) {
+        Value::Int(i) => a.contains_ref(KeyRef::Int(*i)),
+        Value::Str(s) => a.contains_ref(KeyRef::from_bytes(s)),
         _ => return DECLINE,
     };
-    let found = a.get(&key).is_some();
     done(args, n, dst, Value::Bool(found))
 }
 
