@@ -958,6 +958,12 @@ fn has_static_prop(c: &crate::class::Class, name: &str) -> bool {
 pub fn secure_bytes(n: usize) -> Vec<u8> {
     use std::io::Read;
     let mut buf = vec![0u8; n];
+    // getentropy: one syscall per 256 bytes, no fd, no state to go stale
+    // across fork(); /dev/urandom where it isn't available.
+    // SAFETY: each call fills at most 256 bytes of `buf`.
+    if buf.chunks_mut(256).all(|c| unsafe { libc::getentropy(c.as_mut_ptr().cast(), c.len()) } == 0) {
+        return buf;
+    }
     std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf)).expect("/dev/urandom unavailable");
     buf
 }
