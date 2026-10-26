@@ -28,7 +28,9 @@ pub fn lookup(name: &str, nargs: usize) -> Option<&'static str> {
         ("substr", 2 | 3) => "rt_fast_substr",
         ("strtolower", 1) => "rt_fast_strtolower",
         ("strtoupper", 1) => "rt_fast_strtoupper",
-        ("trim", 1) => "rt_fast_trim",
+        ("trim", 1 | 2) => "rt_fast_trim",
+        ("ltrim", 1 | 2) => "rt_fast_ltrim",
+        ("rtrim", 1 | 2) => "rt_fast_rtrim",
         ("str_replace", 3) => "rt_fast_str_replace",
         ("implode" | "join", 2) => "rt_fast_implode",
         ("abs", 1) => "rt_fast_abs",
@@ -227,13 +229,35 @@ pub unsafe extern "C" fn rt_fast_strtoupper(args: *mut Value, n: u64, dst: *mut 
     map_case(args, n, dst, true)
 }
 
-pub unsafe extern "C" fn rt_fast_trim(args: *mut Value, n: u64, dst: *mut Value) -> u64 {
+/// trim()/ltrim()/rtrim() with the default characters or a plain list
+/// (a list with a `..` range takes the generic path).
+#[inline]
+unsafe fn trim_sides(args: *mut Value, n: u64, dst: *mut Value, left: bool, right: bool) -> u64 {
     let Value::Str(s) = arg(args, 0) else { return DECLINE };
-    let ws = |c: &u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | b'\0' | 0x0B);
-    let lo = s.iter().position(|c| !ws(c)).unwrap_or(s.len());
-    let hi = s.iter().rposition(|c| !ws(c)).map_or(lo, |p| p + 1);
+    let list: &[u8] = match n {
+        1 => b" \t\n\r\0\x0B",
+        _ => match arg(args, 1) {
+            Value::Str(l) if !l.windows(2).any(|w| w == b"..") => l,
+            _ => return DECLINE,
+        },
+    };
+    let strip = |c: &u8| list.contains(c);
+    let lo = if left { s.iter().position(|c| !strip(c)).unwrap_or(s.len()) } else { 0 };
+    let hi = if right { s.iter().rposition(|c| !strip(c)).map_or(lo, |p| (p + 1).max(lo)) } else { s.len() };
     let r = if lo == 0 && hi == s.len() { s.clone() } else { pbytes(&s[lo..hi]) };
     done(args, n, dst, Value::Str(r))
+}
+
+pub unsafe extern "C" fn rt_fast_trim(args: *mut Value, n: u64, dst: *mut Value) -> u64 {
+    trim_sides(args, n, dst, true, true)
+}
+
+pub unsafe extern "C" fn rt_fast_ltrim(args: *mut Value, n: u64, dst: *mut Value) -> u64 {
+    trim_sides(args, n, dst, true, false)
+}
+
+pub unsafe extern "C" fn rt_fast_rtrim(args: *mut Value, n: u64, dst: *mut Value) -> u64 {
+    trim_sides(args, n, dst, false, true)
 }
 
 pub unsafe extern "C" fn rt_fast_str_replace(args: *mut Value, n: u64, dst: *mut Value) -> u64 {

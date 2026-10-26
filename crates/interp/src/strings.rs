@@ -47,6 +47,11 @@ fn trim_impl(it: &Interp, a: &[Value], left: bool, right: bool) -> R<Value> {
             hi -= 1;
         }
     }
+    if lo == 0 && hi == st.len() {
+        if let Value::Str(v) = arg(a, 0) {
+            return Ok(Value::Str(v.clone()));
+        }
+    }
     b(st[lo..hi].to_vec())
 }
 

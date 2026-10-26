@@ -28,7 +28,7 @@ pub use super::fastbi::{
 };
 pub use super::fastbi::{
     rt_fast_abs, rt_fast_array_key_first, rt_fast_array_key_last, rt_fast_array_keys, rt_fast_array_values, rt_fast_ceil, rt_fast_explode,
-    rt_fast_floor, rt_fast_intval, rt_fast_lcfirst, rt_fast_max, rt_fast_min, rt_fast_str_repeat, rt_fast_get_class, rt_fast_ucfirst,
+    rt_fast_floor, rt_fast_intval, rt_fast_lcfirst, rt_fast_max, rt_fast_min, rt_fast_str_repeat, rt_fast_get_class, rt_fast_ltrim, rt_fast_rtrim, rt_fast_ucfirst,
 };
 
 #[repr(C)]
