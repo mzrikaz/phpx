@@ -760,12 +760,22 @@ impl Native {
         if insts > MAX_INSTS {
             return Err("function too large");
         }
+        // PHPX_NATIVE_DUMP=name: print the IR and machine code of the
+        // functions whose display name contains `name`.
+        let dump = std::env::var("PHPX_NATIVE_DUMP").is_ok_and(|d| !d.is_empty() && t.display.contains(d.as_str()));
+        if dump {
+            eprintln!("[native] IR of {}:\n{}", t.display, ctx.func.display());
+            ctx.set_disasm(true);
+        }
         self.module.define_function(id, &mut ctx).map_err(|e| {
             if self.log {
                 eprintln!("[native] codegen error: {e:?}");
             }
             "codegen failed"
         })?;
+        if let Some(vcode) = ctx.compiled_code().and_then(|c| c.vcode.as_ref()).filter(|_| dump) {
+            eprintln!("[native] code of {}:\n{vcode}", t.display);
+        }
         self.module.finalize_definitions().map_err(|_| "finalize failed")?;
         let ptr = self.module.get_finalized_function(id);
         self.consts.extend(consts);
