@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn compact_sizes() {
         // Guard against layout regressions: objects must stay small.
-        assert!(std::mem::size_of::<crate::value::Obj>() <= 48);
+        assert!(std::mem::size_of::<crate::value::Obj>() <= 56);
         assert_eq!(std::mem::size_of::<Option<crate::value::Value>>(), 16);
         let mut p = super::Props::default();
         p.insert(std::rc::Rc::from("a"), crate::value::Value::Int(1));

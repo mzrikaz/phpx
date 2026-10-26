@@ -687,6 +687,9 @@ pub struct Obj {
     /// Initialized properties in declaration order. Typed properties without
     /// a default are absent until assigned.
     pub props: RefCell<crate::props::Props>,
+    /// Native state (closures, generators, ...), boxed so a borrow of it
+    /// stays valid while it is replaced; set only with HAS_INTERNAL.
+    internal: std::cell::UnsafeCell<Option<Box<RefCell<Internal>>>>,
 }
 
 const HAS_INTERNAL: u32 = 1 << 30;
@@ -696,10 +699,6 @@ const DESTRUCTED: u32 = 1 << 31;
 thread_local! {
     /// What objects without native state read (never borrowed mutably).
     static NO_INTERNAL: &'static RefCell<Internal> = Box::leak(Box::new(RefCell::new(Internal::None)));
-    /// Native state (closures, generators, ...) by object handle: few
-    /// objects have any, so it lives here rather than in every object.
-    /// Boxed: entries keep their address while the map changes.
-    static INTERNALS: RefCell<rustc_hash::FxHashMap<u32, Box<RefCell<Internal>>>> = RefCell::new(Default::default());
 }
 
 impl Obj {
@@ -711,24 +710,20 @@ impl Obj {
     /// empty one first).
     pub fn with_props(class: Rc<Class>, internal: Internal, props: crate::props::Props) -> Rc<Obj> {
         crate::gc::track(|id| {
-            let flags = match internal {
-                Internal::None => 0,
-                i => {
-                    INTERNALS.with(|m| m.borrow_mut().insert(id, Box::new(RefCell::new(i))));
-                    HAS_INTERNAL
-                }
+            let (flags, internal) = match internal {
+                Internal::None => (0, None),
+                i => (HAS_INTERNAL, Some(Box::new(RefCell::new(i)))),
             };
-            Rc::new(Obj { id, gc: Cell::new(flags), class, props: RefCell::new(props) })
+            Rc::new(Obj { id, gc: Cell::new(flags), class, props: RefCell::new(props), internal: std::cell::UnsafeCell::new(internal) })
         })
     }
 
     fn internal_cell(&self) -> &RefCell<Internal> {
         if self.gc.get() & HAS_INTERNAL != 0 {
-            let p = INTERNALS.with(|m| m.borrow().get(&self.id).map(|b| &**b as *const RefCell<Internal>));
-            if let Some(p) = p {
-                // SAFETY: the entry is boxed and only removed when this
-                // object is dropped, so it outlives `&self`.
-                return unsafe { &*p };
+            // SAFETY: the box is only taken out by take_internal (the cycle
+            // collector, with no borrow of it live) or when the object drops.
+            if let Some(b) = unsafe { (*self.internal.get()).as_deref() } {
+                return b;
             }
         }
         NO_INTERNAL.with(|n| *n)
@@ -774,7 +769,8 @@ impl Obj {
         if self.gc.get() & HAS_INTERNAL == 0 {
             return None;
         }
-        INTERNALS.try_with(|m| m.borrow_mut().remove(&self.id)).ok().flatten()
+        // SAFETY: see internal_cell.
+        unsafe { (*self.internal.get()).take() }
     }
 
     pub fn set_destructed(&self) {
@@ -796,6 +792,7 @@ impl Obj {
                 // (Cloned here, not passed in: a Vec handed over by value
                 // is reread right after being written, which stalls.)
                 std::ptr::addr_of_mut!((*p).props).write(RefCell::new(crate::props::Props::from_template(class.shape.clone(), template)));
+                std::ptr::addr_of_mut!((*p).internal).write(std::cell::UnsafeCell::new(None));
                 rc.assume_init()
             }
         })
@@ -849,7 +846,8 @@ impl Obj {
             *self.internal_cell().borrow_mut() = i;
             return;
         }
-        INTERNALS.with(|m| m.borrow_mut().insert(self.id, Box::new(RefCell::new(i))));
+        // SAFETY: no state yet, so nothing borrows it.
+        unsafe { *self.internal.get() = Some(Box::new(RefCell::new(i))) };
         self.gc.set(self.gc.get() | HAS_INTERNAL);
     }
 
@@ -876,8 +874,8 @@ impl Obj {
         // goes back to the free list (so the handle is the next one reused).
         self.props.get_mut().drop_values();
         if self.gc.get() & HAS_INTERNAL != 0 {
-            // Dropped outside the map borrow: it can free other objects.
-            let st = INTERNALS.try_with(|m| m.borrow_mut().remove(&self.id)).ok().flatten();
+            // Taken out first: dropping it can free other objects.
+            let st = self.internal.get_mut().take();
             drop(st);
         }
         crate::gc::release(self, false);
@@ -900,6 +898,7 @@ impl Drop for Obj {
                 gc: Cell::new(DESTRUCTED | (self.gc.get() & (HAS_INTERNAL | SEQ_MASK))),
                 class: self.class.clone(),
                 props: RefCell::new(std::mem::take(self.props.get_mut())),
+                internal: std::cell::UnsafeCell::new(self.internal.get_mut().take()),
             });
             crate::gc::register(&o);
             if DESTRUCT_QUEUE.try_with(|q| q.borrow_mut().push(o)).is_ok() {
