@@ -929,6 +929,10 @@ pub unsafe extern "C" fn rt_place_update(
                 if let Some(v) = cur.filter(|v| !v.is_null()) {
                     return Ok(v);
                 }
+                // Without a value: only the check (null = assign next).
+                if rhs.is_null() {
+                    return Ok(Value::Null);
+                }
                 ((*rhs).clone(), (*rhs).clone())
             }
             m => {

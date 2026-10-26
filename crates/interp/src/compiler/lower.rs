@@ -2722,6 +2722,11 @@ impl<'a> Lower<'a> {
         let (root, name, keys) = self.place(target, false)?;
         let (np, nl) = name;
         let (kslot, kn, kids) = keys;
+        if mode == binop_code(BinOp::Coalesce) as i64 {
+            if let Some(value) = value {
+                return self.place_coalesce(root, (np, nl), (kslot, kn, kids), value);
+            }
+        }
         let rhs = match value {
             Some(v) => {
                 let v = self.expr(v)?;
@@ -2744,6 +2749,44 @@ impl<'a> Lower<'a> {
         self.release_ids(&kids);
         self.release_root(root);
         Ok(r)
+    }
+
+    /// `place ??= value`: the value is only evaluated (and assigned) when
+    /// the place is unset or null.
+    fn place_coalesce(&mut self, root: Root, name: (CValue, CValue), keys: (StackSlot, usize, Vec<usize>), value: &'static Expr) -> L<Op> {
+        let (np, nl) = name;
+        let (kslot, kn, kids) = keys;
+        let mode = binop_code(BinOp::Coalesce) as i64;
+        let ka = self.b.ins().stack_addr(types::I64, kslot, 0);
+        let knv = self.iconst(kn as i64);
+        let m = self.iconst(mode);
+        let none = self.iconst(0);
+        let rootp = root.addr;
+        let t = self.alloc_temp();
+        let ta = self.temp_addr(t);
+        self.call_checked("rt_place_update", &[self.cx, rootp, np, nl, ka, knv, m, none, ta]);
+        let tg = self.load_tag(ta);
+        let is_null = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::NULL as i64);
+        let (set, done) = (self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(is_null, set, &[], done, &[]);
+        self.b.switch_to_block(set);
+        let v = self.expr(value)?;
+        let v = self.materialize(v);
+        let va = self.addr(v).unwrap();
+        let ka = self.b.ins().stack_addr(types::I64, kslot, 0);
+        let knv = self.iconst(kn as i64);
+        let m = self.iconst(mode);
+        let ta = self.temp_addr(t);
+        self.clear(ta);
+        let ta = self.temp_addr(t);
+        self.call_checked("rt_place_update", &[self.cx, rootp, np, nl, ka, knv, m, va, ta]);
+        self.release(v);
+        self.b.ins().jump(done, &[]);
+        self.b.switch_to_block(done);
+        self.release_ids(&kids);
+        self.release_root(root);
+        let ta = self.temp_addr(t);
+        Ok(Op::Ptr(ta, Some(t)))
     }
 
     fn incdec_local(&mut self, expr: &'static Expr, inc: bool, prefix: bool, want: bool) -> L<Op> {

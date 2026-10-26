@@ -1,0 +1,42 @@
+eval 1
+eval 3
+int(1)
+array(2) {
+  ["k"]=>
+  int(3)
+  ["n"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+bool(true)
+int(3)
+eval 1
+eval 3
+int(1)
+array(2) {
+  ["k"]=>
+  int(3)
+  ["n"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+bool(true)
+int(3)
+eval 1
+eval 3
+int(1)
+array(2) {
+  ["k"]=>
+  int(3)
+  ["n"]=>
+  array(1) {
+    [0]=>
+    int(1)
+  }
+}
+bool(true)
+int(3)
