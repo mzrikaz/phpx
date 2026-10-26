@@ -9,51 +9,6 @@ use std::sync::atomic::Ordering::Relaxed;
 
 pub struct Counting;
 
-// Per-thread counters (no atomic read-modify-write on every allocation):
-// the limit applies to the interpreter's thread, like PHP's per-request
-// accounting. Const-initialized cells have no destructor, so they're safe
-// to touch from the allocator at any point of a thread's life.
-// Signed: a thread can free memory another thread allocated (it then goes
-// negative, which counts as zero).
-thread_local! {
-    static USED_C: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
-    static PEAK_C: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
-    /// Bytes not charged to the script (parsed code).
-    static EXCLUDED_C: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
-}
-// The limit, like the counters, is per thread (each server worker's
-// request has its own memory_limit).
-thread_local! {
-    static LIMIT: Cell<usize> = const { Cell::new(usize::MAX) };
-    /// memory_limit as configured (for messages).
-    static CONFIGURED: Cell<usize> = const { Cell::new(usize::MAX) };
-    static OVER: Cell<bool> = const { Cell::new(false) };
-    /// Size of the allocation that crossed the limit.
-    static TRIED: Cell<usize> = const { Cell::new(0) };
-}
-
-#[global_allocator]
-static GLOBAL: Counting = Counting;
-
-#[inline]
-fn charge(size: usize) {
-    let u = USED_C.with(|c| {
-        let u = c.get() + size as isize;
-        c.set(u);
-        u
-    });
-    if u > PEAK_C.with(|p| p.get()) {
-        PEAK_C.with(|p| p.set(u));
-        let charged = (u - EXCLUDED_C.with(|e| e.get())).max(0) as usize;
-        if charged > LIMIT.with(|l| l.get()) && !OVER.with(|o| o.get()) {
-            OVER.with(|o| o.set(true));
-            TRIED.with(|t| t.set(size));
-            // Reported at the next statement boundary.
-            crate::value::destruct_pending().store(true, Relaxed);
-        }
-    }
-}
-
 // Small blocks (most values: strings, arrays, objects) come from per-thread
 // free lists of 16-byte size classes, carved from larger chunks, like PHP's
 // zend_mm bins: no per-block header, no rounding beyond 16 bytes, and a
@@ -64,10 +19,68 @@ const CLASSES: usize = 16;
 const MAX_SMALL: usize = CLASSES * 16;
 const CHUNK: usize = 32 * 1024;
 
+/// A thread's allocator state, in one thread-local so an allocation looks
+/// it up once (on macOS each thread-local access is a call).
+///
+/// The counters are per thread (no atomic read-modify-write on every
+/// allocation), and so is the limit: it applies to the interpreter's
+/// thread, like PHP's per-request accounting (each server worker's request
+/// has its own memory_limit). Signed: a thread can free memory another
+/// thread allocated (it then goes negative, which counts as zero).
+/// Const-initialized, with no destructor, so it's safe to touch from the
+/// allocator at any point of a thread's life.
+struct Heap {
+    /// Free-list heads, one per size class.
+    free: [Cell<*mut u8>; CLASSES],
+    used: Cell<isize>,
+    peak: Cell<isize>,
+    /// Bytes not charged to the script (parsed code).
+    excluded: Cell<isize>,
+    limit: Cell<usize>,
+    /// memory_limit as configured (for messages).
+    configured: Cell<usize>,
+    over: Cell<bool>,
+    /// Size of the allocation that crossed the limit.
+    tried: Cell<usize>,
+}
+
 thread_local! {
-    /// Free-list heads, one per size class (one cell each: an alloc or free
-    /// touches only its own).
-    static FREE: [std::cell::Cell<*mut u8>; CLASSES] = const { [const { std::cell::Cell::new(std::ptr::null_mut()) }; CLASSES] };
+    static HEAP: Heap = const {
+        Heap {
+            free: [const { Cell::new(std::ptr::null_mut()) }; CLASSES],
+            used: Cell::new(0),
+            peak: Cell::new(0),
+            excluded: Cell::new(0),
+            limit: Cell::new(usize::MAX),
+            configured: Cell::new(usize::MAX),
+            over: Cell::new(false),
+            tried: Cell::new(0),
+        }
+    };
+}
+
+#[global_allocator]
+static GLOBAL: Counting = Counting;
+
+#[inline]
+fn charge(h: &Heap, size: usize) {
+    let u = h.used.get() + size as isize;
+    h.used.set(u);
+    if u > h.peak.get() {
+        h.peak.set(u);
+        let charged = (u - h.excluded.get()).max(0) as usize;
+        if charged > h.limit.get() && !h.over.get() {
+            h.over.set(true);
+            h.tried.set(size);
+            // Reported at the next statement boundary.
+            crate::value::destruct_pending().store(true, Relaxed);
+        }
+    }
+}
+
+#[inline]
+fn uncharge(h: &Heap, size: usize) {
+    h.used.set(h.used.get() - size as isize);
 }
 
 #[inline]
@@ -81,19 +94,17 @@ fn class_of(l: &Layout) -> Option<usize> {
 }
 
 #[inline]
-unsafe fn small_alloc(c: usize) -> *mut u8 {
-    FREE.with(|f| {
-        let head = &f[c];
-        let mut p = head.get();
+unsafe fn small_alloc(h: &Heap, c: usize) -> *mut u8 {
+    let head = &h.free[c];
+    let mut p = head.get();
+    if p.is_null() {
+        p = refill(c);
         if p.is_null() {
-            p = refill(c);
-            if p.is_null() {
-                return p;
-            }
+            return p;
         }
-        head.set(*(p as *mut *mut u8));
-        p
-    })
+    }
+    head.set(*(p as *mut *mut u8));
+    p
 }
 
 /// Carve a new chunk into blocks of class `c`; returns the list head.
@@ -114,12 +125,10 @@ unsafe fn refill(c: usize) -> *mut u8 {
 }
 
 #[inline]
-unsafe fn small_free(p: *mut u8, c: usize) {
-    FREE.with(|f| {
-        let head = &f[c];
-        *(p as *mut *mut u8) = head.get();
-        head.set(p);
-    })
+unsafe fn small_free(h: &Heap, p: *mut u8, c: usize) {
+    let head = &h.free[c];
+    *(p as *mut *mut u8) = head.get();
+    head.set(p);
 }
 
 /// Bytes a block really takes (small blocks: their size class).
@@ -131,49 +140,50 @@ fn block_size(l: &Layout) -> usize {
     }
 }
 
-#[inline]
-fn uncharge(size: usize) {
-    USED_C.with(|c| c.set(c.get() - size as isize));
-}
-
 unsafe impl GlobalAlloc for Counting {
     #[inline]
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-        let p = match class_of(&l) {
-            Some(c) => small_alloc(c),
-            None => System.alloc(l),
-        };
-        if !p.is_null() {
-            charge(block_size(&l));
-        }
-        p
+        HEAP.with(|h| {
+            let p = match class_of(&l) {
+                Some(c) => small_alloc(h, c),
+                None => System.alloc(l),
+            };
+            if !p.is_null() {
+                charge(h, block_size(&l));
+            }
+            p
+        })
     }
 
     #[inline]
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
-        let p = match class_of(&l) {
-            Some(c) => {
-                let p = small_alloc(c);
-                if !p.is_null() {
-                    std::ptr::write_bytes(p, 0, l.size());
+        HEAP.with(|h| {
+            let p = match class_of(&l) {
+                Some(c) => {
+                    let p = small_alloc(h, c);
+                    if !p.is_null() {
+                        std::ptr::write_bytes(p, 0, l.size());
+                    }
+                    p
                 }
-                p
+                None => System.alloc_zeroed(l),
+            };
+            if !p.is_null() {
+                charge(h, block_size(&l));
             }
-            None => System.alloc_zeroed(l),
-        };
-        if !p.is_null() {
-            charge(block_size(&l));
-        }
-        p
+            p
+        })
     }
 
     #[inline]
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
-        match class_of(&l) {
-            Some(c) => small_free(p, c),
-            None => System.dealloc(p, l),
-        }
-        uncharge(block_size(&l));
+        HEAP.with(|h| {
+            match class_of(&l) {
+                Some(c) => small_free(h, p, c),
+                None => System.dealloc(p, l),
+            }
+            uncharge(h, block_size(&l));
+        })
     }
 
     #[inline]
@@ -185,11 +195,13 @@ unsafe impl GlobalAlloc for Counting {
             (None, None) => {
                 let q = System.realloc(p, l, new);
                 if !q.is_null() {
-                    if new >= l.size() {
-                        charge(new - l.size());
-                    } else {
-                        uncharge(l.size() - new);
-                    }
+                    HEAP.with(|h| {
+                        if new >= l.size() {
+                            charge(h, new - l.size());
+                        } else {
+                            uncharge(h, l.size() - new);
+                        }
+                    });
                 }
                 q
             }
@@ -210,51 +222,51 @@ unsafe impl GlobalAlloc for Counting {
 /// The limit was crossed and not yet reported (code that produces a lot
 /// of data in one go, like var_dump, stops early).
 pub fn over() -> bool {
-    OVER.with(|o| o.get())
+    HEAP.with(|h| h.over.get())
 }
 
 /// Bytes charged to the script now.
-fn raw(c: &'static std::thread::LocalKey<std::cell::Cell<isize>>) -> isize {
-    c.with(|c| c.get())
-}
-
 pub fn used() -> usize {
-    (raw(&USED_C) - raw(&EXCLUDED_C)).max(0) as usize
+    HEAP.with(|h| (h.used.get() - h.excluded.get()).max(0) as usize)
 }
 
 pub fn peak() -> usize {
-    (raw(&PEAK_C) - raw(&EXCLUDED_C)).max(0) as usize
+    HEAP.with(|h| (h.peak.get() - h.excluded.get()).max(0) as usize)
 }
 
 /// Raw allocator total on this thread (for measuring what to exclude).
 pub fn raw_used() -> usize {
-    raw(&USED_C).max(0) as usize
+    HEAP.with(|h| h.used.get().max(0) as usize)
 }
 
 pub fn exclude(bytes: usize) {
-    EXCLUDED_C.with(|e| e.set(e.get() + bytes as isize));
+    HEAP.with(|h| h.excluded.set(h.excluded.get() + bytes as isize));
 }
 
 /// Run `f` (the native compiler) outside the script's accounting: what
 /// it allocates, keeps or frees is excluded, and its peak doesn't count.
 pub fn uncharged<T>(f: impl FnOnce() -> T) -> T {
-    let (used, peak) = (raw(&USED_C), raw(&PEAK_C));
+    let (used, peak) = HEAP.with(|h| (h.used.get(), h.peak.get()));
     // Excluding everything up front keeps the limit from tripping meanwhile.
     let headroom = isize::MAX / 4;
-    EXCLUDED_C.with(|e| e.set(e.get() + headroom));
+    HEAP.with(|h| h.excluded.set(h.excluded.get() + headroom));
     let r = f();
-    let grown = raw(&USED_C) - used;
-    EXCLUDED_C.with(|e| e.set(e.get() - headroom + grown));
-    PEAK_C.with(|p| p.set(peak.max(raw(&USED_C))));
+    HEAP.with(|h| {
+        let grown = h.used.get() - used;
+        h.excluded.set(h.excluded.get() - headroom + grown);
+        h.peak.set(peak.max(h.used.get()));
+    });
     r
 }
 
 /// (configured, enforced); None = unlimited.
 pub fn set_limit(limit: Option<(usize, usize)>) {
-    CONFIGURED.with(|c| c.set(limit.map_or(usize::MAX, |l| l.0)));
-    LIMIT.with(|c| c.set(limit.map_or(usize::MAX, |l| l.1)));
+    HEAP.with(|h| {
+        h.configured.set(limit.map_or(usize::MAX, |l| l.0));
+        h.limit.set(limit.map_or(usize::MAX, |l| l.1));
+    });
     if limit.is_none_or(|l| used() <= l.1) {
-        OVER.with(|o| o.set(false));
+        HEAP.with(|h| h.over.set(false));
     }
 }
 
@@ -262,19 +274,21 @@ pub fn set_limit(limit: Option<(usize, usize)>) {
 /// Clears the flag and lifts the limit so shutdown code can run (PHP does
 /// the same).
 pub fn take_over() -> Option<(usize, usize)> {
-    if !OVER.with(|o| o.replace(false)) {
-        return None;
-    }
-    LIMIT.with(|l| l.set(usize::MAX));
-    Some((CONFIGURED.with(|c| c.get()), TRIED.with(|t| t.get())))
+    HEAP.with(|h| {
+        if !h.over.replace(false) {
+            return None;
+        }
+        h.limit.set(usize::MAX);
+        Some((h.configured.get(), h.tried.get()))
+    })
 }
 
 /// Would allocating `bytes` more exceed the limit? Some(limit) if so.
 /// Built-ins that allocate on behalf of the script (str_repeat, ...) check
 /// first, so a huge request fails cleanly instead of exhausting the host.
 pub fn would_exceed(bytes: usize) -> Option<usize> {
-    let l = LIMIT.with(|l| l.get());
-    (l != usize::MAX && used().saturating_add(bytes) > l).then(|| CONFIGURED.with(|c| c.get()))
+    let (l, configured) = HEAP.with(|h| (h.limit.get(), h.configured.get()));
+    (l != usize::MAX && used().saturating_add(bytes) > l).then_some(configured)
 }
 
 /// "128M" / "1G" / "512K" / "-1" / bytes, like PHP's ini quantity parsing.
