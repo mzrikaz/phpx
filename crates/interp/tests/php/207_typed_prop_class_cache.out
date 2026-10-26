@@ -1,0 +1,12 @@
+Cannot assign X to property Typed::$p of type int
+int(5)
+int(6)
+Y
+Cannot assign stdClass to property Holder::$x of type ?X
+Cannot assign int to property Holder::$x of type ?X
+Cannot assign X to property Typed::$p of type int
+int(5)
+int(6)
+Y
+Cannot assign stdClass to property Holder::$x of type ?X
+Cannot assign int to property Holder::$x of type ?X

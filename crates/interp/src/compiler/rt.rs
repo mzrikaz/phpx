@@ -58,8 +58,10 @@ pub struct LocalsSpec {
     pub ret_quick: (Quick, bool),
     /// Class-typed parameters and return type: the (object class, static
     /// class) last accepted unchanged, which the same check accepts again.
-    pub param_ok: Vec<std::cell::Cell<(usize, usize)>>,
-    pub ret_ok: std::cell::Cell<(usize, usize)>,
+    /// Held strongly (a class's address can't be reused while cached)
+    /// and cleared for each request.
+    pub param_ok: Vec<ClassPair>,
+    pub ret_ok: ClassPair,
     /// Uses func_get_args()/func_num_args(): binding keeps the arguments
     /// in the frame.
     pub func_args: bool,
@@ -73,18 +75,17 @@ pub unsafe extern "C" fn rt_check_ret(c: *mut Cx, out: *mut Value, spec: *const 
     if Quick::accepts(spec.ret_quick, &*out) {
         return 0;
     }
-    let key = obj_type_key(&*out, f);
-    if key.is_some_and(|k| k == spec.ret_ok.get()) {
+    if spec.ret_ok.matches(&*out, f) {
         return 0;
     }
     let Some(ty) = spec.ret else { return 0 };
     let v = take(out);
-    let given = if key.is_some() { Some(v.clone()) } else { None };
+    let given = if matches!(v, Value::Object(_)) { Some(v.clone()) } else { None };
     match it.check_return_type(ty, v, &spec.ctx, spec.class.as_ref(), f.static_class.as_ref(), &spec.display) {
         Ok(v) => {
-            if let (Some(k), Some(Value::Object(g)), Value::Object(o)) = (key, &given, &v) {
+            if let (Some(Value::Object(g)), Value::Object(o)) = (&given, &v) {
                 if Rc::ptr_eq(g, o) {
-                    spec.ret_ok.set(k);
+                    spec.ret_ok.remember(o, f);
                 }
             }
             put(out, v);
@@ -97,13 +98,36 @@ pub unsafe extern "C" fn rt_check_ret(c: *mut Cx, out: *mut Value, spec: *const 
     }
 }
 
-/// For an object: (its class, the frame's static class), the inputs a
-/// class-typed check depends on (`static` resolves against the latter).
-#[inline]
-fn obj_type_key(v: &Value, f: &Frame) -> Option<(usize, usize)> {
-    match v {
-        Value::Object(o) => Some((Rc::as_ptr(&o.class) as usize, f.static_class.as_ref().map_or(0, |c| Rc::as_ptr(c) as usize))),
-        _ => None,
+/// A class-typed check's last accepted input: (the object's class, the
+/// frame's static class, which `static` resolves against). The classes
+/// are held, so their addresses can't be reused while cached.
+#[derive(Default)]
+pub struct ClassPair(std::cell::RefCell<Option<(Rc<crate::class::Class>, Option<Rc<crate::class::Class>>)>>);
+
+impl ClassPair {
+    #[inline]
+    fn matches(&self, v: &Value, f: &Frame) -> bool {
+        let Value::Object(o) = v else { return false };
+        match &*self.0.borrow() {
+            Some((c, sc)) => Rc::ptr_eq(c, &o.class) && sc.as_ref().map(Rc::as_ptr) == f.static_class.as_ref().map(Rc::as_ptr),
+            None => false,
+        }
+    }
+
+    fn remember(&self, o: &Obj, f: &Frame) {
+        *self.0.borrow_mut() = Some((o.class.clone(), f.static_class.clone()));
+    }
+
+    pub fn clear(&self) {
+        *self.0.borrow_mut() = None;
+    }
+}
+
+impl LocalsSpec {
+    /// Forget cached classes (a new request: its classes may be new).
+    pub fn reset(&self) {
+        self.param_ok.iter().for_each(ClassPair::clear);
+        self.ret_ok.clear();
     }
 }
 
@@ -288,16 +312,15 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
                 }
             }
         };
-        let okey = obj_type_key(&v, f);
         let v = match &p.ty {
             _ if Quick::accepts(spec.quick[i], &v) => v,
-            _ if okey.is_some_and(|k| k == spec.param_ok[i].get()) => v,
+            _ if spec.param_ok[i].matches(&v, f) => v,
             Some(ty) if !(v.is_null() && matches!(p.default.as_ref().map(|d| &d.kind), Some(ast::ExprKind::Null))) => {
                 match it.coerce(v.clone(), ty, &spec.ctx, spec.class.as_ref(), f.static_class.as_ref(), strict()) {
                     Ok(Some(nv)) => {
-                        if let (Some(k), Value::Object(a), Value::Object(b)) = (okey, &v, &nv) {
+                        if let (Value::Object(a), Value::Object(b)) = (&v, &nv) {
                             if Rc::ptr_eq(a, b) {
-                                spec.param_ok[i].set(k);
+                                spec.param_ok[i].remember(b, f);
                             }
                         }
                         nv
@@ -1170,7 +1193,7 @@ pub struct PropSite {
     pub tscope: std::cell::Cell<usize>,
     pub tquick: std::cell::Cell<(Quick, bool)>,
     /// Class-typed property: the object class last stored unchanged.
-    pub tclass: std::cell::Cell<usize>,
+    pub tclass: std::cell::RefCell<Option<Rc<crate::class::Class>>>,
 }
 
 impl PropSite {
@@ -1241,7 +1264,7 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
     let site = &*site;
     let v = take(val);
     if let Value::Object(o) = &*obj {
-        let fits = Quick::accepts(site.tquick.get(), &v) || matches!(&v, Value::Object(x) if Rc::as_ptr(&x.class) as usize == site.tclass.get());
+        let fits = Quick::accepts(site.tquick.get(), &v) || matches!((&v, &*site.tclass.borrow()), (Value::Object(x), Some(c)) if Rc::ptr_eq(&x.class, c));
         if site.tshape.get() != 0 && shape_key(o) == Some(site.tshape.get()) && site.tscope.get() == scope_key(f) && fits {
             let mut props = o.props.borrow_mut();
             if let Some(cur) = props.get_index_mut(site.tslot.get()) {
@@ -1262,14 +1285,6 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
     };
     let r = it.set_prop(f, o, site.name, v.clone());
     if r.is_ok() {
-        // An object stored unchanged: its class passes this property's
-        // type check (class types never coerce objects).
-        if let Value::Object(x) = &v {
-            let key = it.prop_key(f, o, site.name);
-            if matches!(o.props.borrow().get(&key), Some(Value::Object(y)) if Rc::ptr_eq(x, y)) {
-                site.tclass.set(Rc::as_ptr(&x.class) as usize);
-            }
-        }
         let decl = o.class.find_prop(&it.prop_key(f, o, site.name));
         let plain = match &decl {
             Some(d) => d.ty.is_none() && !d.readonly && it.member_visible(f.class.as_deref(), d.vis, &d.declaring),
@@ -1287,6 +1302,14 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
                     site.tslot.set(i);
                     site.tscope.set(scope_key(f));
                     site.tquick.set(q);
+                    // A class-typed property that just stored this object
+                    // unchanged accepts its class (class types never
+                    // coerce objects); anything else accepts no class.
+                    let class = match (&v, cur) {
+                        (Value::Object(x), Value::Object(y)) if q.0 == Quick::Other && Rc::ptr_eq(x, y) => Some(x.class.clone()),
+                        _ => None,
+                    };
+                    *site.tclass.borrow_mut() = class;
                 }
             }
         }
@@ -1704,10 +1727,21 @@ pub struct MethodSite {
     /// and compiled entry: a site that sees several classes in turn (an
     /// iterator wrapper's `$this->inner->current()`) finds them without a
     /// lookup by name and without replacing the main entry each call.
-    pub poly: std::cell::RefCell<Vec<(usize, usize, Rc<crate::class::Method>, Option<MethodCache>)>>,
+    pub poly: std::cell::RefCell<Vec<PolyEntry>>,
 }
 
 const POLY: usize = 4;
+
+/// A polymorphic entry: the object class and calling scope it is for,
+/// the method, its compiled entry and declaring class. Classes are held
+/// (not raw pointers), and the entries are dropped for each request.
+pub struct PolyEntry {
+    class: Rc<crate::class::Class>,
+    scope: Option<Rc<crate::class::Class>>,
+    method: Rc<crate::class::Method>,
+    entry: Option<crate::compiler::Entry>,
+    decl_class: Option<Rc<crate::class::Class>>,
+}
 
 impl MethodSite {
     pub fn new(name: &'static str, lname: &'static str) -> MethodSite {
@@ -2008,9 +2042,14 @@ pub unsafe extern "C" fn rt_method_call(
         };
         let key = (Rc::as_ptr(&o.class) as usize, scope as usize);
         if hit.is_none() {
-            let seen = site.poly.borrow().iter().find(|e| (e.0, e.1) == key).map(|e| (e.2.clone(), e.3));
-            if let Some((m, mc)) = seen {
-                return poly_call(it, o, &m, mc, args, n, locals, dst);
+            let seen = site
+                .poly
+                .borrow()
+                .iter()
+                .find(|e| Rc::ptr_eq(&e.class, &o.class) && e.scope.as_ref().map_or(ptr::null(), Rc::as_ptr) == scope)
+                .map(|e| (e.method.clone(), e.entry, e.decl_class.clone()));
+            if let Some((m, entry, decl)) = seen {
+                return poly_call(it, o, &m, entry, decl, args, n, locals, dst);
             }
         }
         let hit = hit.or_else(|| {
@@ -2034,7 +2073,7 @@ pub unsafe extern "C" fn rt_method_call(
                     // Interpreted for now (the interpreter compiles it once
                     // hot), or native; abstract ones take the general path.
                     if matches!(m.body, crate::class::MethodBody::Native(_)) || matches!(m.body, crate::class::MethodBody::User(f) if f.body.is_some()) {
-                        remember_poly(site, key, &m, None);
+                        remember_poly(site, o, f, &m, None, None);
                     }
                     return None;
                 }
@@ -2052,7 +2091,7 @@ pub unsafe extern "C" fn rt_method_call(
             if site.cached.get().is_some() {
                 // The site already serves another class: keep that one and
                 // remember this one beside it.
-                remember_poly(site, key, &m, Some(mc));
+                remember_poly(site, o, f, &m, Some(entry), decl_class.clone());
             }
             site.cached.set(Some(mc));
             site.frame.invalidate();
@@ -2098,30 +2137,41 @@ pub unsafe extern "C" fn rt_method_call(
     method_call_general(it, f, obj, name, args, n, locals, ptr::null(), dst)
 }
 
-fn remember_poly(site: &MethodSite, key: (usize, usize), m: &Rc<crate::class::Method>, mc: Option<MethodCache>) {
+fn remember_poly(site: &MethodSite, o: &Obj, f: &Frame, m: &Rc<crate::class::Method>, entry: Option<crate::compiler::Entry>, decl_class: Option<Rc<crate::class::Class>>) {
     let mut p = site.poly.borrow_mut();
-    if p.iter().any(|e| (e.0, e.1) == key) {
+    let same_scope = |e: &PolyEntry| e.scope.as_ref().map(Rc::as_ptr) == f.class.as_ref().map(Rc::as_ptr);
+    if p.iter().any(|e| Rc::ptr_eq(&e.class, &o.class) && same_scope(e)) {
         return;
     }
     if p.len() == POLY {
         p.remove(0);
     }
-    p.push((key.0, key.1, m.clone(), mc));
+    p.push(PolyEntry { class: o.class.clone(), scope: f.class.clone(), method: m.clone(), entry, decl_class });
 }
 
 /// A call through a site's polymorphic entries: compiled (in a frame of
 /// its own) or interpreted.
 #[allow(clippy::too_many_arguments)]
-unsafe fn poly_call(it: &Interp, o: &Rc<Obj>, m: &Rc<crate::class::Method>, mc: Option<MethodCache>, args: *mut Value, n: u64, locals: *const *mut Value, dst: *mut Value) -> u64 {
-    if let Some(mc) = mc {
+unsafe fn poly_call(
+    it: &Interp,
+    o: &Rc<Obj>,
+    m: &Rc<crate::class::Method>,
+    entry: Option<crate::compiler::Entry>,
+    decl_class: Option<Rc<crate::class::Class>>,
+    args: *mut Value,
+    n: u64,
+    locals: *const *mut Value,
+    dst: *mut Value,
+) -> u64 {
+    if let Some(entry) = entry {
         let crate::class::MethodBody::User(func) = &m.body else { unreachable!() };
         let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
         frame.static_class = Some(o.class.clone());
-        frame.class = rc_from(mc.decl_class);
+        frame.class = decl_class;
         if !m.is_static {
             frame.this = Some(o.clone());
         }
-        if let Some(st) = enter(it, mc.entry, &mut frame, args, n, dst) {
+        if let Some(st) = enter(it, entry, &mut frame, args, n, dst) {
             return st;
         }
     }
@@ -3136,14 +3186,16 @@ impl MethodSite {
         self.frame.invalidate();
         self.cached.set(None);
         *self.interp.borrow_mut() = None;
+        self.poly.borrow_mut().clear();
     }
 }
 
 impl PropSite {
     pub fn reset(&self) {
-        for c in [&self.shape, &self.slot, &self.scope, &self.wshape, &self.wslot, &self.wscope] {
+        for c in [&self.shape, &self.slot, &self.scope, &self.wshape, &self.wslot, &self.wscope, &self.tshape, &self.tslot, &self.tscope] {
             c.set(0);
         }
+        *self.tclass.borrow_mut() = None;
     }
 }
 

@@ -379,6 +379,7 @@ impl Native {
         self.msites.iter().for_each(|s| s.reset());
         self.psites.iter().for_each(|s| s.reset());
         self.csites.iter().for_each(|s| s.reset());
+        self.specs.iter().for_each(|s| s.reset());
         rt::reset_dyn_sites();
     }
 
