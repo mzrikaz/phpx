@@ -133,7 +133,17 @@ thread_local! {
     static EMPTY_NAME: Rc<str> = Rc::from("");
     /// Parsed files by path (syntax trees are immutable, so they outlive
     /// any one interpreter on this thread).
-    static PARSED: RefCell<HashMap<PathBuf, (&'static str, &'static ast::File)>> = RefCell::new(HashMap::new());
+    /// The stamp (see `file_stamp`) is what an include last saw on disk.
+    static PARSED: RefCell<HashMap<PathBuf, (Option<FileStamp>, &'static str, &'static ast::File)>> = RefCell::new(HashMap::new());
+}
+
+/// A file's modification time, size and inode: unchanged means the same
+/// content (how opcache validates its cache, without reading the file).
+type FileStamp = (i64, i64, u64, u64);
+
+fn file_stamp(m: &std::fs::Metadata) -> FileStamp {
+    use std::os::unix::fs::MetadataExt;
+    (m.mtime(), m.mtime_nsec(), m.size(), m.ino())
 }
 
 /// A function's variables. Keys borrow from the (leaked) AST: phpx has no
@@ -309,6 +319,10 @@ impl Frame {
 
 pub struct Interp {
     pub files: RefCell<Vec<FileInfo>>,
+    /// Current id of each file path.
+    file_ids: RefCell<FxHashMap<PathBuf, usize>>,
+    /// Namespace segments of a file's top level, by file id.
+    segments: RefCell<FxHashMap<usize, Rc<Vec<(&'static [Stmt], Rc<NsCtx>)>>>>,
     pub functions: RefCell<FxHashMap<Rc<str>, Rc<UserFn>>>,
     pub builtins: FxHashMap<&'static str, BuiltinFn>,
     /// Functions found for string callables ('strlen', 'App\\helper').
@@ -407,6 +421,8 @@ impl Interp {
             files: RefCell::new(vec![]),
             functions: RefCell::new(FxHashMap::default()),
             str_callables: RefCell::new(FxHashMap::default()),
+            file_ids: RefCell::new(FxHashMap::default()),
+            segments: RefCell::new(FxHashMap::default()),
             arg_names: RefCell::new(FxHashMap::default()),
             builtins: crate::builtins::table().into_iter().collect(),
             natives: crate::native::table(),
@@ -613,9 +629,9 @@ impl Interp {
     pub fn parse_file(&self, path: &Path, src: String) -> Result<(usize, &'static ast::File), String> {
         // Same file, same content: reuse its syntax tree (across includes,
         // and across the requests a server worker thread runs).
-        let cached = PARSED.with(|p| p.borrow().get(path).filter(|(s, _)| **s == *src).copied());
+        let cached = PARSED.with(|p| p.borrow().get(path).filter(|(_, s, _)| **s == *src).map(|e| (e.1, e.2)));
         if let Some((s, file)) = cached {
-            return Ok((self.add_file(path.to_path_buf(), s), file));
+            return Ok((self.file_id(path, s), file));
         }
         // Parsed code lives for the whole run (like opcache): not charged
         // to memory_limit.
@@ -628,7 +644,7 @@ impl Interp {
             None => phpx_syntax::check(src),
         };
         crate::alloc::exclude(crate::alloc::raw_used().saturating_sub(before));
-        let id = self.add_file(path.to_path_buf(), src);
+        let id = self.file_id(path, src);
         let errors: Vec<String> = diags
             .iter()
             .filter(|d| d.is_error())
@@ -638,8 +654,42 @@ impl Interp {
             return Err(errors.concat());
         }
         let file: &'static ast::File = Box::leak(Box::new(file));
-        PARSED.with(|p| p.borrow_mut().insert(path.to_path_buf(), (src, file)));
+        PARSED.with(|p| p.borrow_mut().insert(path.to_path_buf(), (None, src, file)));
         Ok((id, file))
+    }
+
+    /// Parse the file at `read` (canonical path `canon`) for an include:
+    /// its syntax tree is reused without reading while the file is
+    /// unchanged on disk.
+    pub fn load_file(&self, read: &Path, canon: &Path) -> std::io::Result<Result<(usize, &'static ast::File), String>> {
+        let stamp = file_stamp(&std::fs::metadata(read)?);
+        let hit = PARSED.with(|p| p.borrow().get(canon).filter(|e| e.0 == Some(stamp)).map(|e| (e.1, e.2)));
+        if let Some((src, file)) = hit {
+            return Ok(Ok((self.file_id(canon, src), file)));
+        }
+        let bytes = std::fs::read(read)?;
+        let r = self.parse_file(canon, String::from_utf8_lossy(&bytes).into_owned());
+        if r.is_ok() {
+            PARSED.with(|p| {
+                if let Some(e) = p.borrow_mut().get_mut(canon) {
+                    e.0 = Some(stamp);
+                }
+            });
+        }
+        Ok(r)
+    }
+
+    /// The id of `path` with source `src`: the same file included again
+    /// keeps its id (and everything cached per file id).
+    fn file_id(&self, path: &Path, src: &'static str) -> usize {
+        if let Some(&id) = self.file_ids.borrow().get(path) {
+            if self.files.borrow().get(id).is_some_and(|f| std::ptr::eq(f.src, src)) {
+                return id;
+            }
+        }
+        let id = self.add_file(path.to_path_buf(), src);
+        self.file_ids.borrow_mut().insert(path.to_path_buf(), id);
+        id
     }
 
     /// Execute a file's top level in `frame` (shared scope, like `include`).
@@ -668,12 +718,21 @@ impl Interp {
             }
             fs[file] = strict;
         }
-        let segments = self.namespace_segments(stmts, file, strict);
-        for (body, ctx) in &segments {
+        // (The main script's statements are split once per file id too.)
+        let cached = self.segments.borrow().get(&file).filter(|s| s.first().is_none_or(|x| x.0.as_ptr() == stmts.as_ptr())).cloned();
+        let segments = match cached {
+            Some(s) => s,
+            None => {
+                let s = Rc::new(self.namespace_segments(stmts, file, strict));
+                self.segments.borrow_mut().insert(file, s.clone());
+                s
+            }
+        };
+        for (body, ctx) in segments.iter() {
             self.hoist(body, ctx)?;
         }
-        for (body, ctx) in segments {
-            frame.ctx = ctx;
+        for (body, ctx) in segments.iter() {
+            frame.ctx = ctx.clone();
             let flow = match self.native_top_level(frame, body) {
                 Some(r) => r?,
                 None => self.exec_block(frame, body)?,

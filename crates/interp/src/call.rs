@@ -2331,12 +2331,14 @@ impl Interp {
         // Composer's own autoloader runs by default (apps use its ClassLoader:
         // `$loader = require 'vendor/autoload.php'`, getRegisteredLoaders());
         // PHPX_NATIVE_COMPOSER=1 swaps in the built-in one.
-        if std::env::var_os("PHPX_NATIVE_COMPOSER").is_some_and(|v| v == "1") && canon.ends_with("vendor/autoload.php") && canon.parent().is_some_and(|d| d.join("composer/autoload_psr4.php").is_file()) {
+        static NATIVE_COMPOSER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *NATIVE_COMPOSER.get_or_init(|| std::env::var_os("PHPX_NATIVE_COMPOSER").is_some_and(|v| v == "1"))
+            && canon.ends_with("vendor/autoload.php")
+            && canon.parent().is_some_and(|d| d.join("composer/autoload_psr4.php").is_file())
+        {
             return self.composer_boot(f, &canon);
         }
-        let src = std::fs::read(&found).map_err(|e| self.error("Error", &e.to_string()))?;
-        let src = String::from_utf8_lossy(&src).into_owned();
-        match self.parse_file(&canon, src) {
+        match self.load_file(&found, &canon).map_err(|e| self.error("Error", &e.to_string()))? {
             Ok((id, file)) => {
                 self.register_strict(id, file);
                 self.run_file_in(f, file, id)

@@ -43,14 +43,15 @@ extern "C" fn on_sample(_: libc::c_int) {
     let mut at = start;
     // A sample: one depth byte, then per frame (innermost first) a length
     // byte and the name.
-    let mut frames: [(&[u8], &[u8]); MAX_DEPTH] = [(b"", b""); MAX_DEPTH];
+    let mut frames: [(&[u8], &[u8], bool); MAX_DEPTH] = [(b"", b"", false); MAX_DEPTH];
     let mut n = 0;
     let mut r = crate::trace::top();
     while let Some(rec) = unsafe { r.as_ref() } {
         if n == MAX_DEPTH {
             break;
         }
-        frames[n] = unsafe { rec_name(rec) };
+        let (class, func) = unsafe { rec_name(rec) };
+        frames[n] = (class, func, rec.spec.is_null());
         n += 1;
         r = rec.prev;
     }
@@ -58,12 +59,14 @@ extern "C" fn on_sample(_: libc::c_int) {
         DROPPED.fetch_add(1, Ordering::Relaxed);
         return;
     }
-    for (class, func) in &frames[..n] {
+    for (class, func, interp) in &frames[..n] {
         let sep: &[u8] = if class.is_empty() { b"" } else { b"::" };
-        let len = (class.len() + sep.len() + func.len()).min(MAX_NAME);
+        // Interpreted bodies are marked.
+        let mark: &[u8] = if *interp { b" [i]" } else { b"" };
+        let len = (class.len() + sep.len() + func.len() + mark.len()).min(MAX_NAME);
         let mut name = [0u8; MAX_NAME];
         let mut k = 0;
-        for part in [*class, sep, *func] {
+        for part in [*class, sep, *func, mark] {
             for &b in part {
                 if k < len {
                     name[k] = b;
