@@ -1709,8 +1709,9 @@ impl Interp {
             Vis::Public => true,
             Vis::Private => scope.is_some_and(|c| c.php_name().eq_ignore_ascii_case(declaring) || *c.lname == *declaring),
             Vis::Protected => scope.is_some_and(|c| {
-                let d = self.lower.get(declaring);
-                c.php_name().eq_ignore_ascii_case(declaring) || c.is_a(&d) || self.classes.borrow().get(&*d).is_some_and(|dc| dc.is_a(&c.lname))
+                c.php_name().eq_ignore_ascii_case(declaring)
+                    || c.ancestors.iter().any(|a| a.eq_ignore_ascii_case(declaring))
+                    || self.classes.borrow().get(&*self.lower.get(declaring)).is_some_and(|dc| dc.is_a(&c.lname))
             }),
         }
     }
