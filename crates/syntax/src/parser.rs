@@ -574,6 +574,12 @@ impl Parser {
         if self.is_class_decl() {
             return Ok(StmtKind::Class(Box::new(self.class_decl(attrs)?)));
         }
+        // PHP 8.5 attributes on a global constant; the attributes are dropped.
+        if self.eat_kw("const") {
+            let items = self.const_items()?;
+            self.end_stmt()?;
+            return Ok(StmtKind::Const(items));
+        }
         // Attributes on a closure / arrow fn expression statement.
         let start = self.span();
         let e = self.closure_like(attrs, start)?;
