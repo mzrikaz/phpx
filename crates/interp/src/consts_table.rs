@@ -1189,6 +1189,17 @@ pub static CONSTS: &[(&str, C)] = &[
     ("U_STRINGPREP_UNASSIGNED_ERROR", C::I(66561)),
     ("U_STRINGPREP_CHECK_BIDI_ERROR", C::I(66562)),
     ("U_ERROR_LIMIT", C::I(66818)),
+    ("FILEINFO_NONE", C::I(0)),
+    ("FILEINFO_SYMLINK", C::I(2)),
+    ("FILEINFO_MIME", C::I(1040)),
+    ("FILEINFO_MIME_TYPE", C::I(16)),
+    ("FILEINFO_MIME_ENCODING", C::I(1024)),
+    ("FILEINFO_DEVICES", C::I(8)),
+    ("FILEINFO_CONTINUE", C::I(32)),
+    ("FILEINFO_PRESERVE_ATIME", C::I(128)),
+    ("FILEINFO_RAW", C::I(256)),
+    ("FILEINFO_APPLE", C::I(2048)),
+    ("FILEINFO_EXTENSION", C::I(16777216)),
 ];
 
 /// (name, message) of the deprecated ones.

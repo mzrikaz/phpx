@@ -193,3 +193,13 @@ final class AggregateException extends RuntimeException
 
 final class HashContext { private function __construct() {} }
 class __PHP_Incomplete_Class {}
+
+// ---- ext/fileinfo (natives in crates/interp/src/fileinfo.rs) ------------------------------
+
+class finfo
+{
+    public function __construct(int $flags = FILEINFO_NONE, ?string $magic_database = null) {}
+    public function file(string $filename, int $flags = FILEINFO_NONE, $context = null): string|false {}
+    public function buffer(string $string, int $flags = FILEINFO_NONE, $context = null): string|false {}
+    public function set_flags(int $flags): true {}
+}

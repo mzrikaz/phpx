@@ -58,6 +58,7 @@ mod hash_algos;
 mod openssl;
 mod random;
 mod intl;
+mod fileinfo;
 mod db;
 mod pdo;
 mod process;
