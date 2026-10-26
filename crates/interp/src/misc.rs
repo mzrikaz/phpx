@@ -1419,10 +1419,35 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
         Ok(Value::Bool(false))
     });
-    t.insert("getrusage", |_, _, _| {
+    t.insert("getrusage", |it, _, a| {
+        let who = if a.is_empty() { 0 } else { it.to_int(&a[0])? };
+        let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+        let who = if who == 1 { libc::RUSAGE_CHILDREN } else { libc::RUSAGE_SELF };
+        if unsafe { libc::getrusage(who, &mut ru) } != 0 {
+            return Ok(Value::Bool(false));
+        }
         let mut m = PhpArray::new();
-        for k in ["ru_utime.tv_sec", "ru_utime.tv_usec", "ru_stime.tv_sec", "ru_stime.tv_usec", "ru_maxrss"] {
-            m.insert(Key::Str(pstr(k)), Value::Int(0));
+        let fields: [(&str, i64); 17] = [
+            ("ru_oublock", ru.ru_oublock),
+            ("ru_inblock", ru.ru_inblock),
+            ("ru_msgsnd", ru.ru_msgsnd),
+            ("ru_msgrcv", ru.ru_msgrcv),
+            ("ru_maxrss", ru.ru_maxrss),
+            ("ru_ixrss", ru.ru_ixrss),
+            ("ru_idrss", ru.ru_idrss),
+            ("ru_minflt", ru.ru_minflt),
+            ("ru_majflt", ru.ru_majflt),
+            ("ru_nsignals", ru.ru_nsignals),
+            ("ru_nvcsw", ru.ru_nvcsw),
+            ("ru_nivcsw", ru.ru_nivcsw),
+            ("ru_nswap", ru.ru_nswap),
+            ("ru_utime.tv_usec", ru.ru_utime.tv_usec),
+            ("ru_utime.tv_sec", ru.ru_utime.tv_sec),
+            ("ru_stime.tv_usec", ru.ru_stime.tv_usec),
+            ("ru_stime.tv_sec", ru.ru_stime.tv_sec),
+        ];
+        for (k, v) in fields {
+            m.insert(Key::Str(pstr(k)), Value::Int(v));
         }
         Ok(Value::array(m))
     });
