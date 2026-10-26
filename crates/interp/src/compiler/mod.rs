@@ -57,8 +57,9 @@ pub const OSR_ITERATIONS: u32 = 500;
 pub struct Native {
     module: JITModule,
     helpers: HashMap<&'static str, FuncId>,
-    compiled: HashMap<usize, Option<Entry>>,
-    hot: HashMap<usize, u32>,
+    compiled: rustc_hash::FxHashMap<usize, Option<Entry>>,
+    /// Calls so far, and whether the function was checked for loops (OSR).
+    hot: rustc_hash::FxHashMap<usize, (u32, bool)>,
     threshold: u32,
     /// Functions seen running interpreted, for on-stack replacement.
     osr_info: HashMap<usize, Target>,
@@ -371,8 +372,8 @@ impl Native {
         Some(Native {
             module,
             helpers,
-            compiled: HashMap::new(),
-            hot: HashMap::new(),
+            compiled: Default::default(),
+            hot: Default::default(),
             threshold,
             osr_info: HashMap::new(),
             osr: HashMap::new(),
@@ -395,11 +396,12 @@ impl Native {
         if let Some(e) = self.compiled.get(&fn_id) {
             return *e;
         }
-        let n = self.hot.entry(fn_id).or_default();
+        let (n, checked) = self.hot.entry(fn_id).or_default();
         *n += 1;
         if *n < self.threshold {
             // Remembered for on-stack replacement of its loops.
-            if !self.osr_info.contains_key(&fn_id) {
+            if !*checked {
+                *checked = true;
                 let t = mk();
                 if matches!(t.body, Body::Block(b) if has_loop(b)) {
                     self.osr_info.insert(fn_id, t);
