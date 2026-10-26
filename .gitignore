@@ -3,3 +3,15 @@ target/
 /target-base
 /target-asan
 /target-check
+
+# AI assistant files
+.code-review-graph/
+.mcp.json
+.opencode.json
+.windsurfrules
+.cursorrules
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.kiro
+.claude
