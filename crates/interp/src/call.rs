@@ -18,6 +18,54 @@ thread_local! {
     static IN_USE: std::cell::RefCell<Vec<Rc<Class>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// How long a server worker trusts a resolved include (PHP's
+/// opcache.revalidate_freq default).
+const REVALIDATE: std::time::Duration = std::time::Duration::from_secs(2);
+
+thread_local! {
+    /// Server workers: (including file id, or MAX for an absolute path;
+    /// the path as written) -> the file it led to, and when that was
+    /// checked on disk.
+    static RESOLVED: std::cell::RefCell<HashMap<(usize, String), (std::path::PathBuf, std::time::Instant)>> = Default::default();
+}
+
+/// Lets RESOLVED be searched with a borrowed path.
+trait ResolvedKey {
+    fn key(&self) -> (usize, &str);
+}
+
+impl ResolvedKey for (usize, String) {
+    fn key(&self) -> (usize, &str) {
+        (self.0, &self.1)
+    }
+}
+
+impl ResolvedKey for (usize, &str) {
+    fn key(&self) -> (usize, &str) {
+        *self
+    }
+}
+
+impl<'a> std::borrow::Borrow<dyn ResolvedKey + 'a> for (usize, String) {
+    fn borrow(&self) -> &(dyn ResolvedKey + 'a) {
+        self
+    }
+}
+
+impl PartialEq for dyn ResolvedKey + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+
+impl Eq for dyn ResolvedKey + '_ {}
+
+impl std::hash::Hash for dyn ResolvedKey + '_ {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.key().hash(state)
+    }
+}
+
 /// A new request: the classes the last one declared go back to their
 /// state as built (constants unevaluated, static properties unset).
 /// Destructors queued by what they held are dropped, as PHP runs none
@@ -2410,6 +2458,22 @@ impl Interp {
     pub fn include(&self, f: &mut Frame, kind: ast::IncludeKind, path: &str) -> R<Value> {
         use ast::IncludeKind::*;
         let p = std::path::Path::new(path);
+        // A server worker trusts what it found for this include less than
+        // REVALIDATE ago (opcache.revalidate_freq): no stat at all.
+        let key = (if p.is_absolute() { usize::MAX } else { f.ctx.file }, path);
+        if crate::server::sapi() != "cli" {
+            let hit = RESOLVED.with(|r| r.borrow().get(&key as &dyn ResolvedKey).filter(|e| e.1.elapsed() < REVALIDATE).map(|e| e.0.clone()));
+            if let Some(canon) = hit {
+                if let Some((id, file)) = self.parsed_file(&canon) {
+                    if matches!(kind, IncludeOnce | RequireOnce) && self.included.borrow().contains(&canon) {
+                        return Ok(Value::Bool(true));
+                    }
+                    self.included.borrow_mut().insert(canon);
+                    self.register_strict(id, file);
+                    return self.run_file_in(f, file, id);
+                }
+            }
+        }
         let candidates: Vec<std::path::PathBuf> = if p.is_absolute() {
             vec![p.to_path_buf()]
         } else {
@@ -2448,6 +2512,9 @@ impl Interp {
         }
         match self.load_file(&found, &canon).map_err(|e| self.error("Error", &e.to_string()))? {
             Ok((id, file)) => {
+                if crate::server::sapi() != "cli" {
+                    RESOLVED.with(|r| r.borrow_mut().insert((key.0, key.1.to_string()), (canon, std::time::Instant::now())));
+                }
                 self.register_strict(id, file);
                 self.run_file_in(f, file, id)
             }

@@ -758,6 +758,13 @@ impl Interp {
         Ok(r)
     }
 
+    /// The syntax tree already parsed from file `canon` (as last read from
+    /// disk), without checking the file.
+    pub fn parsed_file(&self, canon: &Path) -> Option<(usize, &'static ast::File)> {
+        let (src, file) = PARSED.with(|p| p.borrow().get(canon).filter(|e| e.0.is_some()).map(|e| (e.1, e.2)))?;
+        Some((self.file_id(canon, src), file))
+    }
+
     /// The id of `path` with source `src`: the same file included again
     /// keeps its id (and everything cached per file id).
     fn file_id(&self, path: &Path, src: &'static str) -> usize {
