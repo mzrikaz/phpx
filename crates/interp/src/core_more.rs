@@ -14,8 +14,10 @@ use crate::value::{Key, PhpArray, Value};
 /// Declared classes of `kinds`, in declaration order (built-ins first).
 fn declared(it: &Interp, kinds: &[ClassKind]) -> Value {
     let mut seen: Vec<Rc<Class>> = vec![];
+    // (A class can be registered under several names: count it once.)
+    let mut ids = rustc_hash::FxHashSet::default();
     for c in it.classes.borrow().values() {
-        if kinds.contains(&c.kind) && !c.name.starts_with("class@anonymous") && !seen.iter().any(|s| Rc::ptr_eq(s, c)) {
+        if kinds.contains(&c.kind) && !c.name.starts_with("class@anonymous") && ids.insert(Rc::as_ptr(c)) {
             seen.push(c.clone());
         }
     }
