@@ -4,6 +4,30 @@ What has been built so far, grouped by milestone (most recent first).
 Entries before the first commit (2026-10-25) are reconstructed from the code
 and project notes; later entries follow the git history.
 
+## 2026-10-26 — Engine speed round 2 (logged-in Filament pages)
+
+Measured on logged-in Filament pages (session cookie, warm server):
+request CPU 10–14% below the start of the day; PHP-FPM is still ~1.5x
+ahead. First visit of a page ~22% faster.
+
+- **Arrays**: hash arrays are an entry vector with a hash index only past
+  8 keys (one allocation for typical option/attribute arrays).
+- **Compiler**: string concatenation builds its result once; fast entries
+  for `get_class($o)` and `trim/ltrim/rtrim` with a character list;
+  inline cache for typed property writes; in-place writes to
+  `$this->prop[$k]`; cached class-typed parameter and return checks
+  (`: static` 48 -> 15 ns); file-level code (templates) compiles with a
+  quick code generator (`PHPX_NATIVE_QUICK=0` to disable;
+  `PHPX_NATIVE_OPT`, `PHPX_NATIVE_RA` tune the main one).
+- **Runtime**: loose `==` on strings skips numeric parsing when PHP does;
+  objects keep their native state inline (closure calls no longer hash);
+  `foreach` over a plain `ArrayIterator` (every Laravel collection) reads
+  its storage directly.
+- **Fixes**: `rawurldecode('%+5')` left as is like PHP; element writes to
+  readonly properties report "Cannot indirectly modify".
+- **Tooling**: AddressSanitizer builds (`--cfg phpx_asan`, see
+  docs/testing.md); new differential tests 202–205.
+
 ## 2026-10-26 — Every Filament page renders like PHP
 
 Every GET route of a Laravel 12 + Filament app (admin panel and a

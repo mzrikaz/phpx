@@ -143,3 +143,20 @@ so they are fine).
 phpx-only features (async API) need a polyfill guarded by
 `if (!function_exists('async'))` so PHP produces the reference output;
 see `08_async.php`.
+
+## Memory errors (AddressSanitizer)
+
+phpx has unsafe code (compiled-code helpers, raw object construction,
+the size-class allocator). A crash in drop glue or a value that changes
+by itself is usually memory corruption. Build with ASan on nightly:
+
+```sh
+RUSTFLAGS="--cfg phpx_asan -Zsanitizer=address" CARGO_TARGET_DIR=target-asan \
+  cargo +nightly build -p phpx-cli --target x86_64-unknown-linux-gnu
+ASAN_OPTIONS=detect_leaks=0 target-asan/x86_64-unknown-linux-gnu/debug/phpx script.php
+```
+
+`--cfg phpx_asan` makes the allocator hand every block to the system
+allocator so ASan sees it. If ASan reports nothing yet the process still
+crashes, look for objects built field by field (`Obj::from_template`)
+that miss a newly added field.
