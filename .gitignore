@@ -2,3 +2,4 @@ target/
 /target-prof
 /target-base
 /target-asan
+/target-check
