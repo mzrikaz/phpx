@@ -34,13 +34,13 @@ fn scheme(path: &str) -> Option<String> {
 
 /// The wrapper class for `path`, if a user wrapper handles it.
 pub fn class_for(path: &str) -> Option<String> {
-    // Plain paths belong to "file" (a user wrapper may replace it).
-    let s = scheme(path).unwrap_or_else(|| "file".into());
     WRAPPERS.with(|w| {
         let w = w.borrow();
         if w.is_empty() {
             return None;
         }
+        // Plain paths belong to "file" (a user wrapper may replace it).
+        let s = scheme(path).unwrap_or_else(|| "file".into());
         w.get(&s).cloned()
     })
 }
@@ -96,6 +96,35 @@ pub fn open(it: &Interp, path: &str, mode: &str) -> Option<Result<Value, String>
             Err(String::new())
         }
     })
+}
+
+/// include/require of a user-wrapper path: the whole stream's bytes, or
+/// PHP's failure message. None: not a user-wrapper path.
+pub fn read_for_include(it: &Interp, path: &str, func: &str) -> Option<R<Result<Vec<u8>, String>>> {
+    let class = class_for(path)?;
+    Some((|| {
+        let o = instance(it, &class)?;
+        let opened = crate::interp::slot(Value::Null);
+        let ok = call(it, &o, "stream_open", vec![Value::str(path), Value::str("rb"), Value::Int(0), Value::Ref(opened)], func)?;
+        if !ok.is_some_and(|v| v.truthy()) {
+            return Ok(Err(format!("{func}({path}): Failed to open stream: \"{class}::stream_open\" call failed")));
+        }
+        let mut src = vec![];
+        loop {
+            let (chunk, eof) = read(it, &o, 8192);
+            if let Some(e) = crate::errors::take() {
+                return Err(e);
+            }
+            src.extend_from_slice(&chunk);
+            if eof || chunk.is_empty() {
+                break;
+            }
+        }
+        if has_method(&o, "stream_close") {
+            it.call_method(&o, "stream_close", vec![])?;
+        }
+        Ok(Ok(src))
+    })())
 }
 
 pub fn read(it: &Interp, o: &Rc<Obj>, n: usize) -> (Vec<u8>, bool) {

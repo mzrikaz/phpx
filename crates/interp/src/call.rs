@@ -2500,6 +2500,42 @@ impl Interp {
 
     pub fn include(&self, f: &mut Frame, kind: ast::IncludeKind, path: &str) -> R<Value> {
         use ast::IncludeKind::*;
+        let func = match kind {
+            Include => "include",
+            IncludeOnce => "include_once",
+            Require => "require",
+            RequireOnce => "require_once",
+        };
+        // A path a user stream wrapper serves (stream_wrapper_register()),
+        // like laravel-serializable-closure://: the code is what the
+        // wrapper's stream reads, and the URL is its file name.
+        if let Some(read) = crate::wrappers::read_for_include(self, path, func) {
+            let url = std::path::PathBuf::from(path);
+            let src = match read? {
+                Ok(src) => src,
+                Err(msg) => {
+                    if matches!(kind, Require | RequireOnce) {
+                        return Err(self.error("Error", &format!("Failed opening required '{path}'")));
+                    }
+                    self.warn(&msg);
+                    return Ok(Value::Bool(false));
+                }
+            };
+            if matches!(kind, IncludeOnce | RequireOnce) && self.included.borrow().contains(&url) {
+                return Ok(Value::Bool(true));
+            }
+            self.included.borrow_mut().insert(url.clone());
+            return match self.parse_file(&url, crate::pstr::lossy(&src).into_owned()) {
+                Ok((id, file)) => {
+                    self.register_strict(id, file);
+                    self.run_file_in(f, file, id)
+                }
+                Err(msg) => {
+                    eprint!("{msg}");
+                    Err(Ctrl::Exit(255))
+                }
+            };
+        }
         let p = std::path::Path::new(path);
         // A server worker trusts what it found for this include less than
         // REVALIDATE ago (opcache.revalidate_freq): no stat at all.
@@ -2539,12 +2575,6 @@ impl Interp {
         };
         let found = candidates.into_iter().find(|c| c.is_file());
         let Some(found) = found else {
-            let func = match kind {
-                Include => "include",
-                IncludeOnce => "include_once",
-                Require => "require",
-                RequireOnce => "require_once",
-            };
             if matches!(kind, Require | RequireOnce) {
                 return Err(self.error("Error", &format!("Failed opening required '{path}'")));
             }
