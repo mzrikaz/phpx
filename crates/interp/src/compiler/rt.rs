@@ -828,10 +828,12 @@ pub unsafe extern "C" fn rt_class_const(c: *mut Cx, cref: *const ast::ClassRef, 
             return 0;
         }
     }
-    let r = it.class_const(f, &*cref, name_of(name, len));
+    let cname = name_of(name, len);
+    let r = it.class_const(f, &*cref, cname);
     if let Ok(v) = &r {
-        // Deprecated constants warn on every read.
-        let cacheable = it.class_ref(f, &*cref).is_ok_and(|cls| cls.deprecated_consts.is_empty());
+        // Deprecated constants warn on every read. `X::class` names a
+        // class that need not exist (looking it up would build an error).
+        let cacheable = (cname.eq_ignore_ascii_case("class") && matches!(&*cref, ast::ClassRef::Name(_))) || it.class_ref(f, &*cref).is_ok_and(|cls| cls.deprecated_consts.is_empty());
         if cacheable {
             site.key.set(key);
             *site.cv.borrow_mut() = Some(v.clone());
