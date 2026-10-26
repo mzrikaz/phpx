@@ -16,4 +16,4 @@ path = "src/main.rs"
 [dependencies]
 phpx-syntax = { path = "../syntax" }
 phpx-interp = { path = "../interp" }
-pprof = { version = "0.14", optional = true }
+pprof = { version = "0.14", optional = true, features = ["frame-pointer"] }

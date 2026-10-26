@@ -393,6 +393,11 @@ impl Native {
         // turns it back on when debugging the lowering.
         flags.set("enable_verifier", if std::env::var("PHPX_NATIVE_VERIFY").is_ok() { "true" } else { "false" }).ok()?;
         flags.set("opt_level", "speed").ok()?;
+        // The sampling profiler (PHPX_PROFILE) walks frame pointers through
+        // compiled code.
+        if std::env::var("PHPX_PROFILE").is_ok() {
+            flags.set("preserve_frame_pointers", "true").ok()?;
+        }
         let isa = cranelift_native::builder().ok()?.finish(settings::Flags::new(flags)).ok()?;
         let mut jb = JITBuilder::with_isa(isa, default_libcall_names());
         for (name, ptr, _, _) in HELPERS {
