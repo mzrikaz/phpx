@@ -155,14 +155,33 @@ impl HMap {
                 t.insert_unique(hash_of(key_ref(&k)), i as u32, |&j| hash_of(key_ref(&entries[j as usize].0)));
             }
             None if i >= SCAN_MAX => {
-                self.entries.push((k, v));
+                self.push_entry(k, v);
                 self.build_index();
                 return i;
             }
             None => {}
         }
-        self.entries.push((k, v));
+        self.push_entry(k, v);
         i
+    }
+
+    /// `entries.push((k, v))` without building the pair on the stack: that
+    /// copy reloads it with loads spanning separate stores, which stall
+    /// store-to-load forwarding (a third of an insert's time on Apple M).
+    #[inline(always)]
+    fn push_entry(&mut self, k: Key, v: Value) {
+        let i = self.entries.len();
+        if i == self.entries.capacity() {
+            self.entries.reserve(1);
+        }
+        // SAFETY: capacity > i; both fields are written before the length
+        // covers the slot.
+        unsafe {
+            let p = self.entries.as_mut_ptr().add(i);
+            std::ptr::addr_of_mut!((*p).0).write(k);
+            std::ptr::addr_of_mut!((*p).1).write(v);
+            self.entries.set_len(i + 1);
+        }
     }
 
     fn build_index(&mut self) {
