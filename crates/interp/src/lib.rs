@@ -63,6 +63,7 @@ mod mbcase;
 mod mbcase_table;
 mod db;
 mod pdo;
+mod phpprof;
 mod process;
 mod reflect;
 pub mod server;
@@ -194,6 +195,7 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
     it.register_strict(id, file);
     it.included.borrow_mut().insert(path.to_path_buf());
     let main_it = it.clone();
+    phpprof::start();
     let code = phpx_runtime::block_on(move || {
         // Only the root task gets the big stack; async tasks get the default.
         phpx_runtime::set_stack_size(INTERP_STACK);
@@ -260,6 +262,7 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
         Ok((code, returned_false))
     });
     it.flush();
+    phpprof::finish();
     match code {
         Ok(c) => c,
         Err(e) => {
