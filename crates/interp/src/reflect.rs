@@ -424,16 +424,19 @@ fn find_prop_ast(it: &Interp, decl: &'static ast::Class, ctx: &Rc<NsCtx>, name: 
                     return Some((p.promote.as_ref().unwrap(), p.ty.as_ref(), None, &p.attrs, true, ctx.clone()));
                 }
             }
-            Member::TraitUse { traits, .. } => {
-                for t in traits {
-                    if let Some(tc) = class_by_lname(it, &it.resolve_class_name(ctx, t)) {
-                        if let Some(r) = find_prop_ast(it, tc.decl, &tc.decl_ctx, name) {
-                            return Some(r);
-                        }
+            _ => {}
+        }
+    }
+    // Not declared here: from a trait (the class's own declaration wins).
+    for m in &decl.members {
+        if let Member::TraitUse { traits, .. } = m {
+            for t in traits {
+                if let Some(tc) = class_by_lname(it, &it.resolve_class_name(ctx, t)) {
+                    if let Some(r) = find_prop_ast(it, tc.decl, &tc.decl_ctx, name) {
+                        return Some(r);
                     }
                 }
             }
-            _ => {}
         }
     }
     None
@@ -464,8 +467,26 @@ pub(crate) fn ordered_props(it: &Interp, cls: &Rc<Class>) -> Vec<(Rc<str>, bool,
             _ => None,
         })
     };
+    // Properties from traits: in trait-use order, each trait's in source
+    // order (static or not), then its own traits'.
+    fn trait_order(it: &Interp, decl: &'static ast::Class, ctx: &Rc<NsCtx>, out: &mut Vec<String>) {
+        for m in &decl.members {
+            if let Member::TraitUse { traits, .. } = m {
+                for t in traits {
+                    let Some(tc) = class_by_lname(it, &it.resolve_class_name(ctx, t)) else { continue };
+                    for tm in &tc.decl.members {
+                        if let Member::Property { items, .. } = tm {
+                            out.extend(items.iter().map(|(n, _)| n.name.to_string()));
+                        }
+                    }
+                    trait_order(it, tc.decl, &tc.decl_ctx, out);
+                }
+            }
+        }
+    }
     let mut out: Vec<((usize, usize, usize, usize), (Rc<str>, bool, Rc<Class>, Vis))> = vec![];
     let mut seq = 0;
+    let mut traits_of: Vec<(String, Vec<String>)> = vec![];
     let mut add = |name: &Rc<str>, declaring: Rc<Class>, vis: Vis, is_static: bool| {
         let depth = depth_of(&declaring);
         if depth > 0 && vis == Vis::Private {
@@ -474,7 +495,15 @@ pub(crate) fn ordered_props(it: &Interp, cls: &Rc<Class>) -> Vec<(Rc<str>, bool,
         seq += 1;
         let key = match pos_in(&declaring, name) {
             Some((mi, ii)) => (depth, 0, mi * 1000 + ii, 0),
-            None => (depth, 1, 0, seq),
+            None => {
+                if !traits_of.iter().any(|t| *t.0 == *declaring.lname) {
+                    let mut v = vec![];
+                    trait_order(it, declaring.decl, &declaring.decl_ctx, &mut v);
+                    traits_of.push((declaring.lname.to_string(), v));
+                }
+                let order = &traits_of.iter().find(|t| *t.0 == *declaring.lname).unwrap().1;
+                (depth, 1, order.iter().position(|n| **n == **name).unwrap_or(usize::MAX), seq)
+            }
         };
         out.push((key, (name.clone(), is_static, declaring, vis)));
     };

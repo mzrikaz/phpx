@@ -10,3 +10,8 @@ echo implode(",", array_keys(get_class_vars('C'))), "\n";
 echo implode(",", array_keys(get_object_vars(new C))), "\n";
 var_dump(new C);
 foreach ((new ReflectionClass('C'))->getMethods() as $m) {}
+trait H1 { public static $hs1; public $hi1; }
+trait H2 { protected array $h2; public static $h2s; }
+trait H3 { #[FromTrait] public $over = 1; }
+class HP { use H1, H2, H3; public $own; #[Own1, Own2] public $over = 1; }
+foreach ((new ReflectionClass('HP'))->getProperties() as $p) echo $p->getName(), ':', count($p->getAttributes()), ' '; echo "\n";
