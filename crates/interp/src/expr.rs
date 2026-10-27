@@ -869,7 +869,12 @@ impl Interp {
     }
 
     pub fn closure_object(&self, c: crate::interp::Callable) -> Value {
-        let cls = self.classes.borrow().get("closure").cloned().expect("Closure class");
+        let cls = self.closure_class.borrow().clone();
+        let cls = cls.unwrap_or_else(|| {
+            let c = self.classes.borrow().get("closure").cloned().expect("Closure class");
+            *self.closure_class.borrow_mut() = Some(c.clone());
+            c
+        });
         Value::Object(Obj::new(cls, Internal::Closure(c)))
     }
 

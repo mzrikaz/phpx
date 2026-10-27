@@ -3186,15 +3186,25 @@ unsafe extern "C" fn no_ctor(_: *mut Cx, _: *mut Value, _: u64, _: *mut Value) -
 /// (`vals` = values for `arrow_captures` names). `vals` are consumed.
 pub unsafe extern "C" fn rt_make_closure(c: *mut Cx, kind: u64, node: *const (), vals: *mut Value, n: u64, dst: *mut Value) -> u64 {
     let (it, f) = cx(c);
-    let vals = take_args(vals, n);
+    // The captured values, taken straight from the generated code's slots.
+    let capture = |names: &mut dyn Iterator<Item = &'static str>| {
+        let mut out: Vec<(&'static str, Value, bool)> = Vec::with_capacity(n as usize);
+        for (i, name) in names.take(n as usize).enumerate() {
+            out.push((name, take(vals.add(i)), false));
+        }
+        for i in out.len()..n as usize {
+            drop(take(vals.add(i)));
+        }
+        out
+    };
     let v = if kind == 0 {
         let cl = &*(node as *const ast::Closure);
-        let captured = cl.uses.iter().zip(vals).map(|(u, v)| (&*u.var.name, v, false)).collect();
+        let captured = capture(&mut cl.uses.iter().map(|u| &*u.var.name));
         it.make_closure(f, crate::interp::ClosureKind::Closure(cl), captured, cl.is_static)
     } else {
         let a = &*(node as *const ast::ArrowFn);
         let names = it.arrow_captures(a);
-        let captured = names.iter().zip(vals).map(|(n, v)| (*n, v, false)).collect();
+        let captured = capture(&mut names.iter().copied());
         it.make_closure(f, crate::interp::ClosureKind::Arrow(a), captured, a.is_static)
     };
     put(dst, v);

@@ -438,6 +438,8 @@ pub struct Interp {
     /// Closure names by AST node, with the enclosing (function, class)
     /// they were computed for.
     pub closure_names: RefCell<FxHashMap<usize, ((usize, usize), Rc<str>)>>,
+    /// The Closure class (looked up once).
+    pub closure_class: RefCell<Option<Rc<Class>>>,
     /// Position of the innermost running built-in's call: a user function
     /// bound while `pos` still equals it was called by the built-in (a
     /// callback), not from user code.
@@ -519,6 +521,7 @@ impl Interp {
             dyn_class_refs: RefCell::new(FxHashMap::default()),
             type_names: RefCell::new(FxHashMap::default()),
             closure_names: RefCell::new(FxHashMap::default()),
+            closure_class: RefCell::new(None),
             builtin_pos: Cell::new(Pos { file: u32::MAX, off: 0 }),
             response: RefCell::new(Default::default()),
             include_path: RefCell::new(".:/usr/share/php".into()),
