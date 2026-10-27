@@ -148,7 +148,20 @@ impl HMap {
     #[inline(always)]
     pub fn find(&self, k: KeyRef) -> Option<usize> {
         match &self.index {
-            None => self.entries.iter().position(|(e, _)| matches(e, k)),
+            // (A loop per key kind: the comparison stays inline.)
+            None => match k {
+                KeyRef::Str(b) => {
+                    for (i, (e, _)) in self.entries.iter().enumerate() {
+                        if let Key::Str(a) = e {
+                            if bytes_eq(a, b) {
+                                return Some(i);
+                            }
+                        }
+                    }
+                    None
+                }
+                KeyRef::Int(n) => self.entries.iter().position(|(e, _)| matches!(e, Key::Int(a) if *a == n)),
+            },
             Some(t) => {
                 let entries = &self.entries;
                 t.find(hash_of(k), |&i| matches(&entries[i as usize].0, k)).map(|&i| i as usize)
