@@ -72,6 +72,16 @@ impl<T: 'static> FastLocal<T> {
         }
         self.key.with(f)
     }
+
+    /// Like `LocalKey::try_with` (fails only for another thread's copy,
+    /// during or after its destruction).
+    #[inline(always)]
+    pub fn try_with<R>(&'static self, f: impl FnOnce(&T) -> R) -> Result<R, std::thread::AccessError> {
+        if is_main() {
+            return Ok(f(&self.main));
+        }
+        self.key.try_with(f)
+    }
 }
 
 /// `static NAME: FastLocal<T> = init;` with its thread-local twin.

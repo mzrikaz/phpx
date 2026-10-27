@@ -47,21 +47,19 @@ struct State {
     seq: Cell<u32>,
 }
 
-thread_local! {
-    static ST: State = const {
-        State {
-            // Handle 0 is never used.
-            store: UnsafeCell::new(Vec::new()),
-            free_head: Cell::new(0),
-            live: Cell::new(0),
-            since: Cell::new(0),
-            threshold: Cell::new(MIN_THRESHOLD),
-            due: Cell::new(false),
-            enabled: Cell::new(true),
-            runs: Cell::new(0),
-            collected: Cell::new(0),
-            seq: Cell::new(0),
-        }
+phpx_runtime::fast_local! {
+    static ST: State = State {
+        // Handle 0 is never used.
+        store: UnsafeCell::new(Vec::new()),
+        free_head: Cell::new(0),
+        live: Cell::new(0),
+        since: Cell::new(0),
+        threshold: Cell::new(MIN_THRESHOLD),
+        due: Cell::new(false),
+        enabled: Cell::new(true),
+        runs: Cell::new(0),
+        collected: Cell::new(0),
+        seq: Cell::new(0),
     };
 }
 
