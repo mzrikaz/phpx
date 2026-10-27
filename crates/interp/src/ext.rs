@@ -12,12 +12,25 @@ use crate::value::{pstr, Internal, Key, Obj, PhpArray, Value};
 
 // ---- serialize ----------------------------------------------------------------
 
-fn ser(it: &Interp, v: &Value, out: &mut Vec<u8>) -> R<()> {
+/// Serialization state: every value written gets the next number (as in
+/// PHP's var hash), and an object met again is written as `r:<number>;`.
+/// The objects are held so their addresses stay unique.
+#[derive(Default)]
+struct Ser {
+    n: usize,
+    objs: HashMap<*const Obj, (usize, Rc<Obj>)>,
+}
+
+fn ser(it: &Interp, st: &mut Ser, v: &Value, out: &mut Vec<u8>) -> R<()> {
     if it.stack_low() {
         return Err(it.stack_overflow());
     }
+    if let Value::Ref(r) = v {
+        return ser(it, st, &r.borrow().clone(), out);
+    }
+    st.n += 1;
     match v {
-        Value::Ref(r) => return ser(it, &r.borrow().clone(), out),
+        Value::Ref(_) => unreachable!(),
         Value::Null | Value::Resource(_) => out.extend_from_slice(b"N;"),
         Value::Bool(b) => out.extend_from_slice(if *b { b"b:1;" } else { b"b:0;" }),
         Value::Int(n) => out.extend_from_slice(format!("i:{n};").as_bytes()),
@@ -27,11 +40,18 @@ fn ser(it: &Interp, v: &Value, out: &mut Vec<u8>) -> R<()> {
             out.extend_from_slice(format!("a:{}:{{", a.len()).as_bytes());
             for (k, v) in a.iter() {
                 ser_key(&k, out);
-                ser(it, &v, out)?;
+                ser(it, st, &v, out)?;
             }
             out.push(b'}');
         }
-        Value::Object(o) => ser_obj(it, o, out)?,
+        Value::Object(o) => {
+            if let Some((i, _)) = st.objs.get(&Rc::as_ptr(o)) {
+                out.extend_from_slice(format!("r:{i};").as_bytes());
+                return Ok(());
+            }
+            st.objs.insert(Rc::as_ptr(o), (st.n, o.clone()));
+            ser_obj(it, st, o, out)?
+        }
     }
     Ok(())
 }
@@ -72,7 +92,7 @@ pub fn mangled(o: &Obj, name: &str) -> Vec<u8> {
     }
 }
 
-fn ser_obj(it: &Interp, o: &Rc<Obj>, out: &mut Vec<u8>) -> R<()> {
+fn ser_obj(it: &Interp, st: &mut Ser, o: &Rc<Obj>, out: &mut Vec<u8>) -> R<()> {
     let cname = o.class.name.clone();
     if o.class.is_enum() {
         let case = match o.get_prop("name") {
@@ -94,7 +114,7 @@ fn ser_obj(it: &Interp, o: &Rc<Obj>, out: &mut Vec<u8>) -> R<()> {
         out.extend_from_slice(format!("O:{}:\"{cname}\":{}:{{", cname.len(), a.len()).as_bytes());
         for (k, v) in a.iter() {
             ser_key(&k, out);
-            ser(it, &v, out)?;
+            ser(it, st, &v, out)?;
         }
         out.push(b'}');
         return Ok(());
@@ -121,7 +141,7 @@ fn ser_obj(it: &Interp, o: &Rc<Obj>, out: &mut Vec<u8>) -> R<()> {
     out.extend_from_slice(format!("O:{}:\"{cname}\":{}:{{", cname.len(), props.len()).as_bytes());
     for (k, v) in props {
         ser_str(&mangled(o, &k), out);
-        ser(it, &v, out)?;
+        ser(it, st, &v, out)?;
     }
     out.push(b'}');
     Ok(())
@@ -346,7 +366,7 @@ impl Unser<'_> {
 
 pub fn serialize(it: &Interp, v: &Value) -> R<Vec<u8>> {
     let mut out = vec![];
-    ser(it, v, &mut out)?;
+    ser(it, &mut Ser::default(), v, &mut out)?;
     Ok(out)
 }
 
