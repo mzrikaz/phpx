@@ -578,6 +578,13 @@ impl Native {
             quick: t.params.iter().map(|p| rt::Quick::of(p.ty.as_ref())).collect(),
         });
         let simple = spec.simple;
+        // Parameters of scalar types bind inline too: one tag check each
+        // (anything else takes rt_bind_args, which coerces or throws).
+        let inline_bind = simple
+            || (t.captured.is_empty()
+                && !a.func_args
+                && t.params.iter().all(|p| !p.by_ref && !p.variadic && p.promote.is_none() && !matches!(rt::Quick::of(p.ty.as_ref()).0, rt::Quick::Other)));
+        let quick = spec.quick.clone();
         let spec_addr = &*spec as *const LocalsSpec as i64;
 
         let mut sig = self.module.make_signature();
@@ -737,7 +744,7 @@ impl Native {
             l.b.switch_to_block(from_args);
             let nparams = t.params.len();
             let lay = layout().filter(|_| inline_rc());
-            if simple && (this_slot.is_none() || lay.is_some()) {
+            if inline_bind && (this_slot.is_none() || lay.is_some()) {
                 // Exact arg count: move args into the parameter slots inline.
                 let (inline_b, helper_b) = (l.b.create_block(), l.b.create_block());
                 let exact = l.b.ins().icmp_imm_s(IntCC::Equal, nargsv, nparams as i64);
@@ -759,6 +766,28 @@ impl Native {
                     let t = l.b.ins().iconst(types::I64, tag::OBJECT as i64);
                     l.b.ins().store(flags, t, dst, 0);
                     l.b.ins().store(flags, raw, dst, tag::PAYLOAD);
+                }
+                // Type checks first (nothing moved yet when one fails).
+                for (i, q) in quick.iter().enumerate() {
+                    let want = match q.0 {
+                        rt::Quick::Int => tag::INT,
+                        rt::Quick::Float => tag::FLOAT,
+                        rt::Quick::Str => tag::STR,
+                        rt::Quick::Bool => tag::BOOL,
+                        rt::Quick::Array => tag::ARRAY,
+                        _ => continue,
+                    };
+                    let tg = l.b.ins().load(types::I8, flags, argsv, (i * 16) as i32);
+                    let ok = l.b.ins().icmp_imm_u(IntCC::Equal, tg, want as i64);
+                    let ok = if q.1 {
+                        let null = l.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::NULL as i64);
+                        l.b.ins().bor(ok, null)
+                    } else {
+                        ok
+                    };
+                    let next = l.b.create_block();
+                    l.b.ins().brif(ok, next, &[], helper_b, &[]);
+                    l.b.switch_to_block(next);
                 }
                 let null = l.b.ins().iconst(types::I64, tag::NULL as i64);
                 for i in 0..nparams {

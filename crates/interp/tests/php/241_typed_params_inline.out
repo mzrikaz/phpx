@@ -1,0 +1,52 @@
+'x''5''1.5''1'
+3720
+1.52.03.5
+truefalsetrue
+2NULL'y'NULL4
+1|Array|c|object 2||3|NULL 1:null 5:1
+'ref'
+TypeError: P::i(): Argument #1 ($x) must be of type int, string given
+TypeError: P::s(): Argument #1 ($x) must be of type string, array given
+TypeError: P::a(): Argument #1 ($x) must be of type array, string given
+TypeError: P::b(): Argument #1 ($x) must be of type bool, array given
+'1.5'
+TypeError: free(): Argument #1 ($a) must be of type int, null given
+'x''5''1.5''1'
+3720
+1.52.03.5
+truefalsetrue
+2NULL'y'NULL4
+1|Array|c|object 2||3|NULL 1:null 5:1
+'ref'
+TypeError: P::i(): Argument #1 ($x) must be of type int, string given
+TypeError: P::s(): Argument #1 ($x) must be of type string, array given
+TypeError: P::a(): Argument #1 ($x) must be of type array, string given
+TypeError: P::b(): Argument #1 ($x) must be of type bool, array given
+'1.5'
+TypeError: free(): Argument #1 ($a) must be of type int, null given
+'x''5''1.5''1'
+3720
+1.52.03.5
+truefalsetrue
+2NULL'y'NULL4
+1|Array|c|object 2||3|NULL 1:null 5:1
+'ref'
+TypeError: P::i(): Argument #1 ($x) must be of type int, string given
+TypeError: P::s(): Argument #1 ($x) must be of type string, array given
+TypeError: P::a(): Argument #1 ($x) must be of type array, string given
+TypeError: P::b(): Argument #1 ($x) must be of type bool, array given
+'1.5'
+TypeError: free(): Argument #1 ($a) must be of type int, null given
+'x''5''1.5''1'
+3720
+1.52.03.5
+truefalsetrue
+2NULL'y'NULL4
+1|Array|c|object 2||3|NULL 1:null 5:1
+'ref'
+TypeError: P::i(): Argument #1 ($x) must be of type int, string given
+TypeError: P::s(): Argument #1 ($x) must be of type string, array given
+TypeError: P::a(): Argument #1 ($x) must be of type array, string given
+TypeError: P::b(): Argument #1 ($x) must be of type bool, array given
+'1.5'
+TypeError: free(): Argument #1 ($a) must be of type int, null given
