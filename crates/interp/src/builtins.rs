@@ -828,8 +828,12 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
             }
             return Ok(Value::array(out));
         }
-        let n = crate::pstr::lossy(&s(it, a, 0)?).into_owned();
-        Ok(std::env::var(n).map(|v| Value::str(&v)).unwrap_or(Value::Bool(false)))
+        use std::os::unix::ffi::OsStrExt;
+        let n = s(it, a, 0)?;
+        Ok(match std::env::var_os(std::ffi::OsStr::from_bytes(&n)) {
+            Some(v) => Value::Str(crate::value::PStr::from_bytes(v.as_bytes())),
+            None => Value::Bool(false),
+        })
     });
     t.insert("uniqid", |it, _, a| {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
