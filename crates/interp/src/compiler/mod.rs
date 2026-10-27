@@ -577,6 +577,7 @@ impl Native {
             param_ok: t.params.iter().map(|_| Default::default()).collect(),
             ret_ok: Default::default(),
             quick: t.params.iter().map(|p| rt::Quick::of(p.ty.as_ref())).collect(),
+            defaults: t.params.iter().map(|p| p.default.as_ref().and_then(rt::literal_default)).collect(),
         });
         let simple = spec.simple;
         // Parameters of scalar types bind inline too: one tag check each

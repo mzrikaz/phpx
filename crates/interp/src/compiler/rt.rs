@@ -65,6 +65,28 @@ pub struct LocalsSpec {
     /// Uses func_get_args()/func_num_args(): binding keeps the arguments
     /// in the frame.
     pub func_args: bool,
+    /// Per parameter: its default when that is a literal (null, a scalar,
+    /// `[]`), copied instead of evaluating the expression each call.
+    pub defaults: Vec<Option<Value>>,
+}
+
+/// A parameter default that is a plain literal, as a value.
+pub fn literal_default(e: &ast::Expr) -> Option<Value> {
+    use ast::ExprKind as K;
+    Some(match &e.kind {
+        K::Null => Value::Null,
+        K::Bool(b) => Value::Bool(*b),
+        K::Int(n) => Value::Int(*n),
+        K::Float(x) => Value::Float(*x),
+        K::Str(st) => Value::str(st),
+        K::Array(items) if items.is_empty() => Value::array(PhpArray::new()),
+        K::Unary { op: ast::UnOp::Neg, expr } => match expr.kind {
+            K::Int(n) => Value::Int(n.checked_neg()?),
+            K::Float(x) => Value::Float(-x),
+            _ => return None,
+        },
+        _ => return None,
+    })
 }
 
 /// The declared return type, checked (and the value coerced) in the
@@ -303,6 +325,8 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
         }
         let v = if i < n {
             take(args.add(i)).into_deref()
+        } else if let Some(Some(d)) = spec.defaults.get(i) {
+            d.clone()
         } else {
             match it.eval(f, p.default.as_ref().unwrap()) {
                 Ok(v) => v,
