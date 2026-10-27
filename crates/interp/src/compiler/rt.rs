@@ -820,14 +820,49 @@ pub unsafe extern "C" fn rt_empty_prop(c: *mut Cx, obj: *const Value, name: *con
     quiet_prop(c, obj, name, len, dst, crate::expr::QUIET_EMPTY)
 }
 
+/// Quiet read (`??`, isset, empty) through the site's read cache: the
+/// cached slot when the object's shape and the calling scope match; the
+/// miss path fills the cache for a plain, visible, present property.
+pub unsafe extern "C" fn rt_quiet_prop_site(c: *mut Cx, obj: *const Value, site: *const PropSite, mode: u64, dst: *mut Value) -> u64 {
+    let site = &*site;
+    if let Value::Object(o) = &*obj {
+        let k = site.shape.get();
+        if k != 0 && shape_key(o) == Some(k) && scope_key(&*(*c).frame) == site.scope.get() {
+            if let Some((_, v)) = o.props.borrow().get_index(site.slot.get()) {
+                if !matches!(v, Value::Ref(_)) {
+                    put(dst, v.clone());
+                    return 1;
+                }
+            }
+        }
+    }
+    quiet_prop_in(c, obj, site.name, Some(site), dst, mode as u8)
+}
+
 unsafe fn quiet_prop(c: *mut Cx, obj: *const Value, name: *const u8, len: u64, dst: *mut Value, mode: u8) -> u64 {
+    quiet_prop_in(c, obj, name_of(name, len), None, dst, mode)
+}
+
+unsafe fn quiet_prop_in(c: *mut Cx, obj: *const Value, name: &str, site: Option<&PropSite>, dst: *mut Value, mode: u8) -> u64 {
     let (it, f) = cx(c);
-    let name = name_of(name, len);
     let Value::Object(o) = &*obj else { return 0 };
     let key = it.prop_key(f, o, name);
     let name = &*key;
     if it.prop_visible(f, o, name) {
-        if let Some(v) = o.get_prop(name) {
+        if let Some(site) = site {
+            let props = o.props.borrow();
+            if let Some((i, _, v)) = props.get_full(name) {
+                if !matches!(v, Value::Ref(_)) {
+                    if let Some(k) = shape_key(o) {
+                        site.shape.set(k);
+                        site.slot.set(i);
+                        site.scope.set(scope_key(f));
+                    }
+                }
+                put(dst, v.deref());
+                return 1;
+            }
+        } else if let Some(v) = o.get_prop(name) {
             put(dst, v);
             return 1;
         }

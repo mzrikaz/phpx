@@ -2802,13 +2802,11 @@ impl<'a> Lower<'a> {
                     }
                     ExprKind::Prop { name, .. } => {
                         let name = self.member(name)?;
-                        let (np, nl) = self.name_parts(name);
-                        let f = match mode {
-                            crate::expr::QUIET_ISSET => "rt_isset_prop",
-                            crate::expr::QUIET_EMPTY => "rt_empty_prop",
-                            _ => "rt_quiet_prop",
-                        };
-                        self.call(f, &[self.cx, ba, np, nl, ta]).unwrap()
+                        let site = Box::new(super::rt::PropSite::new(name));
+                        let sp = self.iconst(&*site as *const super::rt::PropSite as i64);
+                        self.psites.push(site);
+                        let m = self.iconst(mode as i64);
+                        self.call("rt_quiet_prop_site", &[self.cx, ba, sp, m, ta]).unwrap()
                     }
                     _ => unreachable!(),
                 };

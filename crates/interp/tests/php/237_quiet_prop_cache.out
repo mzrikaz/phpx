@@ -1,0 +1,11 @@
+1,2,3,d,d,y,y,f,e | 1,2,3,d,d,y,y,f,e | b/y | d/n
+1,d,d,n | 1,d,d,n
+r,magic:virt,d,y,f
+1,2,3,0,d,y,y,f,e | 1,2,3,d,d,y,y,f,e | b/y | d/n
+1,d,d,n | 1,d,d,n
+r,magic:virt,d,y,f
+d,2,3,1,set,n,y,e,f | 1,2,3,d,d,y,y,f,e | b/y | d/n
+d,d,d,n | 1,d,d,n
+d,magic:virt,d,y,f
+0- 1+ 2- 3+ 10- 0 1 2 3 11 
+none deep none
