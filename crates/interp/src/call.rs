@@ -514,7 +514,7 @@ impl Interp {
     }
 
     fn eval_args_inner(&self, f: &mut Frame, args: &'static [ast::Arg]) -> R<(Vec<Value>, Vec<(Rc<str>, Value)>)> {
-        let mut pos = vec![];
+        let mut pos = Vec::with_capacity(args.len());
         let mut named = vec![];
         for a in args {
             let v = self.eval(f, &a.value)?;
@@ -568,7 +568,7 @@ impl Interp {
             return self.eval_args(f, args);
         }
         let at = self.pos.get();
-        let mut pos = vec![];
+        let mut pos = Vec::with_capacity(args.len());
         let mut named = vec![];
         for a in args {
             let by_ref = match &a.name {
@@ -2659,7 +2659,8 @@ impl Interp {
             for (d, c) in buf.iter_mut().zip(n.bytes()) {
                 *d = c.to_ascii_lowercase();
             }
-            std::str::from_utf8(&buf[..n.len()]).unwrap_or("")
+            // SAFETY: ASCII lowercasing of UTF-8 leaves it valid UTF-8.
+            unsafe { std::str::from_utf8_unchecked(&buf[..n.len()]) }
         } else {
             ""
         };

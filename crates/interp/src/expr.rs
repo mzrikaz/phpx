@@ -717,6 +717,12 @@ impl Interp {
     /// `__DIR__`/`__FILE__` and concatenations count as constants, as in
     /// Composer's class maps.
     fn const_array_cached(&self, f: &Frame, e: &'static Expr, items: &'static [Option<ast::ArrayItem>]) -> Option<Value> {
+        if items.is_empty() {
+            return Some(Value::array(PhpArray::new()));
+        }
+        if !maybe_const(items) {
+            return None;
+        }
         let key = (e as *const Expr as usize, f.ctx.file);
         if let Some(v) = CONST_ARRAYS.with(|c| c.borrow().get(&key).cloned()) {
             return v;
@@ -2074,6 +2080,21 @@ pub fn const_array(items: &[Option<ast::ArrayItem>]) -> Option<Value> {
 
 /// `const_array`, with `__FILE__`/`__DIR__` of `file` (when given) and
 /// string concatenation also constant.
+/// Whether `const_array_in` can succeed, judged from the shape alone (no
+/// lookup): array literals with a computed item skip the cache.
+fn maybe_const(items: &[Option<ast::ArrayItem>]) -> bool {
+    fn scalar(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bytes(_) | ExprKind::Bool(_) | ExprKind::Null | ExprKind::MagicConst(_) => true,
+            ExprKind::Unary { op: ast::UnOp::Neg, expr } => matches!(expr.kind, ExprKind::Int(_) | ExprKind::Float(_)),
+            ExprKind::Array(inner) => maybe_const(inner),
+            ExprKind::Binary { op: ast::BinOp::Concat, left, right } => scalar(left) && scalar(right),
+            _ => false,
+        }
+    }
+    items.iter().all(|it| it.as_ref().is_some_and(|it| !it.spread && !it.by_ref && it.key.as_ref().is_none_or(scalar) && scalar(&it.value)))
+}
+
 fn const_array_in(items: &[Option<ast::ArrayItem>], file: Option<&str>) -> Option<Value> {
     let scalar = |e: &Expr| scalar_in(e, file);
     fn scalar_in(e: &Expr, file: Option<&str>) -> Option<Value> {
