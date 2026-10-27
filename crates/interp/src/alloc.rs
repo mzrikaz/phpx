@@ -59,6 +59,51 @@ thread_local! {
     };
 }
 
+/// The heap of the first thread that allocates (the main thread, which runs
+/// the interpreter), outside thread-local storage: on macOS every
+/// thread-local access is a call to `_tlv_get_addr`, a large part of an
+/// allocation. That thread is recognized by its thread pointer (one
+/// instruction); other threads use `HEAP`.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+struct MainHeap(Heap);
+
+// SAFETY: only the thread whose thread pointer is in MAIN_OWNER touches it.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+unsafe impl Sync for MainHeap {}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+static MAIN_HEAP: MainHeap = MainHeap(Heap {
+    free: [const { Cell::new(std::ptr::null_mut()) }; CLASSES],
+    used: Cell::new(0),
+    peak: Cell::new(0),
+    excluded: Cell::new(0),
+    limit: Cell::new(usize::MAX),
+    configured: Cell::new(usize::MAX),
+    over: Cell::new(false),
+    tried: Cell::new(0),
+});
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+static MAIN_OWNER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The calling thread's heap.
+#[inline(always)]
+fn with_heap<T>(f: impl FnOnce(&Heap) -> T) -> T {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        let tp: usize;
+        // SAFETY: reads the thread's TSD base (low bits may hold a CPU
+        // number on some kernels: masked off).
+        unsafe { std::arch::asm!("mrs {}, tpidrro_el0", out(reg) tp, options(nomem, nostack, preserves_flags)) };
+        let me = tp & !7;
+        let owner = MAIN_OWNER.load(Relaxed);
+        if owner == me || (owner == 0 && MAIN_OWNER.compare_exchange(0, me, Relaxed, Relaxed).is_ok()) {
+            return f(&MAIN_HEAP.0);
+        }
+    }
+    HEAP.with(f)
+}
+
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
@@ -143,7 +188,7 @@ fn block_size(l: &Layout) -> usize {
 unsafe impl GlobalAlloc for Counting {
     #[inline]
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-        HEAP.with(|h| {
+        with_heap(|h| {
             let p = match class_of(&l) {
                 Some(c) => small_alloc(h, c),
                 None => System.alloc(l),
@@ -157,7 +202,7 @@ unsafe impl GlobalAlloc for Counting {
 
     #[inline]
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
-        HEAP.with(|h| {
+        with_heap(|h| {
             let p = match class_of(&l) {
                 Some(c) => {
                     let p = small_alloc(h, c);
@@ -177,7 +222,7 @@ unsafe impl GlobalAlloc for Counting {
 
     #[inline]
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
-        HEAP.with(|h| {
+        with_heap(|h| {
             match class_of(&l) {
                 Some(c) => small_free(h, p, c),
                 None => System.dealloc(p, l),
@@ -195,7 +240,7 @@ unsafe impl GlobalAlloc for Counting {
             (None, None) => {
                 let q = System.realloc(p, l, new);
                 if !q.is_null() {
-                    HEAP.with(|h| {
+                    with_heap(|h| {
                         if new >= l.size() {
                             charge(h, new - l.size());
                         } else {
@@ -222,36 +267,36 @@ unsafe impl GlobalAlloc for Counting {
 /// The limit was crossed and not yet reported (code that produces a lot
 /// of data in one go, like var_dump, stops early).
 pub fn over() -> bool {
-    HEAP.with(|h| h.over.get())
+    with_heap(|h| h.over.get())
 }
 
 /// Bytes charged to the script now.
 pub fn used() -> usize {
-    HEAP.with(|h| (h.used.get() - h.excluded.get()).max(0) as usize)
+    with_heap(|h| (h.used.get() - h.excluded.get()).max(0) as usize)
 }
 
 pub fn peak() -> usize {
-    HEAP.with(|h| (h.peak.get() - h.excluded.get()).max(0) as usize)
+    with_heap(|h| (h.peak.get() - h.excluded.get()).max(0) as usize)
 }
 
 /// Raw allocator total on this thread (for measuring what to exclude).
 pub fn raw_used() -> usize {
-    HEAP.with(|h| h.used.get().max(0) as usize)
+    with_heap(|h| h.used.get().max(0) as usize)
 }
 
 pub fn exclude(bytes: usize) {
-    HEAP.with(|h| h.excluded.set(h.excluded.get() + bytes as isize));
+    with_heap(|h| h.excluded.set(h.excluded.get() + bytes as isize));
 }
 
 /// Run `f` (the native compiler) outside the script's accounting: what
 /// it allocates, keeps or frees is excluded, and its peak doesn't count.
 pub fn uncharged<T>(f: impl FnOnce() -> T) -> T {
-    let (used, peak) = HEAP.with(|h| (h.used.get(), h.peak.get()));
+    let (used, peak) = with_heap(|h| (h.used.get(), h.peak.get()));
     // Excluding everything up front keeps the limit from tripping meanwhile.
     let headroom = isize::MAX / 4;
-    HEAP.with(|h| h.excluded.set(h.excluded.get() + headroom));
+    with_heap(|h| h.excluded.set(h.excluded.get() + headroom));
     let r = f();
-    HEAP.with(|h| {
+    with_heap(|h| {
         let grown = h.used.get() - used;
         h.excluded.set(h.excluded.get() - headroom + grown);
         h.peak.set(peak.max(h.used.get()));
@@ -261,12 +306,12 @@ pub fn uncharged<T>(f: impl FnOnce() -> T) -> T {
 
 /// (configured, enforced); None = unlimited.
 pub fn set_limit(limit: Option<(usize, usize)>) {
-    HEAP.with(|h| {
+    with_heap(|h| {
         h.configured.set(limit.map_or(usize::MAX, |l| l.0));
         h.limit.set(limit.map_or(usize::MAX, |l| l.1));
     });
     if limit.is_none_or(|l| used() <= l.1) {
-        HEAP.with(|h| h.over.set(false));
+        with_heap(|h| h.over.set(false));
     }
 }
 
@@ -274,7 +319,7 @@ pub fn set_limit(limit: Option<(usize, usize)>) {
 /// Clears the flag and lifts the limit so shutdown code can run (PHP does
 /// the same).
 pub fn take_over() -> Option<(usize, usize)> {
-    HEAP.with(|h| {
+    with_heap(|h| {
         if !h.over.replace(false) {
             return None;
         }
@@ -287,7 +332,7 @@ pub fn take_over() -> Option<(usize, usize)> {
 /// Built-ins that allocate on behalf of the script (str_repeat, ...) check
 /// first, so a huge request fails cleanly instead of exhausting the host.
 pub fn would_exceed(bytes: usize) -> Option<usize> {
-    let (l, configured) = HEAP.with(|h| (h.limit.get(), h.configured.get()));
+    let (l, configured) = with_heap(|h| (h.limit.get(), h.configured.get()));
     (l != usize::MAX && used().saturating_add(bytes) > l).then_some(configured)
 }
 
