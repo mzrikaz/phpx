@@ -203,6 +203,38 @@ thread_local! {
 }
 
 thread_local! {
+    /// Iterations each loop statement has run so far, over all its runs
+    /// (see `osr_at_entry`).
+    static LOOP_COUNTS: RefCell<FxHashMap<usize, u32>> = RefCell::new(FxHashMap::default());
+}
+
+/// Adds a loop run's iterations to its total when the run ends (however it
+/// ends).
+struct LoopCount<'a> {
+    key: usize,
+    n: &'a Cell<u32>,
+}
+
+impl<'a> LoopCount<'a> {
+    fn new(_it: &Interp, s: &'static Stmt, n: &'a Cell<u32>) -> LoopCount<'a> {
+        LoopCount { key: s as *const Stmt as usize, n }
+    }
+}
+
+impl Drop for LoopCount<'_> {
+    fn drop(&mut self) {
+        let n = self.n.get();
+        if n > 0 {
+            LOOP_COUNTS.with(|c| {
+                let mut c = c.borrow_mut();
+                let e = c.entry(self.key).or_insert(0);
+                *e = e.saturating_add(n);
+            });
+        }
+    }
+}
+
+thread_local! {
     /// Bumped whenever a variable is unbound or bound to another cell:
     /// compiled file code, which holds its variables' cells, re-reads
     /// them when it changed (unset($GLOBALS['x']) in a function, ...).
@@ -1125,6 +1157,17 @@ impl Interp {
         Ok(())
     }
 
+    /// A loop about to start whose earlier runs together reached the
+    /// on-stack replacement count: continue in compiled code from here
+    /// (short loops entered many times get compiled too).
+    #[inline]
+    fn osr_at_entry(&self, f: &mut Frame, s: &'static Stmt) -> Option<R<Value>> {
+        if f.fn_id == 0 || LOOP_COUNTS.with(|c| c.borrow().get(&(s as *const Stmt as usize)).copied()).unwrap_or(0) < crate::compiler::OSR_ITERATIONS {
+            return None;
+        }
+        self.try_osr(f, s)
+    }
+
     fn loop_flow(flow: Flow) -> Option<Flow> {
         // None = keep looping; Some(f) = leave the loop with f.
         match flow {
@@ -1262,13 +1305,17 @@ impl Interp {
                 }
             }
             StmtKind::While { cond, body } => {
-                let mut n = 0u32;
+                if let Some(r) = self.osr_at_entry(f, s) {
+                    return Ok(Flow::Return(r?));
+                }
+                let n = std::cell::Cell::new(0u32);
+                let _count = LoopCount::new(self, s, &n);
                 while self.eval(f, cond)?.truthy() {
                     if let Some(fl) = Self::loop_flow(self.exec_block(f, body)?) {
                         return Ok(fl);
                     }
-                    n += 1;
-                    if n == crate::compiler::OSR_ITERATIONS {
+                    n.set(n.get() + 1);
+                    if n.get() == crate::compiler::OSR_ITERATIONS {
                         if let Some(r) = self.try_osr(f, s) {
                             return Ok(Flow::Return(r?));
                         }
@@ -1276,13 +1323,17 @@ impl Interp {
                 }
             }
             StmtKind::DoWhile { body, cond } => {
-                let mut n = 0u32;
+                if let Some(r) = self.osr_at_entry(f, s) {
+                    return Ok(Flow::Return(r?));
+                }
+                let n = std::cell::Cell::new(0u32);
+                let _count = LoopCount::new(self, s, &n);
                 loop {
                     if let Some(fl) = Self::loop_flow(self.exec_block(f, body)?) {
                         return Ok(fl);
                     }
-                    n += 1;
-                    if n == crate::compiler::OSR_ITERATIONS {
+                    n.set(n.get() + 1);
+                    if n.get() == crate::compiler::OSR_ITERATIONS {
                         if let Some(r) = self.try_osr(f, s) {
                             return Ok(Flow::Return(r?));
                         }
@@ -1296,7 +1347,11 @@ impl Interp {
                 for e in init {
                     self.eval(f, e)?;
                 }
-                let mut n = 0u32;
+                if let Some(r) = self.osr_at_entry(f, s) {
+                    return Ok(Flow::Return(r?));
+                }
+                let n = std::cell::Cell::new(0u32);
+                let _count = LoopCount::new(self, s, &n);
                 loop {
                     // Only the last condition expression decides.
                     let mut ok = true;
@@ -1315,8 +1370,8 @@ impl Interp {
                     for e in step {
                         self.eval(f, e)?;
                     }
-                    n += 1;
-                    if n == crate::compiler::OSR_ITERATIONS {
+                    n.set(n.get() + 1);
+                    if n.get() == crate::compiler::OSR_ITERATIONS {
                         if let Some(r) = self.try_osr(f, s) {
                             return Ok(Flow::Return(r?));
                         }
