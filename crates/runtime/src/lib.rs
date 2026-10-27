@@ -5,6 +5,7 @@
 //! `concurrency::run` and the `Promise` combinators.
 
 mod error;
+pub mod fastlocal;
 pub mod net;
 pub mod tls;
 mod promise;

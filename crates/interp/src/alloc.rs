@@ -67,7 +67,7 @@ thread_local! {
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 struct MainHeap(Heap);
 
-// SAFETY: only the thread whose thread pointer is in MAIN_OWNER touches it.
+// SAFETY: only the main thread (phpx_runtime::fastlocal) touches it.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 unsafe impl Sync for MainHeap {}
 
@@ -83,23 +83,12 @@ static MAIN_HEAP: MainHeap = MainHeap(Heap {
     tried: Cell::new(0),
 });
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-static MAIN_OWNER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 /// The calling thread's heap.
 #[inline(always)]
 fn with_heap<T>(f: impl FnOnce(&Heap) -> T) -> T {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        let tp: usize;
-        // SAFETY: reads the thread's TSD base (low bits may hold a CPU
-        // number on some kernels: masked off).
-        unsafe { std::arch::asm!("mrs {}, tpidrro_el0", out(reg) tp, options(nomem, nostack, preserves_flags)) };
-        let me = tp & !7;
-        let owner = MAIN_OWNER.load(Relaxed);
-        if owner == me || (owner == 0 && MAIN_OWNER.compare_exchange(0, me, Relaxed, Relaxed).is_ok()) {
-            return f(&MAIN_HEAP.0);
-        }
+    if phpx_runtime::fastlocal::claim_main() {
+        return f(&MAIN_HEAP.0);
     }
     HEAP.with(f)
 }
