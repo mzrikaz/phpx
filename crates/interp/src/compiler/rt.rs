@@ -1921,6 +1921,40 @@ pub struct MethodSite {
     /// A trivial getter found here (`return $this->prop;` or a literal):
     /// answered without calling it.
     pub getter: std::cell::RefCell<Option<Getter>>,
+    /// The callable name last called through this site (`$f(...)`,
+    /// `call_user_func('name', ...)`) and what it names.
+    pub dynamic: DynCache,
+}
+
+/// A call site's last callable name and its resolved site: the next call
+/// with the same name compares bytes instead of hashing the name.
+#[derive(Default)]
+pub struct DynCache {
+    key: RefCell<Box<[u8]>>,
+    target: std::cell::Cell<DynTarget>,
+}
+
+#[derive(Clone, Copy, Default)]
+enum DynTarget {
+    /// Not a name with a site of its own.
+    #[default]
+    None,
+    Func(&'static CallSite),
+    Method(&'static MethodSite),
+    Static(&'static ast::ClassRef, &'static MethodSite),
+}
+
+impl DynCache {
+    #[inline]
+    fn get(&self, name: &[u8], resolve: impl FnOnce(&[u8]) -> DynTarget) -> DynTarget {
+        if **self.key.borrow() == *name {
+            return self.target.get();
+        }
+        let t = resolve(name);
+        *self.key.borrow_mut() = name.into();
+        self.target.set(t);
+        t
+    }
 }
 
 const POLY: usize = 4;
@@ -2033,6 +2067,7 @@ impl MethodSite {
             interp: Default::default(),
             poly: Default::default(),
             getter: Default::default(),
+            dynamic: Default::default(),
         }
     }
 }
@@ -2597,13 +2632,13 @@ pub unsafe extern "C" fn rt_call_value(
         match &*callee {
             // 'name'(...): like a call to the fully qualified name.
             Value::Str(s) => {
-                if let Some(site) = dyn_call_site(s) {
+                if let DynTarget::Func(site) = (*site).dynamic.get(s, resolve_name) {
                     return rt_call(c, site, args, n, locals, meta, dst);
                 }
             }
             // [$obj, 'name'](...): like $obj->name(...).
             Value::Array(a) => {
-                if let Some((o, site)) = array_method_site(a) {
+                if let Some((o, site)) = array_method_site(a, &(*site).dynamic) {
                     let obj = Value::Object(o);
                     return rt_method_call(c, &obj, site, args, n, locals, meta, dst);
                 }
@@ -2629,40 +2664,87 @@ pub unsafe extern "C" fn rt_call_value(
 /// value); anything else goes to the built-in through `site`, which reports
 /// invalid callbacks. `args` holds the callback, then its arguments.
 pub unsafe extern "C" fn rt_call_user_func(c: *mut Cx, site: *const CallSite, msite: *const MethodSite, args: *mut Value, n: u64, dst: *mut Value) -> u64 {
-    let (it, f) = cx(c);
-    let (rest, m) = (args.add(1), n - 1);
-    // No locals: nothing is passed by reference.
-    const MAX: usize = 16;
-    let nulls = || [ptr::null_mut::<Value>(); MAX + 2];
-    if m as usize <= MAX && !crate::value::builtin_shadowed().load(std::sync::atomic::Ordering::Relaxed) {
-        match &*args {
-            Value::Object(o) => {
-                if let Some(st) = closure_call(it, o, &*msite, rest, m, dst) {
-                    drop(take(args));
-                    return st;
-                }
-            }
-            Value::Str(s) => {
-                if let Some(fs) = dyn_call_site(s).filter(|fs| it.function_exists_at(f, fs.name)) {
-                    drop(take(args));
-                    return rt_call(c, fs, rest, m, nulls().as_ptr(), ptr::null(), dst);
-                }
-            }
-            Value::Array(a) => {
-                if let Some((o, ms)) = array_method_site(a) {
-                    let scope = f.class.as_ref().map_or(ptr::null(), Rc::as_ptr);
-                    if site_knows(ms, &o.class, scope) || matches!(it.callable_error(f, &*args), Ok(None)) {
-                        drop(take(args));
-                        let obj = Value::Object(o);
-                        return rt_method_call(c, &obj, ms, rest, m, nulls().as_ptr(), ptr::null(), dst);
-                    }
-                }
-            }
-            _ => {}
-        }
+    if let Some(st) = cuf_fast(c, &*msite, args, args.add(1), n - 1, dst) {
+        return st;
     }
     let locals = vec![ptr::null_mut::<Value>(); n as usize + 1];
     rt_call(c, site, args, n, locals.as_ptr(), ptr::null(), dst)
+}
+
+/// Most arguments `call_user_func` and `call_user_func_array` pass on
+/// the fast path (more go through the built-in).
+const CUF_MAX: usize = 16;
+
+/// Call `*cb` with the `m` arguments at `rest` like `$cb(...)` (by value)
+/// when it is a closure, a function name, 'A::m' or `[$obj, 'method']`
+/// known to be valid. Some = taken (the callback and arguments consumed).
+unsafe fn cuf_fast(c: *mut Cx, msite: &MethodSite, cb: *mut Value, rest: *mut Value, m: u64, dst: *mut Value) -> Option<u64> {
+    let (it, f) = cx(c);
+    if m as usize > CUF_MAX || crate::value::builtin_shadowed().load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    // No locals: nothing is passed by reference.
+    let nulls = || [ptr::null_mut::<Value>(); CUF_MAX + 2];
+    match &*cb {
+        Value::Object(o) => {
+            let st = closure_call(it, o, msite, rest, m, dst)?;
+            drop(take(cb));
+            Some(st)
+        }
+        Value::Str(s) => match msite.dynamic.get(s, resolve_name) {
+            // (Resolved in this request, or defined.)
+            DynTarget::Func(fs) if fs.cached.get().is_some() || fs.jit.get().is_some() || fs.builtin.get().is_some() || it.function_exists_at(f, fs.name) => {
+                drop(take(cb));
+                Some(rt_call(c, fs, rest, m, nulls().as_ptr(), ptr::null(), dst))
+            }
+            // 'A::m': like A::m(...), once known valid from this scope.
+            DynTarget::Static(cref, ms) if static_known(ms, f) || matches!(it.callable_error(f, &*cb), Ok(None)) => {
+                drop(take(cb));
+                Some(rt_static_call(c, cref, ms, rest, m, nulls().as_ptr(), ptr::null(), dst))
+            }
+            _ => None,
+        },
+        Value::Array(a) => {
+            let (o, ms) = array_method_site(a, &msite.dynamic)?;
+            let scope = f.class.as_ref().map_or(ptr::null(), Rc::as_ptr);
+            if !site_knows(ms, &o.class, scope) && !matches!(it.callable_error(f, &*cb), Ok(None)) {
+                return None;
+            }
+            drop(take(cb));
+            let obj = Value::Object(o);
+            Some(rt_method_call(c, &obj, ms, rest, m, nulls().as_ptr(), ptr::null(), dst))
+        }
+        _ => None,
+    }
+}
+
+/// `call_user_func_array($cb, $args)`. `list` = 0: `args` holds the
+/// callback and the array; a list without references is passed like
+/// `call_user_func`'s arguments. `list` = 1: the call had a literal list
+/// (`[$a, $b]`), compiled to the callback and its elements, which are
+/// gathered into the array only for the built-in.
+pub unsafe extern "C" fn rt_call_user_func_array(c: *mut Cx, site: *const CallSite, msite: *const MethodSite, args: *mut Value, n: u64, list: u64, dst: *mut Value) -> u64 {
+    if list != 0 {
+        if let Some(st) = cuf_fast(c, &*msite, args, args.add(1), n - 1, dst) {
+            return st;
+        }
+        let items: Vec<Value> = (1..n as usize).map(|i| take(args.add(i))).collect();
+        put(args.add(1), Value::array(PhpArray::from_list(items)));
+    } else if matches!(&*args.add(1), Value::Array(a) if a.len() <= CUF_MAX && a.is_packed() && !a.raw_values().any(|v| matches!(v, Value::Ref(_)))) {
+        // (Taken out first: the result may go to the array's slot.)
+        let arr = take(args.add(1));
+        let Value::Array(a) = &arr else { unreachable!() };
+        let mut buf: [Value; CUF_MAX] = Default::default();
+        for (b, v) in buf.iter_mut().zip(a.raw_values()) {
+            *b = v.clone();
+        }
+        if let Some(st) = cuf_fast(c, &*msite, args, buf.as_mut_ptr(), a.len() as u64, dst) {
+            return st;
+        }
+        put(args.add(1), arr);
+    }
+    let locals = [ptr::null_mut::<Value>(); 3];
+    rt_call(c, site, args, 2, locals.as_ptr(), ptr::null(), dst)
 }
 
 /// Whether method site `site` already resolved its method for objects of
@@ -2740,9 +2822,17 @@ pub unsafe fn enter_closure(
     dst: *mut Value,
 ) -> Option<u64> {
     frame.this = cd.this.clone();
-    frame.class = cd.scope.clone();
-    frame.static_class = cd.static_class.clone();
-    frame.func = cd.name.clone();
+    // (A reused frame usually has these from the last call already.)
+    let same = |a: &Option<Rc<crate::class::Class>>, b: &Option<Rc<crate::class::Class>>| a.as_ref().map(Rc::as_ptr) == b.as_ref().map(Rc::as_ptr);
+    if !same(&frame.class, &cd.scope) {
+        frame.class = cd.scope.clone();
+    }
+    if !same(&frame.static_class, &cd.static_class) {
+        frame.static_class = cd.static_class.clone();
+    }
+    if !Rc::ptr_eq(&frame.func, &cd.name) {
+        frame.func = cd.name.clone();
+    }
     frame.closure = Some(cd.clone());
     enter(it, entry, frame, args, n, dst)
 }
@@ -2810,6 +2900,7 @@ fn dyn_method_site(name: &[u8]) -> Option<&'static MethodSite> {
 pub fn reset_dyn_sites() {
     DYN_MSITES.with(|m| m.borrow().values().for_each(|s| s.reset()));
     DYN_CSITES.with(|m| m.borrow().values().for_each(|s| s.reset()));
+    DYN_SSITES.with(|m| m.borrow().values().for_each(|s| s.1.reset()));
 }
 
 thread_local! {
@@ -2840,16 +2931,68 @@ fn dyn_call_site(name: &[u8]) -> Option<&'static CallSite> {
     })
 }
 
-/// `[$obj, 'name']`: the object and the call site for its method.
-fn array_method_site(a: &crate::value::PhpArray) -> Option<(Rc<crate::value::Obj>, &'static MethodSite)> {
+/// `[$obj, 'name']`: the object and the call site for its method
+/// (remembered by the calling site's `cache`).
+fn array_method_site(a: &crate::value::PhpArray, cache: &DynCache) -> Option<(Rc<crate::value::Obj>, &'static MethodSite)> {
     if a.len() != 2 {
         return None;
     }
     let (Some(Value::Object(o)), Some(Value::Str(m))) = (a.get(&Key::Int(0)), a.get(&Key::Int(1))) else { return None };
-    if m.contains(&b':') {
-        return None;
+    match cache.get(&m, |m| if m.contains(&b':') { DynTarget::None } else { dyn_method_site(m).map_or(DynTarget::None, DynTarget::Method) }) {
+        DynTarget::Method(ms) => Some((o, ms)),
+        _ => None,
     }
-    Some((o, dyn_method_site(&m)?))
+}
+
+/// What a callable string names: a function's site, or for 'A::m' the
+/// class reference and method site (not for self/parent/static, which
+/// are deprecated in callables and resolve differently).
+fn resolve_name(name: &[u8]) -> DynTarget {
+    let Some(i) = name.windows(2).position(|w| w == b"::") else {
+        return dyn_call_site(name).map_or(DynTarget::None, DynTarget::Func);
+    };
+    let (class, method) = (&name[..i], &name[i + 2..]);
+    let class = class.strip_prefix(b"\\").unwrap_or(class);
+    let special = [&b"self"[..], b"parent", b"static"].iter().any(|w| class.eq_ignore_ascii_case(w));
+    if class.is_empty() || method.is_empty() || special || method.contains(&b':') || class.contains(&b':') {
+        return DynTarget::None;
+    }
+    dyn_static_site(class, method).map_or(DynTarget::None, |(r, s)| DynTarget::Static(r, s))
+}
+
+thread_local! {
+    /// 'A::m' callables: a class reference and method site per string
+    /// (leaked; bounded).
+    static DYN_SSITES: RefCell<rustc_hash::FxHashMap<Box<[u8]>, (&'static ast::ClassRef, &'static MethodSite)>> = Default::default();
+}
+
+fn dyn_static_site(class: &[u8], method: &[u8]) -> Option<(&'static ast::ClassRef, &'static MethodSite)> {
+    let key: Vec<u8> = [class, b"::", method].concat();
+    DYN_SSITES.with(|m| {
+        if let Some(s) = m.borrow().get(&*key) {
+            return Some(*s);
+        }
+        let mut m = m.borrow_mut();
+        if m.len() >= DYN_MSITES_MAX {
+            return None;
+        }
+        // A class name in a string is fully qualified.
+        let cref: &'static ast::ClassRef = Box::leak(Box::new(ast::ClassRef::Name(format!("\\{}", std::str::from_utf8(class).ok()?))));
+        let name: &'static str = Box::leak(std::str::from_utf8(method).ok()?.into());
+        let lname: &'static str = Box::leak(name.to_ascii_lowercase().into_boxed_str());
+        let site: &'static MethodSite = Box::leak(Box::new(MethodSite::new(name, lname)));
+        m.insert(key.into(), (cref, site));
+        Some((cref, site))
+    })
+}
+
+/// Whether static-call site `site` already resolved its method for the
+/// calling scope, `static` class and `$this` class of `f`.
+fn static_known(site: &MethodSite, f: &Frame) -> bool {
+    let ptr_of = |c: Option<&Rc<crate::class::Class>>| c.map_or(ptr::null(), Rc::as_ptr);
+    site.cached.get().is_some_and(|mc| {
+        mc.scope == ptr_of(f.class.as_ref()) && mc.static_cls == ptr_of(f.static_class.as_ref()) && mc.this_cls == ptr_of(f.this.as_ref().map(|o| &o.class))
+    })
 }
 
 /// `$obj->$name` read.

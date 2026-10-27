@@ -681,6 +681,11 @@ impl PhpArray {
         }
     }
 
+    /// Stored as a plain list (keys 0..len).
+    pub fn is_packed(&self) -> bool {
+        matches!(self.store, Store::Packed(_))
+    }
+
     pub fn is_list(&self) -> bool {
         match &self.store {
             Store::Packed(_) => true,

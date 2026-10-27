@@ -190,6 +190,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_call: 7 => true,
     rt_call_value: 8 => true,
     rt_call_user_func: 6 => true,
+    rt_call_user_func_array: 7 => true,
     rt_method_call: 8 => true,
     rt_method_call_dyn: 8 => true,
     rt_prop_get_dyn: 4 => true,

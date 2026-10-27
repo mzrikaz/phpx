@@ -658,10 +658,13 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         let args = arr(it, a, 1, "call_user_func_array")?;
         let mut pos = vec![];
         let mut named = vec![];
-        for (k, v) in args.iter() {
+        // An element that is a reference binds a by-reference parameter.
+        let params = crate::call::callable_params(&c);
+        let by_ref = |i: usize| params.is_some_and(|ps| ps.get(i).or(ps.last().filter(|p| p.variadic)).is_some_and(|p| p.by_ref));
+        for (k, v) in args.iter_raw() {
             match k {
-                Key::Int(_) => pos.push(v.clone()),
-                Key::Str(n) => named.push((Rc::from(crate::pstr::lossy(&n).as_ref()), v.clone())),
+                Key::Int(_) => pos.push(if matches!(v, Value::Ref(_)) && by_ref(pos.len()) { v.clone() } else { v.deref() }),
+                Key::Str(n) => named.push((Rc::from(crate::pstr::lossy(&n).as_ref()), v.deref())),
             }
         }
         it.call_callable_from(f, &c, pos, named)

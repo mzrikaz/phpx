@@ -1822,6 +1822,46 @@ impl<'a> Lower<'a> {
                 let (sp, mp) = (self.iconst(sp), self.iconst(mp));
                 self.helper_value("rt_call_user_func", |l| vec![l.cx, sp, mp, aa, n_])?
             }
+            Call { callee, args } if is_call_user_func_array(callee, args) => {
+                let ExprKind::Name(n) = &callee.kind else { unreachable!() };
+                let site = Box::new(CallSite::new(n));
+                let sp = &*site as *const CallSite as i64;
+                self.sites.push(site);
+                let msite = Box::new(super::rt::MethodSite::new("", ""));
+                let mp = &*msite as *const super::rt::MethodSite as i64;
+                self.msites.push(msite);
+                // A literal list: its elements laid out like call_user_func's
+                // arguments.
+                let list = match &args[1].value.kind {
+                    ExprKind::Array(items) if items.len() <= 16 && items.iter().all(|i| i.as_ref().is_some_and(|i| i.key.is_none() && !i.spread && !i.by_ref)) => Some(items),
+                    _ => None,
+                };
+                let (aa, n_) = match list {
+                    Some(items) => {
+                        let n = items.len() + 1;
+                        let (slot, ids) = self.alloc_array(n);
+                        for i in 0..n {
+                            let a = self.b.ins().stack_addr(types::I64, slot, (i * 16) as i32);
+                            self.store_tag(a, tag::NULL);
+                        }
+                        let vals = std::iter::once(&args[0].value).chain(items.iter().flatten().map(|i| &i.value));
+                        for (i, e) in vals.enumerate() {
+                            let v = self.expr(e)?;
+                            let dst = self.b.ins().stack_addr(types::I64, slot, (i * 16) as i32);
+                            self.store_into(dst, v);
+                        }
+                        self.free.extend(ids);
+                        (self.b.ins().stack_addr(types::I64, slot, 0), self.iconst(n as i64))
+                    }
+                    None => {
+                        let (aa, _, n_) = self.args(args, ByRef::None)?;
+                        (aa, n_)
+                    }
+                };
+                self.mark_call(callee.span.start, args);
+                let (sp, mp, lf) = (self.iconst(sp), self.iconst(mp), self.iconst(list.is_some() as i64));
+                self.helper_value("rt_call_user_func_array", |l| vec![l.cx, sp, mp, aa, n_, lf])?
+            }
             Call { callee, args } if intrinsic_kind(callee, args).is_some() => {
                 let ExprKind::Name(n) = &callee.kind else { unreachable!() };
                 self.intrinsic(intrinsic_kind(callee, args).unwrap(), n, args)?
@@ -3454,6 +3494,12 @@ fn is_call_user_func(callee: &Expr, args: &[ast::Arg]) -> bool {
     let ExprKind::Name(n) = &callee.kind else { return false };
     let name = n.strip_prefix('\\').unwrap_or(n);
     name.eq_ignore_ascii_case("call_user_func") && !args.is_empty() && args.iter().all(|a| !a.spread && a.name.is_none())
+}
+
+fn is_call_user_func_array(callee: &Expr, args: &[ast::Arg]) -> bool {
+    let ExprKind::Name(n) = &callee.kind else { return false };
+    let name = n.strip_prefix('\\').unwrap_or(n);
+    name.eq_ignore_ascii_case("call_user_func_array") && args.len() == 2 && args.iter().all(|a| !a.spread && a.name.is_none())
 }
 
 /// Built-ins compiled inline: one plain positional argument, called by a
