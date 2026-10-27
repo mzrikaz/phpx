@@ -61,6 +61,10 @@ pub fn forget_upload(path: &str) {
 struct Config {
     docroot: PathBuf,
     router: Option<PathBuf>,
+    /// The router script as given on the command line: `SCRIPT_FILENAME`
+    /// of requests for paths that name no file (PHP's server does this;
+    /// Symfony's base URL detection relies on it).
+    router_arg: Option<PathBuf>,
     addr: String,
 }
 
@@ -682,8 +686,12 @@ fn accept_request(stream: &TcpStream) -> Option<(Request, String)> {
 }
 
 /// Where a request goes without a router: (script name, file, path info).
+/// A path naming no file keeps the router as its file.
 fn router_target(req: &Request, cfg: &Config) -> (String, PathBuf, String) {
-    resolve(&cfg.docroot, req.path()).unwrap_or_else(|| (req.path().to_string(), cfg.docroot.join(req.path().trim_start_matches('/')), String::new()))
+    resolve(&cfg.docroot, req.path()).unwrap_or_else(|| {
+        let file = cfg.router_arg.clone().unwrap_or_else(|| cfg.docroot.join(req.path().trim_start_matches('/')));
+        (req.path().to_string(), file, String::new())
+    })
 }
 
 fn respond(stream: TcpStream, req: &Request, cfg: &Arc<Config>, peer: &str) {
@@ -741,6 +749,7 @@ pub fn serve(addr: &str, docroot: Option<&Path>, router: Option<&Path>) -> i32 {
         eprintln!("Directory {} does not exist.", docroot.display());
         return 1;
     }
+    let router_arg = router.map(Path::to_path_buf);
     let router = router.map(|r| r.canonicalize().unwrap_or_else(|_| r.to_path_buf()));
     if let Some(r) = &router {
         if !r.is_file() {
@@ -759,7 +768,7 @@ pub fn serve(addr: &str, docroot: Option<&Path>, router: Option<&Path>) -> i32 {
             return 1;
         }
     };
-    let cfg = Arc::new(Config { docroot, router, addr: addr.to_string() });
+    let cfg = Arc::new(Config { docroot, router, router_arg, addr: addr.to_string() });
     // Worker threads run requests one at a time each (PHP's server has one
     // unless PHP_CLI_SERVER_WORKERS says more); a worker keeps parsed
     // files between requests, while each request gets a fresh interpreter.
