@@ -1323,7 +1323,17 @@ impl Interp {
             StmtKind::Foreach { subject, key, value, by_ref: true, body } => {
                 return self.exec_foreach_ref(f, subject, key.as_ref(), value, body)
             }
-            StmtKind::Foreach { subject, key, value, body, .. } => return self.exec_foreach(f, subject, key.as_ref(), value, body),
+            StmtKind::Foreach { subject, key, value, body, .. } => {
+                // A long loop over an array in a variable: compile the
+                // function from this loop on before it starts (the compiled
+                // code runs the whole statement).
+                if f.fn_id != 0 && self.long_array_var(f, subject) {
+                    if let Some(r) = self.try_osr(f, s) {
+                        return Ok(Flow::Return(r?));
+                    }
+                }
+                return self.exec_foreach(f, subject, key.as_ref(), value, body);
+            }
             StmtKind::Switch { subject, cases } => {
                 let v = self.eval(f, subject)?;
                 let mut matched = None;
@@ -1458,6 +1468,13 @@ impl Interp {
             }
         }
         result
+    }
+
+    /// Whether `e` is a variable holding an array long enough to compile
+    /// a loop over it.
+    fn long_array_var(&self, f: &Frame, e: &ast::Expr) -> bool {
+        let ast::ExprKind::Var(name) = &e.kind else { return false };
+        f.vars.get(name).is_some_and(|s| matches!(&*s.borrow(), Value::Array(a) if a.len() >= crate::compiler::OSR_ITERATIONS as usize))
     }
 
     fn exec_foreach(

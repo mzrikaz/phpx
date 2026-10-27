@@ -851,6 +851,14 @@ impl<'a> Lower<'a> {
                 self.b.switch_to_block(exit);
             }
             StmtKind::Foreach { subject, key, value, body, .. } => {
+                // Entered before it starts (the interpreter hasn't evaluated
+                // the subject yet): the entry runs the whole statement.
+                if self.no_osr == 0 && self.osr_target == Some(s as *const Stmt as usize) {
+                    let head = self.b.create_block();
+                    self.osr_mark(s, head);
+                    self.b.ins().jump(head, &[]);
+                    self.b.switch_to_block(head);
+                }
                 self.no_osr += 1;
                 let r = self.foreach(subject, key.as_ref(), value, body);
                 self.no_osr -= 1;
