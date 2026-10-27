@@ -830,6 +830,9 @@ impl Native {
             eprintln!("[native] code of {}:\n{vcode}", t.display);
         }
         let size = ctx.compiled_code().map_or(0, |c| c.code_info().total_size);
+        if self.log {
+            eprintln!("[native] {}: {size} bytes", t.display);
+        }
         self.module.finalize_definitions().map_err(|_| "finalize failed")?;
         let ptr = self.module.get_finalized_function(id);
         perf_map(ptr, size, &t.display);
