@@ -177,6 +177,24 @@ pub struct Class {
 
 /// A class name as messages and dumps show it: an anonymous class's real
 /// name stops at its NUL (PHP prints C strings there).
+/// `name` lowercased for a method/function lookup without allocating in
+/// the common cases: as is when it has no uppercase letter, else in `buf`
+/// when it fits.
+#[inline]
+pub fn lower_name<'a>(name: &'a str, buf: &'a mut [u8; 64]) -> std::borrow::Cow<'a, str> {
+    if !name.bytes().any(|b| b.is_ascii_uppercase()) {
+        return std::borrow::Cow::Borrowed(name);
+    }
+    if name.len() > buf.len() {
+        return std::borrow::Cow::Owned(name.to_ascii_lowercase());
+    }
+    for (d, c) in buf.iter_mut().zip(name.bytes()) {
+        *d = c.to_ascii_lowercase();
+    }
+    // SAFETY: ASCII lowercasing of UTF-8 leaves it valid UTF-8.
+    std::borrow::Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(&buf[..name.len()]) })
+}
+
 pub fn display_name(name: &str) -> &str {
     name.split('\0').next().unwrap_or(name)
 }

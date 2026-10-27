@@ -1747,6 +1747,15 @@ fn remove_path(it: &Interp, cur: &mut Value, path: &[Option<crate::expr::Off>]) 
 
 /// Gather consumed args; for by-reference params whose argument is a local,
 /// pass a cell and copy the result back afterwards (copy-in/copy-out).
+/// Local pointers for arguments that have none (all null, by-reference mask
+/// word included): such arguments are passed by value.
+struct NoLocals([*mut Value; 17]);
+// SAFETY: only null pointers, never written through (the mask word is
+// written only for non-null locals).
+unsafe impl Sync for NoLocals {}
+static NO_LOCALS_ARR: NoLocals = NoLocals([ptr::null_mut(); 17]);
+const NO_LOCALS: &[*mut Value; 17] = &NO_LOCALS_ARR.0;
+
 unsafe fn take_args(args: *mut Value, n: u64) -> Vec<Value> {
     (0..n as usize).map(|i| take(args.add(i))).collect()
 }
@@ -2380,6 +2389,22 @@ pub unsafe extern "C" fn rt_method_call(
     let site = &*site;
     let name = site.name;
     if !meta.is_null() {
+        // Spread only (no named arguments): expanded, then cached like a
+        // plain call (spread elements never bind by reference).
+        if std::slice::from_raw_parts(meta, n as usize).iter().all(|a| a.name.is_none()) {
+            let (mut pos, named) = match expand_args(it, take_args(args, n), meta) {
+                Ok(x) => x,
+                Err(e) => return status(it, Err(e), |v| put(dst, v)),
+            };
+            if named.is_empty() && pos.len() < NO_LOCALS.len() {
+                return rt_method_call(c, obj, site, pos.as_mut_ptr(), pos.len() as u64, NO_LOCALS.as_ptr(), ptr::null(), dst);
+            }
+            let r = match &*obj {
+                Value::Object(o) => it.method_call(f, &o.clone(), name, pos, named),
+                other => Err(it.error("Error", &format!("Call to a member function {name}() on {}", other.type_name()))),
+            };
+            return status(it, r, |v| put(dst, v));
+        }
         return method_call_general(it, f, obj, name, args, n, locals, meta, dst);
     }
     if let Value::Object(o) = &*obj {
@@ -2572,12 +2597,17 @@ unsafe fn method_call_general(
     let r = match &*obj {
         Value::Object(o) => {
             let o = o.clone();
+            let mut buf = [0; 64];
+            let m = o.class.find_method_from(&crate::class::lower_name(name, &mut buf), f.class.as_deref()).cloned();
+            let params = m.as_ref().and_then(|m| crate::call::method_params(m));
+            let call = |pos, named| match &m {
+                Some(m) => it.method_call_found(f, &o, m, name, pos, named),
+                None => it.method_call(f, &o, name, pos, named),
+            };
             if meta.is_null() {
-                let params = o.class.find_method_from(&name.to_ascii_lowercase(), f.class.as_deref()).and_then(|m| crate::call::method_params(m));
-                with_refs(params, vals, locals, |pos| it.method_call(f, &o, name, pos, vec![]))
+                with_refs(params, vals, locals, |pos| call(pos, vec![]))
             } else {
-                let params = o.class.find_method_from(&name.to_ascii_lowercase(), f.class.as_deref()).and_then(|m| crate::call::method_params(m));
-                call_expanded(it, vals, meta, params, locals, |pos, named| it.method_call(f, &o, name, pos, named))
+                call_expanded(it, vals, meta, params, locals, call)
             }
         }
         other => Err(it.error("Error", &format!("Call to a member function {name}() on {}", other.type_name()))),
@@ -2609,7 +2639,8 @@ unsafe fn call_expanded(
 /// Spread and named arguments, expanded like the interpreter's eval_args.
 unsafe fn expand_args(it: &Interp, vals: Vec<Value>, meta: *const ast::Arg) -> R<(Vec<Value>, Vec<(Rc<str>, Value)>)> {
     let ast_args = std::slice::from_raw_parts(meta, vals.len());
-    let mut pos = Vec::with_capacity(vals.len());
+    let cap = vals.iter().zip(ast_args).map(|(v, a)| if let (true, Value::Array(arr)) = (a.spread, v) { arr.len() } else { 1 }).sum();
+    let mut pos = Vec::with_capacity(cap);
     let mut named = vec![];
     for (v, a) in vals.into_iter().zip(ast_args) {
         if a.spread {
@@ -2892,10 +2923,8 @@ pub unsafe extern "C" fn rt_method_call_dyn(
     };
     // A string name gets an inline-cached site of its own, as if written
     // literally.
-    if meta.is_null() {
-        if let Some(site) = dyn_method_site(s) {
-            return rt_method_call(c, obj, site, args, n, locals, meta, dst);
-        }
+    if let Some(site) = dyn_method_site(s) {
+        return rt_method_call(c, obj, site, args, n, locals, meta, dst);
     }
     match it.to_string_lossy(name) {
         Ok(nm) => method_call_general(it, f, obj, &nm, args, n, locals, meta, dst),
@@ -3172,12 +3201,12 @@ unsafe fn static_call_general(
     dst: *mut Value,
 ) -> u64 {
     let pos = take_args(args, n);
+    let mut buf = [0; 64];
+    let params = cls.find_method(&crate::class::lower_name(name, &mut buf)).and_then(|m| crate::call::method_params(m));
     let r = (|| {
         if !meta.is_null() {
-            let params = cls.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m));
             return call_expanded(it, pos, meta, params, locals, |pos, named| it.static_call(f, cref, cls.clone(), name, pos, named));
         }
-        let params = cls.find_method(&name.to_ascii_lowercase()).and_then(|m| crate::call::method_params(m));
         with_refs(params, pos, locals, |pos| it.static_call(f, cref, cls.clone(), name, pos, vec![]))
     })();
     status(it, r, |v| put(dst, v))

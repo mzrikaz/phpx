@@ -1,0 +1,33 @@
+a/0 x/NULL 1,2,3,4
+a/0 a/0 p/0
+k/0 0,1
+call:hidden(1,2) call:prot(3) call:nope(a,0) static:stat(a,0)
+hidden prot
+named/0 n2/7
+22
+Error: Call to private method Svc::hidden() from global scope
+Call to a member function get() on null
+Call to undefined method Svc::missing()
+ArgumentCountError
+a/1 x/NULL 1,2,3,4
+a/1 a/1 p/1
+k/1 1,2
+call:hidden(1,2) call:prot(3) call:nope(a,1) static:stat(a,1)
+hidden prot
+named/1 n2/7
+22
+Error: Call to private method Svc::hidden() from global scope
+Call to a member function get() on null
+Call to undefined method Svc::missing()
+ArgumentCountError
+a/2 x/NULL 1,2,3,4
+a/2 a/2 p/2
+k/2 2,3
+call:hidden(1,2) call:prot(3) call:nope(a,2) static:stat(a,2)
+hidden prot
+named/2 n2/7
+22
+Error: Call to private method Svc::hidden() from global scope
+Call to a member function get() on null
+Call to undefined method Svc::missing()
+ArgumentCountError

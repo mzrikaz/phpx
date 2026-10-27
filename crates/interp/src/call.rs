@@ -1737,21 +1737,28 @@ impl Interp {
     }
 
     pub fn method_call(&self, f: &Frame, o: &Rc<Obj>, name: &str, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
-        let lname = name.to_ascii_lowercase();
+        let mut buf = [0; 64];
+        let lname = crate::class::lower_name(name, &mut buf);
         match o.class.find_method_from(&lname, f.class.as_deref()).cloned() {
-            Some(m) => {
-                if self.check_method_visible(f, &o.class, &m).is_err() && o.class.find_method("__call").is_some() {
-                    return self.magic_call(o, name, pos, named);
-                }
-                self.check_method_visible(f, &o.class, &m)?;
-                self.invoke_method(Some(o.clone()), &m, o.class.clone(), pos, named)
-            }
+            Some(m) => self.method_call_found(f, o, &m, name, pos, named),
             None if o.class.find_method("__call").is_some() => self.magic_call(o, name, pos, named),
             None => {
                 // `$obj->prop(...)` where prop holds a closure is NOT a method call in PHP.
                 Err(self.error("Error", &format!("Call to undefined method {}::{name}()", o.class.name)))
             }
         }
+    }
+
+    /// method_call() once the method is found: invisible ones go to `__call`
+    /// when there is one.
+    pub fn method_call_found(&self, f: &Frame, o: &Rc<Obj>, m: &Rc<Method>, name: &str, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
+        if !self.member_visible(f.class.as_deref(), m.vis, &m.declaring) {
+            if o.class.find_method("__call").is_some() {
+                return self.magic_call(o, name, pos, named);
+            }
+            self.check_method_visible(f, &o.class, m)?;
+        }
+        self.invoke_method(Some(o.clone()), m, o.class.clone(), pos, named)
     }
 
     fn magic_call(&self, o: &Rc<Obj>, name: &str, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
@@ -1815,14 +1822,15 @@ impl Interp {
         named: Vec<(Rc<str>, Value)>,
     ) -> R<Value> {
         let forwarding = is_forwarding(cref);
-        let lname = name.to_ascii_lowercase();
-        let this_fits = f.this.as_ref().filter(|o| o.class.is_subclass_of(&cls)).cloned();
+        let mut buf = [0; 64];
+        let lname = crate::class::lower_name(name, &mut buf);
         match cls.find_method(&lname).cloned() {
             Some(m) => {
                 self.check_method_visible(f, &cls, &m)?;
                 self.static_invoke(f, cref, cls, &m, pos, named)
             }
             None => {
+                let this_fits = f.this.as_ref().filter(|o| o.class.is_subclass_of(&cls)).cloned();
                 if let (Some(this), Some(_)) = (&this_fits, cls.find_method("__call")) {
                     return self.magic_call(this, name, pos, named);
                 }
