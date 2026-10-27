@@ -3499,6 +3499,62 @@ impl<'a> Lower<'a> {
                 self.store_into(ta, Op::Int(r));
                 self.b.ins().jump(merge, &[]);
                 self.b.switch_to_block(slow);
+                if matches!(op, Add | Sub | Mul) {
+                    // Ints and floats (int overflow lands here too, which
+                    // PHP also computes as float): in registers.
+                    let generic = self.b.create_block();
+                    let (x, y) = self.float_operands(a, b, generic);
+                    let r = match op {
+                        Add => self.b.ins().fadd(x, y),
+                        Sub => self.b.ins().fsub(x, y),
+                        _ => self.b.ins().fmul(x, y),
+                    };
+                    let ta = self.temp_addr(t);
+                    self.store_into(ta, Op::Float(r));
+                    self.b.ins().jump(merge, &[]);
+                    self.b.switch_to_block(generic);
+                }
+                let am = self.materialize(a);
+                let bm = self.materialize(b);
+                let (aa, ba) = (self.addr(am).unwrap(), self.addr(bm).unwrap());
+                let code = self.iconst(binop_code(op) as i64);
+                let ta = self.temp_addr(t);
+                self.call_checked("rt_binop", &[self.cx, code, aa, ba, ta]);
+                if matches!(a, Op::Int(_) | Op::Float(_) | Op::Bool(_)) {
+                    self.release(am);
+                }
+                if matches!(b, Op::Int(_) | Op::Float(_) | Op::Bool(_)) {
+                    self.release(bm);
+                }
+                self.b.ins().jump(merge, &[]);
+                self.b.switch_to_block(merge);
+                self.release(a);
+                self.release(b);
+                let ta = self.temp_addr(t);
+                Ok(Op::Ptr(ta, Some(t)))
+            }
+            Div => {
+                // A float on either side and a non-zero divisor: divided in
+                // registers (int / int keeps PHP's int-or-float result rules
+                // in the helper).
+                let t = self.alloc_temp();
+                let (slow, merge) = (self.b.create_block(), self.b.create_block());
+                let (af, bf) = (self.float_tag(a), self.float_tag(b));
+                let any = self.b.ins().bor(af, bf);
+                let try_f = self.b.create_block();
+                self.b.ins().brif(any, try_f, &[], slow, &[]);
+                self.b.switch_to_block(try_f);
+                let (x, y) = self.float_operands(a, b, slow);
+                let z = self.b.ins().f64const(0.0);
+                let nz = self.b.ins().fcmp(FloatCC::NotEqual, y, z);
+                let ok = self.b.create_block();
+                self.b.ins().brif(nz, ok, &[], slow, &[]);
+                self.b.switch_to_block(ok);
+                let r = self.b.ins().fdiv(x, y);
+                let ta = self.temp_addr(t);
+                self.store_into(ta, Op::Float(r));
+                self.b.ins().jump(merge, &[]);
+                self.b.switch_to_block(slow);
                 let am = self.materialize(a);
                 let bm = self.materialize(b);
                 let (aa, ba) = (self.addr(am).unwrap(), self.addr(bm).unwrap());
@@ -3527,6 +3583,54 @@ impl<'a> Lower<'a> {
                 self.release(am);
                 self.release(bm);
                 Ok(r)
+            }
+        }
+    }
+
+    /// i8: whether `op` holds a float.
+    fn float_tag(&mut self, op: Op) -> CValue {
+        match op {
+            Op::Float(_) => self.b.ins().iconst(types::I8, 1),
+            Op::Int(_) | Op::Bool(_) => self.b.ins().iconst(types::I8, 0),
+            _ => {
+                let a = self.addr(op).unwrap();
+                let t = self.load_tag(a);
+                self.b.ins().icmp_imm_u(IntCC::Equal, t, tag::FLOAT as i64)
+            }
+        }
+    }
+
+    /// Both operands as f64 when each is an int or a float; branches to
+    /// `other` otherwise (bools, strings, null, arrays...).
+    fn float_operands(&mut self, a: Op, b: Op, other: Block) -> (CValue, CValue) {
+        let x = self.as_f64(a, other);
+        let y = self.as_f64(b, other);
+        (x, y)
+    }
+
+    fn as_f64(&mut self, op: Op, other: Block) -> CValue {
+        match op {
+            Op::Float(v) => v,
+            Op::Int(v) => self.b.ins().fcvt_from_sint(types::F64, v),
+            Op::Bool(_) => {
+                self.b.ins().jump(other, &[]);
+                let dead = self.b.create_block();
+                self.b.switch_to_block(dead);
+                self.b.ins().f64const(0.0)
+            }
+            _ => {
+                let a = self.addr(op).unwrap();
+                let t = self.load_tag(a);
+                let is_f = self.b.ins().icmp_imm_u(IntCC::Equal, t, tag::FLOAT as i64);
+                let is_i = self.b.ins().icmp_imm_u(IntCC::Equal, t, tag::INT as i64);
+                let num = self.b.ins().bor(is_f, is_i);
+                let go = self.b.create_block();
+                self.b.ins().brif(num, go, &[], other, &[]);
+                self.b.switch_to_block(go);
+                let raw = self.b.ins().load(types::I64, flags(), a, tag::PAYLOAD);
+                let fv = self.b.ins().load(types::F64, flags(), a, tag::PAYLOAD);
+                let iv = self.b.ins().fcvt_from_sint(types::F64, raw);
+                self.b.ins().select(is_f, fv, iv)
             }
         }
     }
