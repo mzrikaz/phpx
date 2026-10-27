@@ -2514,6 +2514,24 @@ pub unsafe extern "C" fn rt_call_value(
             }
         }
     }
+    if meta.is_null() {
+        match &*callee {
+            // 'name'(...): like a call to the fully qualified name.
+            Value::Str(s) => {
+                if let Some(site) = dyn_call_site(s) {
+                    return rt_call(c, site, args, n, locals, meta, dst);
+                }
+            }
+            // [$obj, 'name'](...): like $obj->name(...).
+            Value::Array(a) => {
+                if let Some((o, site)) = array_method_site(a) {
+                    let obj = Value::Object(o);
+                    return rt_method_call(c, &obj, site, args, n, locals, meta, dst);
+                }
+            }
+            _ => {}
+        }
+    }
     let vals = take_args(args, n);
     let r = it.to_callable(f, &*callee).and_then(|callable| {
         if meta.is_null() {
@@ -2658,6 +2676,47 @@ fn dyn_method_site(name: &[u8]) -> Option<&'static MethodSite> {
 /// Forget what the dynamic-name call sites cached (a new request).
 pub fn reset_dyn_sites() {
     DYN_MSITES.with(|m| m.borrow().values().for_each(|s| s.reset()));
+    DYN_CSITES.with(|m| m.borrow().values().for_each(|s| s.reset()));
+}
+
+thread_local! {
+    /// Call sites for string callables (`$f = 'name'; $f()`) by function
+    /// name (leaked; bounded).
+    static DYN_CSITES: RefCell<rustc_hash::FxHashMap<Box<[u8]>, &'static CallSite>> = Default::default();
+}
+
+/// The call site for calling a function by the name in a string (None for
+/// 'Class::method' strings, and once there are too many names).
+fn dyn_call_site(name: &[u8]) -> Option<&'static CallSite> {
+    DYN_CSITES.with(|m| {
+        if let Some(s) = m.borrow().get(name) {
+            return Some(*s);
+        }
+        if name.is_empty() || name.contains(&b':') {
+            return None;
+        }
+        let mut m = m.borrow_mut();
+        if m.len() >= DYN_MSITES_MAX {
+            return None;
+        }
+        // A string callable always names a function fully qualified.
+        let full = format!("\\{}", std::str::from_utf8(name).ok()?.trim_start_matches('\\'));
+        let site: &'static CallSite = Box::leak(Box::new(CallSite::new(Box::leak(full.into_boxed_str()))));
+        m.insert(name.into(), site);
+        Some(site)
+    })
+}
+
+/// `[$obj, 'name']`: the object and the call site for its method.
+fn array_method_site(a: &crate::value::PhpArray) -> Option<(Rc<crate::value::Obj>, &'static MethodSite)> {
+    if a.len() != 2 {
+        return None;
+    }
+    let (Some(Value::Object(o)), Some(Value::Str(m))) = (a.get(&Key::Int(0)), a.get(&Key::Int(1))) else { return None };
+    if m.contains(&b':') {
+        return None;
+    }
+    Some((o, dyn_method_site(&m)?))
 }
 
 /// `$obj->$name` read.
@@ -3393,6 +3452,19 @@ pub unsafe extern "C" fn rt_unhandled_match(c: *mut Cx, v: *const Value) -> u64 
 }
 
 impl CallSite {
+    pub fn new(name: &'static str) -> CallSite {
+        CallSite {
+            direct: Default::default(),
+            frame: Default::default(),
+            name,
+            cached: Default::default(),
+            builtin: Default::default(),
+            bspec: Default::default(),
+            builtin_ref: Default::default(),
+            jit: Default::default(),
+        }
+    }
+
     /// Forget everything cached (a new request: its functions are new).
     pub fn reset(&self) {
         self.direct.set(0);

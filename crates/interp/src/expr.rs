@@ -9,7 +9,7 @@ use std::rc::Rc;
 use phpx_syntax::ast::{self, BinOp, Expr, ExprKind, InterpPart, MemberName, UnOp};
 
 use crate::class::{StaticProp, Vis};
-use crate::interp::{slot, ClosureData, ClosureKind, Ctrl, Frame, Interp, Slot, R};
+use crate::interp::{slot, Callable, ClosureData, ClosureKind, Ctrl, Frame, Interp, Slot, R};
 use crate::value::{identical, Internal, Key, Obj, PhpArray, Value};
 
 /// Magic property methods, indexing MAGIC_NAMES (and keying guards).
@@ -982,6 +982,13 @@ impl Interp {
     fn chain_call(&self, f: &mut Frame, callee: &'static Expr, args: &'static [ast::Arg]) -> R<Option<Value>> {
         let Some(c) = self.chain_base(f, callee)? else { return Ok(None) };
         let callable = self.to_callable(f, &c)?;
+        if let Callable::Builtin(bname, fun) = &callable {
+            // A built-in with by-reference parameters ($f = 'sort'; $f($a)).
+            let idxs = crate::call::by_ref_params(bname);
+            if !idxs.is_empty() {
+                return self.call_by_ref_builtin(f, bname, *fun, args, idxs).map(Some);
+            }
+        }
         let (pos, named) = self.eval_args_for(f, args, crate::call::callable_params(&callable))?;
         self.call_callable(&callable, pos, named).map(Some)
     }

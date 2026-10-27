@@ -1,0 +1,19 @@
+g(29)
+g(29)
+NS\g(29)
+g(29)
+30
+1,2,3
+X
+m(29)
+s(29)
+__call(nope)
+__call(p)
+p
+Bm
+Error: Call to undefined function nofn()
+Error: Call to private method B::p() from global scope
+Error: Call to undefined method B::nope()
+Error: Call to undefined method B::A::m()
+["b","b"]
+defined

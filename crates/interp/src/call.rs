@@ -846,7 +846,7 @@ impl Interp {
         Ok(Value::array(out))
     }
 
-    fn call_by_ref_builtin(
+    pub(crate) fn call_by_ref_builtin(
         &self,
         f: &mut Frame,
         name: &str,
