@@ -44,6 +44,16 @@ pub fn callable(it: &Interp, f: &Frame, a: &[Value], i: usize) -> R<Callable> {
     it.to_callable(f, &arg(a, i))
 }
 
+/// The `$callback` argument of `func` (not checked beforehand): resolved,
+/// or PHP's "must be a valid callback" TypeError.
+fn callback(it: &Interp, f: &Frame, a: &[Value], func: &str) -> R<Callable> {
+    let v = arg(a, 0);
+    it.to_callable(f, &v).or_else(|e| match it.callable_error(f, &v)? {
+        Some(why) => Err(it.error("TypeError", &format!("{func}(): Argument #1 ($callback) must be a valid callback, {why}"))),
+        None => Err(e),
+    })
+}
+
 /// Fail with PHP's "Allowed memory size exhausted" fatal error if
 /// allocating `bytes` would exceed memory_limit.
 pub fn reserve(it: &Interp, bytes: usize) -> R<()> {
@@ -639,12 +649,12 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         }
     });
     t.insert("call_user_func", |it, f, a| {
-        let c = callable(it, f, a, 0)?;
+        let c = callback(it, f, a, "call_user_func")?;
         let args = a[1..].iter_mut().map(std::mem::take).collect();
         it.call_callable_from(f, &c, args, vec![])
     });
     t.insert("call_user_func_array", |it, f, a| {
-        let c = callable(it, f, a, 0)?;
+        let c = callback(it, f, a, "call_user_func_array")?;
         let args = arr(it, a, 1, "call_user_func_array")?;
         let mut pos = vec![];
         let mut named = vec![];

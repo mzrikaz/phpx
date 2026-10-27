@@ -1779,6 +1779,19 @@ impl<'a> Lower<'a> {
             Call { callee, args } if args.is_empty() && matches!(&callee.kind, ExprKind::Name(n) if n.trim_start_matches('\\').eq_ignore_ascii_case("get_called_class")) => {
                 self.helper_value("rt_called_class", |l| vec![l.cx])?
             }
+            Call { callee, args } if is_call_user_func(callee, args) => {
+                let ExprKind::Name(n) = &callee.kind else { unreachable!() };
+                let site = Box::new(CallSite::new(n));
+                let sp = &*site as *const CallSite as i64;
+                self.sites.push(site);
+                let msite = Box::new(super::rt::MethodSite::new("", ""));
+                let mp = &*msite as *const super::rt::MethodSite as i64;
+                self.msites.push(msite);
+                let (aa, _, n_) = self.args(args, ByRef::None)?;
+                self.mark_call(callee.span.start, args);
+                let (sp, mp) = (self.iconst(sp), self.iconst(mp));
+                self.helper_value("rt_call_user_func", |l| vec![l.cx, sp, mp, aa, n_])?
+            }
             Call { callee, args } if intrinsic_kind(callee, args).is_some() => {
                 let ExprKind::Name(n) = &callee.kind else { unreachable!() };
                 self.intrinsic(intrinsic_kind(callee, args).unwrap(), n, args)?
@@ -3302,6 +3315,15 @@ enum Intrinsic {
     IsTag(&'static [u8]),
     Strlen,
     Count,
+}
+
+/// `call_user_func($cb, ...)` with plain arguments, by a name that can
+/// only mean the built-in (the helper checks no namespaced function
+/// shadows it).
+fn is_call_user_func(callee: &Expr, args: &[ast::Arg]) -> bool {
+    let ExprKind::Name(n) = &callee.kind else { return false };
+    let name = n.strip_prefix('\\').unwrap_or(n);
+    name.eq_ignore_ascii_case("call_user_func") && !args.is_empty() && args.iter().all(|a| !a.spread && a.name.is_none())
 }
 
 /// Built-ins compiled inline: one plain positional argument, called by a

@@ -625,6 +625,11 @@ impl Interp {
         })
     }
 
+    /// Whether the function a call site's (leaked) name names exists.
+    pub(crate) fn function_exists_at(&self, f: &Frame, name: &'static str) -> bool {
+        self.call_cache.borrow().contains_key(&(name.as_ptr() as usize)) || self.find_function(&f.ctx, name).is_some()
+    }
+
     /// Resolve a called name. Each call site's name lives at a unique
     /// (leaked) address; functions can't be redeclared, so resolving once
     /// is enough (PHP's run-time cache keeps a namespaced call's fallback

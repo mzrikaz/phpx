@@ -1,0 +1,20 @@
+g(39)
+g(39)
+X
+cl(39)
+78
+m(39)
+s(39)
+s(39)
+s(39)
+p(39)
+39
+g(abs)
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, function "nofn" not found or invalid function name
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method A::p()
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method B::p()
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class A does not have a method "nope"
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, no array or string given
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, array callback must have exactly two members
+TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method B::p()
+shadowed

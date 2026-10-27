@@ -2545,6 +2545,60 @@ pub unsafe extern "C" fn rt_call_value(
     status(it, r, |v| put(dst, v))
 }
 
+/// `call_user_func($cb, ...)`: a closure, a function name or `[$obj,
+/// 'method']` known to be valid is called like `$cb(...)` (arguments by
+/// value); anything else goes to the built-in through `site`, which reports
+/// invalid callbacks. `args` holds the callback, then its arguments.
+pub unsafe extern "C" fn rt_call_user_func(c: *mut Cx, site: *const CallSite, msite: *const MethodSite, args: *mut Value, n: u64, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    let (rest, m) = (args.add(1), n - 1);
+    // No locals: nothing is passed by reference.
+    const MAX: usize = 16;
+    let nulls = || [ptr::null_mut::<Value>(); MAX + 2];
+    if m as usize <= MAX && !crate::value::builtin_shadowed().load(std::sync::atomic::Ordering::Relaxed) {
+        match &*args {
+            Value::Object(o) => {
+                if let Some(st) = closure_call(it, o, &*msite, rest, m, dst) {
+                    drop(take(args));
+                    return st;
+                }
+            }
+            Value::Str(s) => {
+                if let Some(fs) = dyn_call_site(s).filter(|fs| it.function_exists_at(f, fs.name)) {
+                    drop(take(args));
+                    return rt_call(c, fs, rest, m, nulls().as_ptr(), ptr::null(), dst);
+                }
+            }
+            Value::Array(a) => {
+                if let Some((o, ms)) = array_method_site(a) {
+                    let scope = f.class.as_ref().map_or(ptr::null(), Rc::as_ptr);
+                    if site_knows(ms, &o.class, scope) || matches!(it.callable_error(f, &*args), Ok(None)) {
+                        drop(take(args));
+                        let obj = Value::Object(o);
+                        return rt_method_call(c, &obj, ms, rest, m, nulls().as_ptr(), ptr::null(), dst);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let locals = vec![ptr::null_mut::<Value>(); n as usize + 1];
+    rt_call(c, site, args, n, locals.as_ptr(), ptr::null(), dst)
+}
+
+/// Whether method site `site` already resolved its method for objects of
+/// `class` called from `scope` (found and accessible).
+fn site_knows(site: &MethodSite, class: &Rc<crate::class::Class>, scope: *const crate::class::Class) -> bool {
+    let cls = Rc::as_ptr(class);
+    if site.cached.get().is_some_and(|mc| mc.class == cls && mc.scope == scope) {
+        return true;
+    }
+    if site.interp.borrow().as_ref().is_some_and(|e| e.0 == cls as usize && e.1 == scope as usize) {
+        return true;
+    }
+    site.poly.borrow().iter().any(|e| Rc::ptr_eq(&e.class, class) && e.scope.as_ref().map_or(ptr::null(), Rc::as_ptr) == scope)
+}
+
 /// `$f(...)` on a closure: its compiled body, entered directly with the
 /// arguments and captured values (no interpreter frame variables). None =
 /// not taken (arguments untouched).

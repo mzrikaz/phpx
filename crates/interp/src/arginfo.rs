@@ -94,8 +94,13 @@ fn build() -> FxHashMap<&'static str, Spec> {
         .map(|(name, ps)| {
             let params: Vec<Param> = ps
                 .iter()
-                .map(|&(name, ty, flags, default)| {
-                    let (mask, classes) = parse_type(ty);
+                .map(|&(pname, ty, flags, default)| {
+                    let (mut mask, classes) = parse_type(ty);
+                    // Resolved (and reported) by the built-in itself, once.
+                    if matches!(*name, "call_user_func" | "call_user_func_array") && pname == "callback" {
+                        mask = MIXED;
+                    }
+                    let name = pname;
                     Param { name, ty, mask, classes, optional: flags & 1 != 0, variadic: flags & 4 != 0, default }
                 })
                 .collect();
