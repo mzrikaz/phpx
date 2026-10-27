@@ -118,16 +118,23 @@ yardstick and the cross-language suite (`tools/bench/xlang`).
 ## Baseline
 
 `tools/bench/xlang/run.sh php8.4` (ms, one run, 2026-10-28; PHP 8.4 with
-opcache, JIT off; Node 22):
+opcache, JIT off; Node 22). Short runs (under ~100 ms) include phpx's
+compile warm-up.
 
 | Benchmark | PHP | phpx | Node | phpx/PHP | phpx/Node |
 |---|---|---|---|---|---|
-| binary-trees | 1312 | 3706 | 141 | 2.82 | 26 |
-| fannkuch-redux | 1110 | 647 | 165 | 0.58 | 3.9 |
-| n-body | 1508 | 2340 | 63 | 1.55 | 37 |
-| spectral-norm | 185 | 290 | 13 | 1.57 | 22 |
+| assoc | 33 | 47 | 34 | 1.42 | 1.4 |
+| binary-trees | 1466 | 3803 | 142 | 2.59 | 27 |
+| closures | 24 | 55 | 8 | 2.29 | 6.9 |
+| fannkuch-redux | 1186 | 698 | 176 | 0.59 | 4.0 |
+| json | 47 | 77 | 45 | 1.64 | 1.7 |
+| n-body | 1538 | 2822 | 64 | 1.83 | 44 |
+| oop | 54 | 120 | 11 | 2.22 | 11 |
+| spectral-norm | 183 | 307 | 13 | 1.68 | 24 |
+| strings | 41 | 52 | 33 | 1.27 | 1.6 |
 
 Before this suite existed n-body took 15.7 s in phpx (no inline float
 arithmetic, compound assignment to properties through the generic place
-path) and spectral-norm 1.5 s (short loops never reached on-stack
-replacement).
+path), spectral-norm 1.5 s (short loops never reached on-stack
+replacement) and oop 213 ms (one-entry caches swapping on code shared by
+several classes).
