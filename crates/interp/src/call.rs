@@ -1616,7 +1616,7 @@ impl Interp {
                 if let Some(o) = &inv.this {
                     // (Mangled when a subclass redeclared it privately.)
                     let key = self.prop_key(&f, o, pname);
-                    o.set_prop(&key, v.clone());
+                    self.promote_into(o, &key, pname, v.clone())?;
                 }
             }
             f.vars.insert(pname, slot(v));
@@ -1634,6 +1634,16 @@ impl Interp {
             }
         }
         Ok(f)
+    }
+
+    /// A promoted constructor parameter's property write: a readonly one
+    /// already set (the constructor called again) can't be changed.
+    pub(crate) fn promote_into(&self, o: &Rc<Obj>, key: &str, name: &str, v: Value) -> R<()> {
+        if o.class.find_prop(key).is_some_and(|d| d.readonly) && o.props.borrow().get(key).is_some() {
+            return Err(self.error("Error", &format!("Cannot modify readonly property {}::${name}", o.class.name)));
+        }
+        o.set_prop(key, v);
+        Ok(())
     }
 
     /// The body runs lazily in its own task; the caller gets a Generator.

@@ -1,0 +1,68 @@
+[37.25,"rect1,circle1,tri1,sq1,rect1,sq1"]
+Error: Cannot modify readonly property Tri::$b
+get(x) set(x=1) get(x) set(x=2) 
+object(Weird)#9 (5) {
+  ["n"]=>
+  int(0)
+  ["s"]=>
+  string(1) "b"
+  ["f"]=>
+  float(2.5)
+  ["ni"]=>
+  int(1)
+  ["big"]=>
+  float(9.223372036854776E+18)
+}
+int(1)
+Attempt to increment/decrement property "p" on null
+[37.25,"rect1,circle1,tri1,sq1,rect1,sq1"]
+Error: Cannot modify readonly property Tri::$b
+get(x) set(x=1) get(x) set(x=2) 
+object(Weird)#8 (5) {
+  ["n"]=>
+  int(0)
+  ["s"]=>
+  string(1) "b"
+  ["f"]=>
+  float(2.5)
+  ["ni"]=>
+  int(1)
+  ["big"]=>
+  float(9.223372036854776E+18)
+}
+int(1)
+Attempt to increment/decrement property "p" on null
+[37.25,"rect1,circle1,tri1,sq1,rect1,sq1"]
+Error: Cannot modify readonly property Tri::$b
+get(x) set(x=1) get(x) set(x=2) 
+object(Weird)#11 (5) {
+  ["n"]=>
+  int(0)
+  ["s"]=>
+  string(1) "b"
+  ["f"]=>
+  float(2.5)
+  ["ni"]=>
+  int(1)
+  ["big"]=>
+  float(9.223372036854776E+18)
+}
+int(1)
+Attempt to increment/decrement property "p" on null
+[37.25,"rect1,circle1,tri1,sq1,rect1,sq1"]
+Error: Cannot modify readonly property Tri::$b
+get(x) set(x=1) get(x) set(x=2) 
+object(Weird)#10 (5) {
+  ["n"]=>
+  int(0)
+  ["s"]=>
+  string(1) "b"
+  ["f"]=>
+  float(2.5)
+  ["ni"]=>
+  int(1)
+  ["big"]=>
+  float(9.223372036854776E+18)
+}
+int(1)
+Attempt to increment/decrement property "p" on null

@@ -332,7 +332,10 @@ impl Interp {
                 }
             }
             IncDec { prefix, inc, expr } => {
-                let place = self.place(f, expr)?;
+                let verb = self.place_verb.replace("increment/decrement");
+                let place = self.place(f, expr);
+                self.place_verb.set(verb);
+                let place = place?;
                 let cur = match self.place_get(f, &place)? {
                     Some(v) => v,
                     None => {
@@ -1217,7 +1220,7 @@ impl Interp {
                         self.check_prop_place(f, &o, &name)?;
                         Ok(Place { root: Root::Prop(o, name), path: vec![] })
                     }
-                    other => Err(self.error("Error", &format!("Attempt to assign property \"{name}\" on {}", other.type_name()))),
+                    other => Err(self.error("Error", &format!("Attempt to {} property \"{name}\" on {}", self.place_verb.get(), other.type_name()))),
                 }
             }
             ExprKind::StaticProp { class, name } => {

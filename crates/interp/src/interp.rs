@@ -443,6 +443,9 @@ pub struct Interp {
     /// last found for (class, calling scope), visible from there.
     pub method_sites: RefCell<FxHashMap<usize, (usize, usize, Rc<crate::class::Method>)>>,
     /// Files included so far, in inclusion order (the main script first).
+    /// What a property write on a non-object is reported as ("assign", or
+    /// "increment/decrement" while ++/-- resolves its target).
+    pub place_verb: Cell<&'static str>,
     pub included: RefCell<indexmap::IndexSet<PathBuf, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>>,
     /// Snapshot mode: files a template already ran, with what they
     /// returned; including one hands back that value instead of running it.
@@ -541,6 +544,7 @@ impl Interp {
             composer: RefCell::new(None),
             generators: RefCell::new(vec![]),
             autoloading: RefCell::new(HashSet::new()),
+            place_verb: Cell::new("assign"),
             included: RefCell::new(indexmap::IndexSet::default()),
             preloaded: RefCell::new(HashMap::default()),
             declared: RefCell::new(HashSet::new()),

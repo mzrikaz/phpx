@@ -395,7 +395,10 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
                     // A private promoted property shadowed by a subclass lives
                     // under its mangled key.
                     let key = it.prop_key(f, o, &p.name.name);
-                    o.set_prop(&key, v.clone());
+                    if let Err(e) = it.promote_into(o, &key, &p.name.name, v.clone()) {
+                        *it.pending.borrow_mut() = Some(e);
+                        return 1;
+                    }
                     // (Not readonly ones: a second constructor call must fail.)
                     let writable = o.class.find_prop(&key).is_some_and(|d| !d.readonly);
                     if let (Some(k), true, Some((slot, _, _))) = (k, writable, o.props.borrow().get_full(&key)) {
@@ -1745,7 +1748,7 @@ unsafe fn root_place(it: &Interp, f: &mut Frame, root: *mut Value, name: *const 
             }
             Ok(p)
         }
-        other => Err(it.error("Error", &format!("Attempt to assign property \"{}\" on {}", name_of(name, len), other.type_name()))),
+        other => Err(it.error("Error", &format!("Attempt to {} property \"{}\" on {}", it.place_verb.get(), name_of(name, len), other.type_name()))),
     }
 }
 
@@ -1816,7 +1819,11 @@ pub unsafe extern "C" fn rt_place_update(
     let (it, f) = cx(c);
     let r = (|| -> R<Value> {
         let path = keys_of(it, keys, n, 0)?;
-        let obj = if name.is_null() { None } else { Some(root_place(it, f, root, name, len, path.clone())?) };
+        // ++/-- (modes 100, 101) report a non-object target as PHP does.
+        let verb = it.place_verb.replace(if matches!(mode & 0xff, 100 | 101) { "increment/decrement" } else { "assign" });
+        let obj = if name.is_null() { None } else { Some(root_place(it, f, root, name, len, path.clone())) };
+        it.place_verb.set(verb);
+        let obj = obj.transpose()?;
         let read = |it: &Interp, f: &mut Frame| -> R<Option<Value>> {
             match &obj {
                 None => {
