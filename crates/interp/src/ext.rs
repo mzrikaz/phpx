@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 
 use crate::builtins::{arg, has, int, s};
-use crate::class::Vis;
+use crate::class::{Class, Vis};
 use crate::interp::{BuiltinFn, Interp, R};
 use crate::value::{pstr, Internal, Key, Obj, PhpArray, Value};
 
@@ -155,14 +155,17 @@ struct Unser<'a> {
     max_depth: usize,
     /// Values in order of appearance, for `r:` / `R:` back-references.
     seen: Vec<Value>,
+    /// Classes met so far, by name as written: the class, whether the
+    /// allow-list admits it, and whether it has `__unserialize` / `__wakeup`.
+    classes: Vec<(&'a [u8], Rc<Class>, bool, bool, bool)>,
 }
 
-impl Unser<'_> {
+impl<'a> Unser<'a> {
     fn expect(&mut self, c: u8) -> Option<()> {
         (self.b.get(self.i) == Some(&c)).then(|| self.i += 1)
     }
 
-    fn until(&mut self, c: u8) -> Option<&[u8]> {
+    fn until(&mut self, c: u8) -> Option<&'a [u8]> {
         let start = self.i;
         let n = self.b[start..].iter().position(|&x| x == c)?;
         self.i = start + n + 1;
@@ -173,10 +176,10 @@ impl Unser<'_> {
         std::str::from_utf8(self.until(end)?).ok()?.parse().ok()
     }
 
-    fn string(&mut self) -> Option<Vec<u8>> {
+    fn string(&mut self) -> Option<&'a [u8]> {
         let len: usize = self.num(b':')?;
         self.expect(b'"')?;
-        let s = self.b.get(self.i..self.i + len)?.to_vec();
+        let s = self.b.get(self.i..self.i.checked_add(len)?)?;
         self.i += len;
         self.expect(b'"')?;
         Some(s)
@@ -190,7 +193,22 @@ impl Unser<'_> {
             b's' => {
                 let s = self.string()?;
                 self.expect(b';')?;
-                Some(Key::Str(crate::value::PStr::from(s)))
+                Some(Key::Str(crate::value::PStr::from_bytes(s)))
+            }
+            _ => None,
+        }
+    }
+
+    /// A key as written: string bytes, or Err(int).
+    fn raw_key(&mut self) -> Option<Result<&'a [u8], i64>> {
+        let t = *self.b.get(self.i)?;
+        self.i += 2;
+        match t {
+            b'i' => Some(Err(self.num(b';')?)),
+            b's' => {
+                let s = self.string()?;
+                self.expect(b';')?;
+                Some(Ok(s))
             }
             _ => None,
         }
@@ -253,7 +271,7 @@ impl Unser<'_> {
                 if self.expect(b';').is_none() {
                     return Ok(None);
                 }
-                Value::bytes(s)
+                Value::Str(crate::value::PStr::from_bytes(s))
             }
             b'r' | b'R' => {
                 let Some(n) = self.num::<usize>(b';') else { return Ok(None) };
@@ -286,7 +304,7 @@ impl Unser<'_> {
                 if self.expect(b';').is_none() {
                     return Ok(None);
                 }
-                let s = crate::pstr::lossy(&s).into_owned();
+                let s = crate::pstr::lossy(s).into_owned();
                 let Some((cls, case)) = s.split_once(':') else { return Ok(None) };
                 let Some(c) = it.find_class(cls)? else { return Ok(None) };
                 match c.consts.borrow().get(case) {
@@ -298,8 +316,7 @@ impl Unser<'_> {
                 return Ok(Some(v));
             }
             b'O' | b'C' => {
-                let Some(name) = self.string() else { return Ok(None) };
-                let name = crate::pstr::lossy(&name).into_owned();
+                let Some(raw) = self.string() else { return Ok(None) };
                 if self.expect(b':').is_none() {
                     return Ok(None);
                 }
@@ -307,49 +324,83 @@ impl Unser<'_> {
                 if self.expect(b'{').is_none() {
                     return Ok(None);
                 }
-                let allowed = self.allowed.as_ref().is_none_or(|l| l.iter().any(|a| a.eq_ignore_ascii_case(&name)));
-                let cls = if allowed { it.find_class(&name)? } else { None };
-                let cls = match cls {
-                    Some(c) => c,
-                    None => it.find_class("__PHP_Incomplete_Class")?.expect("prelude class"),
+                let (cls, allowed, has_unser, has_wakeup) = match self.classes.iter().find(|c| c.0 == raw) {
+                    Some(c) => (c.1.clone(), c.2, c.3, c.4),
+                    None => {
+                        let name = crate::pstr::lossy(raw);
+                        let allowed = self.allowed.as_ref().is_none_or(|l| l.iter().any(|a| a.eq_ignore_ascii_case(&name)));
+                        let cls = if allowed { it.find_class(&name)? } else { None };
+                        let cls = match cls {
+                            Some(c) => c,
+                            None => it.find_class("__PHP_Incomplete_Class")?.expect("prelude class"),
+                        };
+                        let (u, w) = (cls.find_method("__unserialize").is_some(), cls.find_method("__wakeup").is_some());
+                        self.classes.push((raw, cls.clone(), allowed, u, w));
+                        (cls, allowed, u, w)
+                    }
                 };
                 let o = Obj::new(cls.clone(), Internal::None);
                 it.init_props(&o, &cls)?;
                 let slot = self.seen.len();
                 self.seen.push(Value::Object(o.clone()));
-                let mut data = PhpArray::new();
-                for _ in 0..n {
-                    let Some(k) = self.key() else { return Ok(None) };
-                    let Some(v) = self.value(it)? else { return Ok(None) };
-                    data.insert(k, v);
-                }
-                if self.expect(b'}').is_none() {
-                    return Ok(None);
-                }
-                if cls.find_method("__unserialize").is_some() {
+                if has_unser {
+                    let mut data = PhpArray::new();
+                    for _ in 0..n {
+                        let Some(k) = self.key() else { return Ok(None) };
+                        let Some(v) = self.value(it)? else { return Ok(None) };
+                        data.insert(k, v);
+                    }
+                    if self.expect(b'}').is_none() {
+                        return Ok(None);
+                    }
                     it.call_method(&o, "__unserialize", vec![Value::array(data)])?;
                 } else {
                     if !allowed || cls.name.eq_ignore_ascii_case("__PHP_Incomplete_Class") {
-                        o.set_prop("__PHP_Incomplete_Class_Name", Value::str(&name));
+                        o.set_prop("__PHP_Incomplete_Class_Name", Value::str(&crate::pstr::lossy(raw)));
                     }
-                    for (k, v) in data.iter() {
+                    // Properties usually come in declaration order: try the
+                    // slot after the last one before looking the name up.
+                    let mut next = 0;
+                    for _ in 0..n {
+                        let Some(k) = self.raw_key() else { return Ok(None) };
+                        let Some(v) = self.value(it)? else { return Ok(None) };
+                        let int;
                         let k = match k {
-                            Key::Str(s) => crate::pstr::lossy(&s).into_owned(),
-                            Key::Int(i) => i.to_string(),
+                            Ok(b) => b,
+                            Err(i) => {
+                                int = i.to_string();
+                                int.as_bytes()
+                            }
                         };
                         // Strip visibility mangling ("\0Class\0name" / "\0*\0name"),
                         // unless it names a shadowed ancestor private.
-                        let plain = if cls.shadowed.iter().any(|(_, _, m)| **m == *k) {
-                            k
-                        } else {
-                            match k.strip_prefix('\0') {
-                                Some(rest) => rest.split_once('\0').map(|(_, p)| p.to_string()).unwrap_or(k.clone()),
+                        let plain = match k.split_first() {
+                            Some((0, rest)) if !cls.shadowed.iter().any(|(_, _, m)| m.as_bytes() == k) => match rest.iter().position(|&c| c == 0) {
+                                Some(p) => &rest[p + 1..],
                                 None => k,
-                            }
+                            },
+                            _ => k,
                         };
-                        o.props.borrow_mut().insert(Rc::from(plain.as_str()), v);
+                        let mut props = o.props.borrow_mut();
+                        let sh = props.shape();
+                        let i = match sh.names.get(next) {
+                            Some(n) if n.as_bytes() == plain => Some(next),
+                            _ => sh.slot(&crate::pstr::lossy(plain)),
+                        };
+                        match i {
+                            Some(i) => {
+                                *props.slot_mut(i).expect("slot of the shape") = Some(v);
+                                next = i + 1;
+                            }
+                            None => {
+                                props.insert(Rc::from(&*crate::pstr::lossy(plain)), v);
+                            }
+                        }
                     }
-                    if cls.find_method("__wakeup").is_some() {
+                    if self.expect(b'}').is_none() {
+                        return Ok(None);
+                    }
+                    if has_wakeup {
                         it.call_method(&o, "__wakeup", vec![])?;
                     }
                 }
@@ -371,7 +422,7 @@ pub fn serialize(it: &Interp, v: &Value) -> R<Vec<u8>> {
 }
 
 pub fn unserialize(it: &Interp, b: &[u8], allowed: Option<Vec<String>>, max_depth: usize) -> R<Value> {
-    let mut u = Unser { b, i: 0, allowed, depth: 0, max_depth, seen: vec![] };
+    let mut u = Unser { b, i: 0, allowed, depth: 0, max_depth, seen: vec![], classes: vec![] };
     match u.value(it)? {
         Some(v) => Ok(v),
         None => {
