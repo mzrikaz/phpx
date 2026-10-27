@@ -22,8 +22,8 @@ best() {
 }
 printf "%-22s %8s %8s\n" "ns per operation" "phpx" "php -n"
 for b in micro calls objects closures builtins; do
-    best "${pin[@]}" "$phpx" run -d memory_limit=-1 "$dir/$b.php" > "$tmp/x"
-    best "${pin[@]}" "$php" -n -d memory_limit=-1 "$dir/$b.php" > "$tmp/p"
+    best ${pin[@]+"${pin[@]}"} "$phpx" run -d memory_limit=-1 "$dir/$b.php" > "$tmp/x"
+    best ${pin[@]+"${pin[@]}"} "$php" -n -d memory_limit=-1 "$dir/$b.php" > "$tmp/p"
     paste "$tmp/x" "$tmp/p" | awk -F'\t' '{ printf "%-22s %8s %8s\n", $1, $2, $4 }'
 done
 echo
