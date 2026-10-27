@@ -82,9 +82,44 @@ impl Clone for HMap {
     /// A copy is almost always made to be written (copy-on-write): leave
     /// room for a few more entries so the first insert doesn't reallocate.
     fn clone(&self) -> HMap {
-        let mut entries = Vec::with_capacity(self.entries.len() + 4);
-        entries.extend(self.entries.iter().cloned());
-        HMap { entries, index: self.index.clone() }
+        self.copy(4).0
+    }
+}
+
+impl HMap {
+    /// A copy with room for `extra` more entries, and whether any value is
+    /// a reference. Entries are copied as words after their counts are
+    /// bumped (a typed copy of a (Key, Value) pair goes through
+    /// overlapping stack stores).
+    pub fn copy(&self, extra: usize) -> (HMap, bool) {
+        let n = self.entries.len();
+        let mut entries: Vec<(Key, Value)> = Vec::with_capacity(n + extra);
+        let mut refs = false;
+        let (src, dst) = (self.entries.as_ptr() as *const u64, entries.as_mut_ptr() as *mut u64);
+        const W: usize = std::mem::size_of::<(Key, Value)>() / 8;
+        for (i, (k, v)) in self.entries.iter().enumerate() {
+            std::mem::forget(k.clone());
+            std::mem::forget(v.clone());
+            refs |= matches!(v, Value::Ref(_));
+            // SAFETY: capacity reserved; the bits are a valid copy now that
+            // the counts are bumped.
+            unsafe {
+                for w in 0..W {
+                    dst.add(i * W + w).write(src.add(i * W + w).read());
+                }
+            }
+        }
+        // SAFETY: n entries written.
+        unsafe { entries.set_len(n) };
+        (HMap { entries, index: self.index.clone() }, refs)
+    }
+}
+
+impl HMap {
+    /// A copy with no spare room (for a value that is rarely written,
+    /// like an array literal from its template).
+    pub fn clone_exact(&self) -> HMap {
+        self.copy(0).0
     }
 }
 
@@ -144,6 +179,11 @@ impl HMap {
     #[inline]
     pub fn get_index_mut(&mut self, i: usize) -> Option<(&Key, &mut Value)> {
         self.entries.get_mut(i).map(|(k, v)| (&*k, v))
+    }
+
+    /// Append a key known to be absent.
+    pub fn insert_absent(&mut self, k: Key, v: Value) {
+        self.push_new(k, v);
     }
 
     /// Append a key known to be absent.

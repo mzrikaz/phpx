@@ -1296,24 +1296,29 @@ pub const PROPSITE_ESHAPE: i32 = std::mem::offset_of!(PropSite, eshape) as i32;
 pub const PROPSITE_ESLOT: i32 = std::mem::offset_of!(PropSite, eslot) as i32;
 pub const PROPSITE_ESCOPE: i32 = std::mem::offset_of!(PropSite, escope) as i32;
 
-/// `[key] = val` into the array value at `slot`, when it's an unshared
-/// array and the key an int or string: `val` is moved in and 0 returned.
-/// 1: not handled, nothing changed (shared or no array, other key types,
-/// a reference element, the append limit).
+/// `[key] = val` into the array value at `slot` (separated first if
+/// shared), when the key is an int or string: `val` is moved in and 0
+/// returned. 1: not handled, nothing changed (no array, other key types, a
+/// reference element).
 pub unsafe extern "C" fn rt_arr_set_fast(slot: *mut Value, key: *const Value, val: *mut Value) -> u64 {
     let Value::Array(a) = &mut *slot else { return 1 };
-    let Some(arr) = Rc::get_mut(a) else { return 1 };
-    let elem = match &*key {
-        Value::Str(s) => match arr.get_mut_ref(KeyRef::from_bytes(s)) {
-            Some(e) => e,
-            None => arr.entry(Key::from_pstr(s)),
-        },
-        Value::Int(n) => match arr.get_mut_ref(KeyRef::Int(*n)) {
-            Some(e) => e,
-            None => arr.entry(Key::Int(*n)),
-        },
+    let kr = match &*key {
+        Value::Str(s) => KeyRef::from_bytes(s),
+        Value::Int(n) => KeyRef::Int(*n),
         _ => return 1,
     };
+    let arr = Rc::make_mut(a);
+    let Some(elem) = arr.get_mut_ref(kr).map(|e| e as *mut Value) else {
+        // A new key: appended without a second lookup.
+        let k = match (kr, &*key) {
+            (KeyRef::Str(_), Value::Str(s)) => Key::from_pstr(s),
+            (KeyRef::Int(n), _) => Key::Int(n),
+            _ => unreachable!(),
+        };
+        arr.insert_absent(k, take(val));
+        return 0;
+    };
+    let elem = &mut *elem;
     if let Value::Ref(_) = elem {
         return 1;
     }
@@ -3301,6 +3306,19 @@ pub unsafe extern "C" fn rt_clone(c: *mut Cx, v: *const Value, dst: *mut Value) 
 pub unsafe extern "C" fn rt_array_new(dst: *mut Value, n: u64, hash: u64) {
     let n = n.min(64) as usize;
     put(dst, Value::array(if hash != 0 { PhpArray::with_hash_capacity(n) } else { PhpArray::with_capacity(n) }));
+}
+
+/// An array literal with constant keys: a copy of the template `tmpl`
+/// (those keys, null values) with the `n` values at `vals` moved in, in
+/// order.
+pub unsafe extern "C" fn rt_array_lit(tmpl: *const Value, vals: *mut Value, n: u64, dst: *mut Value) -> u64 {
+    let Value::Array(t) = &*tmpl else { unreachable!("array literal template") };
+    let mut a = t.clone_exact();
+    for i in 0..n as usize {
+        move_words(a.value_at_mut(i), vals.add(i));
+    }
+    put(dst, Value::array(a));
+    0
 }
 
 /// Append an item to an array literal. `key` may be null; `val` is consumed.

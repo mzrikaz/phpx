@@ -1,0 +1,141 @@
+array(5) {
+  [0]=>
+  array(5) {
+    ["k"]=>
+    int(9)
+    ["v"]=>
+    string(1) "v"
+    [7]=>
+    string(5) "seven"
+    [3]=>
+    string(5) "three"
+    [8]=>
+    string(4) "last"
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    int(9)
+    [1]=>
+    int(10)
+    [2]=>
+    string(1) "x"
+  }
+  [2]=>
+  array(4) {
+    [5]=>
+    string(1) "a"
+    [6]=>
+    string(1) "b"
+    ["k"]=>
+    string(1) "c"
+    [7]=>
+    string(1) "d"
+  }
+  [3]=>
+  array(3) {
+    ["first"]=>
+    int(1)
+    ["second"]=>
+    int(2)
+    ["third"]=>
+    int(20)
+  }
+  [4]=>
+  array(4) {
+    ["-0"]=>
+    int(1)
+    [-5]=>
+    int(2)
+    ["08"]=>
+    int(3)
+    [" 1"]=>
+    int(4)
+  }
+}
+array(5) {
+  [0]=>
+  array(5) {
+    ["k"]=>
+    string(7) "changed"
+    ["v"]=>
+    string(1) "v"
+    [7]=>
+    string(5) "seven"
+    [3]=>
+    string(5) "three"
+    [8]=>
+    string(4) "last"
+  }
+  [1]=>
+  array(3) {
+    [0]=>
+    int(2)
+    [1]=>
+    int(3)
+    [2]=>
+    string(1) "x"
+  }
+  [2]=>
+  array(5) {
+    [5]=>
+    string(1) "a"
+    [6]=>
+    string(1) "b"
+    ["k"]=>
+    string(1) "c"
+    [7]=>
+    string(1) "d"
+    [8]=>
+    string(6) "pushed"
+  }
+  [3]=>
+  array(3) {
+    ["first"]=>
+    int(1)
+    ["second"]=>
+    int(2)
+    ["third"]=>
+    int(20)
+  }
+  [4]=>
+  array(4) {
+    ["-0"]=>
+    int(1)
+    [-5]=>
+    int(2)
+    ["08"]=>
+    int(3)
+    [" 1"]=>
+    int(4)
+  }
+}
+array(3) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  ["c"]=>
+  string(3) "str"
+}
+array(4) {
+  ["a"]=>
+  int(-2)
+  ["b"]=>
+  array(2) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+  }
+  ["c"]=>
+  string(3) "str"
+  ["d"]=>
+  int(2)
+}
+[{"r":5,"p":2},{"r":5,"p":3}]

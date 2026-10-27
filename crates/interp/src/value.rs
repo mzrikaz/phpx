@@ -315,8 +315,8 @@ impl Clone for PhpArray {
                 // Copies the hash table as is (no rehashing), then drops
                 // references nothing else shares (the source held the only
                 // other count).
-                let mut c = m.clone();
-                for v in c.values_mut() {
+                let (mut c, refs) = m.copy(4);
+                for v in c.values_mut().filter(|_| refs) {
                     if let Value::Ref(s) = v {
                         if Rc::strong_count(s) == 2 {
                             let inner = s.borrow().clone();
@@ -442,6 +442,24 @@ impl PhpArray {
         }
     }
 
+    /// A copy without the spare room `clone` leaves for writes (template
+    /// arrays have no references to drop).
+    pub fn clone_exact(&self) -> PhpArray {
+        let store = match &self.store {
+            Store::Packed(v) => Store::Packed(v.clone()),
+            Store::Hash(m) => Store::Hash(m.clone_exact()),
+        };
+        PhpArray::make(store, self.next_free, 0)
+    }
+
+    /// The value of the `i`th element (in order), for writes.
+    pub fn value_at_mut(&mut self, i: usize) -> &mut Value {
+        match &mut self.store {
+            Store::Packed(v) => &mut v[i],
+            Store::Hash(m) => m.get_index_mut(i).expect("element index").1,
+        }
+    }
+
     /// Raw element storage by a borrowed key, for writes (may be a
     /// `Value::Ref`).
     #[inline]
@@ -523,6 +541,22 @@ impl PhpArray {
 
     pub fn insert(&mut self, k: Key, v: Value) {
         self.insert_inner(k, v);
+        self.sync();
+    }
+
+    /// Insert a key known to be absent (no lookup).
+    pub fn insert_absent(&mut self, k: Key, v: Value) {
+        if let Key::Int(n) = k {
+            self.bump_next(n);
+            if let Store::Packed(vec) = &mut self.store {
+                if n >= 0 && n as usize == vec.len() {
+                    vec.push(v);
+                    self.sync();
+                    return;
+                }
+            }
+        }
+        self.to_hash().insert_absent(k, v);
         self.sync();
     }
 

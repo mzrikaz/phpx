@@ -1366,6 +1366,24 @@ impl<'a> Lower<'a> {
                 let c = self.const_value(crate::expr::const_array(items).unwrap());
                 Op::Ptr(c, None)
             }
+            Array(items) if literal_template(items).is_some() => {
+                // Constant keys: the values into a row of temps, then one
+                // copy of the key layout with the values moved in.
+                let n = items.len();
+                let (slot, ids) = self.alloc_array(n);
+                for (i, it) in items.iter().flatten().enumerate() {
+                    let v = self.expr(&it.value)?;
+                    let v = self.own(v);
+                    let a = self.b.ins().stack_addr(types::I64, slot, (i * 16) as i32);
+                    self.store_into(a, v);
+                }
+                let tp = self.const_value(literal_template(items).unwrap());
+                let base = self.b.ins().stack_addr(types::I64, slot, 0);
+                let nv = self.iconst(n as i64);
+                let r = self.helper_value("rt_array_lit", |_| vec![tp, base, nv])?;
+                self.release_ids(&ids);
+                r
+            }
             Array(items) => {
                 let t = self.alloc_temp();
                 let ta = self.temp_addr(t);
@@ -3402,6 +3420,36 @@ enum Intrinsic {
 /// `call_user_func($cb, ...)` with plain arguments, by a name that can
 /// only mean the built-in (the helper checks no namespaced function
 /// shadows it).
+/// The key layout of an array literal whose keys are all constant (or
+/// absent) and distinct, and whose values are plain (no spread, no `&`):
+/// an array with those keys in order and null values. None otherwise, or
+/// for a literal with fewer than two items.
+fn literal_template(items: &[Option<ast::ArrayItem>]) -> Option<Value> {
+    if items.len() < 2 || items.len() > 64 {
+        return None;
+    }
+    let mut a = crate::value::PhpArray::new();
+    for it in items {
+        let it = it.as_ref()?;
+        if it.spread || it.by_ref {
+            return None;
+        }
+        match it.key.as_ref().map(|k| &k.kind) {
+            None => {
+                if a.next_index() == i64::MAX && a.len() > 0 {
+                    return None;
+                }
+                a.push(Value::Null);
+            }
+            Some(ExprKind::Int(n)) => a.insert(crate::value::Key::Int(*n), Value::Null),
+            Some(ExprKind::Str(s)) => a.insert(crate::value::Key::from_bytes(s.as_bytes()), Value::Null),
+            Some(ExprKind::Bytes(b)) => a.insert(crate::value::Key::from_bytes(b), Value::Null),
+            Some(_) => return None,
+        }
+    }
+    (a.len() == items.len()).then(|| Value::array(a))
+}
+
 fn is_call_user_func(callee: &Expr, args: &[ast::Arg]) -> bool {
     let ExprKind::Name(n) = &callee.kind else { return false };
     let name = n.strip_prefix('\\').unwrap_or(n);
