@@ -71,7 +71,7 @@ pub fn invoke(it: &Interp, name: &str, spec: Option<&crate::arginfo::Spec>, fun:
 #[inline(always)]
 fn invoke_inner(it: &Interp, name: &str, spec: Option<&crate::arginfo::Spec>, fun: crate::interp::BuiltinFn, f: &mut crate::interp::Frame, args: &mut [Value]) -> R<Value> {
     if let Some(s) = spec {
-        s.check(it, args)?;
+        s.check(it, f, args)?;
     }
     crate::errors::check(guarded(it, name, || fun(it, f, args)))
 }
@@ -640,7 +640,8 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     });
     t.insert("call_user_func", |it, f, a| {
         let c = callable(it, f, a, 0)?;
-        it.call_callable(&c, a[1..].to_vec(), vec![])
+        let args = a[1..].iter_mut().map(std::mem::take).collect();
+        it.call_callable_from(f, &c, args, vec![])
     });
     t.insert("call_user_func_array", |it, f, a| {
         let c = callable(it, f, a, 0)?;
@@ -653,7 +654,7 @@ fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
                 Key::Str(n) => named.push((Rc::from(crate::pstr::lossy(&n).as_ref()), v.clone())),
             }
         }
-        it.call_callable(&c, pos, named)
+        it.call_callable_from(f, &c, pos, named)
     });
     t.insert("define", |it, _, a| {
         let n = crate::pstr::lossy(&s(it, a, 0)?).into_owned();

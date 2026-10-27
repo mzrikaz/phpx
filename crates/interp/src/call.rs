@@ -972,48 +972,106 @@ impl Interp {
         }
     }
 
-    /// is_callable(): whether `v` names something callable, without
-    /// building the exceptions to_callable() would throw.
+    /// is_callable(): whether `v` names something callable from `f`.
     pub fn is_callable_value(&self, f: &Frame, v: &Value) -> R<bool> {
-        let has_method = |class: &Rc<Class>, m: &str, instance: bool| {
-            let m = m.strip_prefix("parent::").unwrap_or(m).to_ascii_lowercase();
-            match class.find_method(&m) {
-                // Called statically, an instance method needs a fitting $this.
-                Some(method) => instance || method.is_static || f.this.as_ref().is_some_and(|t| t.class.is_subclass_of(class)),
-                None => class.find_method(if instance { "__call" } else { "__callstatic" }).is_some(),
+        Ok(self.callable_error(f, v)?.is_none())
+    }
+
+    /// Why `v` can't be called from frame `f`, in PHP's words for an
+    /// invalid callback argument; None when it can.
+    pub fn callable_error(&self, f: &Frame, v: &Value) -> R<Option<String>> {
+        let scope = f.class.as_deref();
+        // `m` of `class`, on an object (`instance`) or statically.
+        let method = |class: &Rc<Class>, m: &str, instance: bool| -> Option<String> {
+            let m0 = m.strip_prefix("parent::").unwrap_or(m);
+            let lname = if m0.bytes().any(|b| b.is_ascii_uppercase()) { std::borrow::Cow::Owned(m0.to_ascii_lowercase()) } else { std::borrow::Cow::Borrowed(m0) };
+            let this_fits = instance || f.this.as_ref().is_some_and(|t| t.class.is_subclass_of(class));
+            let magic = || class.find_method(if this_fits { "__call" } else { "__callstatic" }).is_some();
+            match class.find_method_from(&lname, scope) {
+                Some(meth) if !self.member_visible(scope, meth.vis, &meth.declaring) => {
+                    let vis = if meth.vis == Vis::Private { "private" } else { "protected" };
+                    (!magic()).then(|| format!("cannot access {vis} method {}::{}()", class.name, meth.name))
+                }
+                Some(meth) if !meth.is_static && !this_fits => Some(format!("non-static method {}::{}() cannot be called statically", class.name, meth.name)),
+                Some(_) => None,
+                None => (!magic()).then(|| format!("class {} does not have a method \"{m}\"", class.name)),
             }
         };
+        // A class named in a callback ("self", "parent" and "static" too).
+        let class = |n: &str| -> R<Result<Rc<Class>, String>> {
+            let found = if n.eq_ignore_ascii_case("self") {
+                f.class.clone()
+            } else if n.eq_ignore_ascii_case("static") {
+                f.static_class.clone()
+            } else if n.eq_ignore_ascii_case("parent") {
+                f.class.as_ref().and_then(|c| c.parent.clone())
+            } else {
+                self.find_class(n)?
+            };
+            Ok(found.ok_or_else(|| format!("class \"{n}\" not found")))
+        };
         Ok(match v {
-            Value::Ref(r) => return self.is_callable_value(f, &r.borrow()),
-            Value::Object(o) => matches!(&*o.internal(), Internal::Closure(_)) || o.class.find_method("__invoke").is_some(),
+            Value::Ref(r) => return self.callable_error(f, &r.borrow()),
+            Value::Object(o) => {
+                if matches!(&*o.internal(), Internal::Closure(_)) || o.class.find_method("__invoke").is_some() {
+                    None
+                } else {
+                    Some("no array or string given".into())
+                }
+            }
             Value::Str(s) => {
-                let s = crate::pstr::lossy(s).into_owned();
-                match s.split_once("::") {
-                    Some((cls, m)) => self.find_class(cls)?.is_some_and(|c| has_method(&c, m, false)),
-                    None => self.find_function(&f.ctx, &format!("\\{}", s.trim_start_matches('\\'))).is_some(),
+                if self.str_callables.borrow().contains_key(&**s) {
+                    return Ok(None);
+                }
+                let name = crate::pstr::lossy(s).into_owned();
+                match name.split_once("::") {
+                    Some((cls, m)) => match class(cls)? {
+                        Ok(c) => method(&c, m, false),
+                        Err(why) => Some(why),
+                    },
+                    None if self.find_function(&f.ctx, &format!("\\{}", name.trim_start_matches('\\'))).is_some() => None,
+                    None => Some(format!("function \"{name}\" not found or invalid function name")),
                 }
             }
             Value::Array(a) if a.len() == 2 => {
-                let m = match a.get(&Key::Int(1)) {
-                    Some(Value::Str(m)) => crate::pstr::lossy(&m).into_owned(),
-                    _ => return Ok(false),
+                let Some(Value::Str(m)) = a.get(&Key::Int(1)) else {
+                    return Ok(Some("second array member is not a valid method".into()));
                 };
+                let m = crate::pstr::lossy(&m);
                 match a.get(&Key::Int(0)) {
-                    Some(Value::Object(o)) => has_method(&o.class, &m, true),
-                    Some(Value::Str(c)) => self.find_class(&crate::pstr::lossy(&c))?.is_some_and(|c| has_method(&c, &m, false)),
-                    _ => false,
+                    Some(Value::Object(o)) => method(&o.class, &m, true),
+                    Some(Value::Str(c)) => match class(&crate::pstr::lossy(&c))? {
+                        Ok(c) => method(&c, &m, false),
+                        Err(why) => Some(why),
+                    },
+                    _ => Some("first array member is not a valid class name or object".into()),
                 }
             }
-            _ => false,
+            Value::Array(_) => Some("array callback must have exactly two members".into()),
+            _ => Some("no array or string given".into()),
         })
     }
 
     fn method_callable(&self, f: &Frame, this: Option<Rc<Obj>>, class: &Rc<Class>, m: &str) -> R<Callable> {
         let m = m.strip_prefix("parent::").unwrap_or(m);
         let lname = if m.bytes().any(|b| b.is_ascii_uppercase()) { std::borrow::Cow::Owned(m.to_ascii_lowercase()) } else { std::borrow::Cow::Borrowed(m) };
-        match class.find_method(&lname) {
+        let fitting_this = || f.this.clone().filter(|t| t.class.is_subclass_of(class));
+        match class.find_method_from(&lname, f.class.as_deref()) {
+            Some(method) if !self.member_visible(f.class.as_deref(), method.vis, &method.declaring) => {
+                let this = this.or_else(fitting_this);
+                let magic = if this.is_some() { "__call" } else { "__callstatic" };
+                if class.find_method(magic).is_some() {
+                    return Ok(Callable::Magic { this, class: class.clone(), name: Rc::from(m) });
+                }
+                let vis = if method.vis == Vis::Private { "private" } else { "protected" };
+                let scope = f.class.as_ref().map(|c| format!("scope {}", c.name)).unwrap_or_else(|| "global scope".into());
+                Err(self.error("Error", &format!("Call to {vis} method {}::{}() from {scope}", class.name, method.name)))
+            }
             Some(method) => {
-                let this = if method.is_static { None } else { this.or_else(|| f.this.clone()) };
+                let this = if method.is_static { None } else { this.or_else(fitting_this) };
+                if this.is_none() && !method.is_static {
+                    return Err(self.error("Error", &format!("Non-static method {}::{}() cannot be called statically", class.name, method.name)));
+                }
                 let static_class = this.as_ref().map(|o| o.class.clone()).unwrap_or_else(|| class.clone());
                 Ok(Callable::Method { this, class: class.clone(), method: method.clone(), static_class })
             }
@@ -1061,6 +1119,15 @@ impl Interp {
         self.call_callable(&c, args, vec![])
     }
 
+    /// call_callable() on behalf of frame `f`: a built-in callee checks
+    /// its callback arguments from `f`'s scope.
+    pub fn call_callable_from(&self, f: &Frame, c: &Callable, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
+        match c {
+            Callable::Builtin(name, fun) => self.call_builtin(name, *fun, pos, named, Some(f)),
+            c => self.call_callable(c, pos, named),
+        }
+    }
+
     pub fn call_callable(&self, c: &Callable, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
         match c {
             Callable::User(u) => {
@@ -1089,7 +1156,7 @@ impl Interp {
                 named,
             )
             }
-            Callable::Builtin(name, fun) => self.call_builtin(name, *fun, pos, named),
+            Callable::Builtin(name, fun) => self.call_builtin(name, *fun, pos, named, None),
             Callable::Closure(cd) => self.call_closure(cd, pos, named),
             Callable::Method { this, method, static_class, .. } => {
                 self.invoke_method(this.clone(), method, static_class.clone(), pos, named)
@@ -1103,7 +1170,7 @@ impl Interp {
     }
 
     #[inline(never)]
-    fn call_builtin(&self, name: &str, fun: crate::interp::BuiltinFn, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>) -> R<Value> {
+    fn call_builtin(&self, name: &str, fun: crate::interp::BuiltinFn, pos: Vec<Value>, named: Vec<(Rc<str>, Value)>, caller: Option<&Frame>) -> R<Value> {
         let spec = crate::arginfo::spec(name);
         let pos = match (named.is_empty(), spec) {
             (true, _) => pos,
@@ -1112,6 +1179,11 @@ impl Interp {
         };
         let ctx = self.file_ctx(self.pos.get().file as usize);
         let mut frame = Frame::new(ctx, 0);
+        if let Some(c) = caller {
+            frame.class = c.class.clone();
+            frame.static_class = c.static_class.clone();
+            frame.this = c.this.clone();
+        }
         let mut args: Vec<Value> = pos.into_iter().map(Value::into_deref).collect();
         crate::builtins::invoke(self, name, spec, fun, &mut frame, &mut args)
     }

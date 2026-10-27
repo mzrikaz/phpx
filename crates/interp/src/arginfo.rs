@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 use rustc_hash::FxHashMap;
 
-use crate::interp::{Interp, R};
+use crate::interp::{Frame, Interp, R};
 use crate::value::{parse_numeric, Value};
 
 const NULL: u16 = 1;
@@ -124,17 +124,25 @@ impl Spec {
 
     /// Check (and where PHP converts, convert) `args` for a call.
     #[inline]
-    pub fn check(&self, it: &Interp, args: &mut [Value]) -> R<()> {
+    /// `f` is the calling frame (callbacks are checked from its scope).
+    pub fn check(&self, it: &Interp, f: &Frame, args: &mut [Value]) -> R<()> {
         let n = args.len();
         if n < self.min || n > self.max {
             return Err(self.count_error(it, n));
         }
         for (i, v) in args.iter_mut().enumerate() {
             let Some(p) = self.param(i) else { break };
-            if p.mask & MIXED != 0 || accepts(p, v) {
+            if p.mask & MIXED != 0 {
                 continue;
             }
-            self.coerce(it, i, p, v)?;
+            if p.mask & CALLABLE != 0 && matches!(v, Value::Array(_) | Value::Object(_)) && p.mask & (ARRAY | OBJECT) == 0 {
+                self.check_callable(it, f, i, p, v)?;
+                continue;
+            }
+            if accepts(p, v) {
+                continue;
+            }
+            self.coerce(it, f, i, p, v)?;
         }
         Ok(())
     }
@@ -161,7 +169,7 @@ impl Spec {
     /// internal functions (scalars in coercive mode, int to float, objects
     /// with `__toString`), else a TypeError.
     #[cold]
-    fn coerce(&self, it: &Interp, i: usize, p: &Param, v: &mut Value) -> R<()> {
+    fn coerce(&self, it: &Interp, f: &Frame, i: usize, p: &Param, v: &mut Value) -> R<()> {
         let v0 = match &*v {
             Value::Ref(r) => r.borrow().clone(),
             other => other.clone(),
@@ -180,7 +188,7 @@ impl Spec {
             return Ok(());
         }
         if p.mask & CALLABLE != 0 {
-            return self.check_callable(it, i, p, &v0);
+            return self.check_callable(it, f, i, p, &v0);
         }
         let strict = it.file_strict(it.pos.get().file as usize);
         match &v0 {
@@ -217,22 +225,9 @@ impl Spec {
     }
 
     /// PHP's message for an invalid callback argument.
-    fn check_callable(&self, it: &Interp, i: usize, p: &Param, v: &Value) -> R<()> {
+    fn check_callable(&self, it: &Interp, f: &Frame, i: usize, p: &Param, v: &Value) -> R<()> {
+        let Some(why) = it.callable_error(f, v)? else { return Ok(()) };
         let or_null = if p.mask & NULL != 0 { " or null" } else { "" };
-        let why = match v {
-            Value::Str(s) => {
-                if it.str_callables.borrow().contains_key(&**s) {
-                    return Ok(());
-                }
-                let name = crate::pstr::lossy(s);
-                if name.contains("::") || it.find_function(&it.file_ctx(0), &name).is_some() {
-                    return Ok(());
-                }
-                format!("function \"{name}\" not found or invalid function name")
-            }
-            Value::Array(_) | Value::Object(_) => return Ok(()),
-            _ => "no array or string given".to_string(),
-        };
         Err(it.error("TypeError", &format!("{}(): Argument #{}{} must be a valid callback{or_null}, {why}", self.name, i + 1, arg_label(p))))
     }
 

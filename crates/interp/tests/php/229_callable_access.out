@@ -1,0 +1,24 @@
+0: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method A::p()
+1: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access protected method A::ps()
+2: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access protected method A::ps()
+3: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class A does not have a method "nope"
+4: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, class "Nope" not found
+5: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, first array member is not a valid class name or object
+6: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, second array member is not a valid method
+7: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, array callback must have exactly two members
+8: TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, non-static method A::m() cannot be called statically
+9: TypeError: array_map(): Argument #1 ($callback) must be a valid callback or null, cannot access private method A::p()
+10: TypeError: usort(): Argument #1 ($array) must be of type array, null given
+11: Error: Call to private method A::p() from global scope
+12: Error: Call to undefined method A::nope()
+13: Error: Call to protected method A::ps() from global scope
+14: 'ppspsp'
+15: 'TypeError: call_user_func(): Argument #1 ($callback) must be a valid callback, cannot access private method B::p()'
+16: '__call p'
+17: '__callStatic p'
+18: '__call p'
+19: 'n'
+20: 'y'
+p1
+cb(): Argument #1 ($c) must be of type callable, array given
+m
