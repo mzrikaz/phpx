@@ -211,13 +211,17 @@ impl Key {
 }
 
 /// "123" and "-5" yes; "0123", "-0", "1.0", " 1" no.
-#[inline]
+#[inline(always)]
 fn canonical_int(b: &[u8]) -> Option<i64> {
     // Fast exit for the usual string key.
     match b.first() {
-        Some(c) if c.is_ascii_digit() || *c == b'-' => {}
-        _ => return None,
+        Some(c) if c.is_ascii_digit() || *c == b'-' => canonical_int_slow(b),
+        _ => None,
     }
+}
+
+#[inline(never)]
+fn canonical_int_slow(b: &[u8]) -> Option<i64> {
     let digits = b.strip_prefix(b"-").unwrap_or(b);
     if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
         return None;
@@ -435,6 +439,19 @@ impl PhpArray {
         match &self.store {
             Store::Packed(v) => Self::packed_index(v.len(), k).is_some(),
             Store::Hash(m) => m.contains_key(k),
+        }
+    }
+
+    /// Raw element storage by a borrowed key, for writes (may be a
+    /// `Value::Ref`).
+    #[inline]
+    pub fn get_mut_ref(&mut self, k: KeyRef) -> Option<&mut Value> {
+        match &mut self.store {
+            Store::Packed(v) => match k {
+                KeyRef::Int(n) if n >= 0 && (n as usize) < v.len() => Some(&mut v[n as usize]),
+                _ => None,
+            },
+            Store::Hash(m) => m.find(k).map(|i| m.get_index_mut(i).unwrap().1),
         }
     }
 

@@ -214,6 +214,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_silence_end: 2 => false,
     rt_stash_free: 1 => false,
     rt_exit: 2 => true,
+    rt_arr_set_fast: 3 => true,
     rt_unhandled_match: 2 => true,
 ];
 

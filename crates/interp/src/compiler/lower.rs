@@ -1229,6 +1229,10 @@ impl<'a> Lower<'a> {
             ExprKind::Assign { target, value } if self.simple_index_target(target).is_some() => {
                 self.local_store(target, value, false)?;
             }
+            ExprKind::Assign { target, value } if matches!(&target.kind, ExprKind::Index { base, index: Some(_) } if matches!(&base.kind, ExprKind::Prop { name: MemberName::Ident(_), nullsafe: false, .. })) => {
+                let op = self.assign_place(target, value, false)?;
+                self.release(op);
+            }
             ExprKind::IncDec { expr, inc, .. } if matches!(expr.kind, ExprKind::Var(_)) => {
                 self.incdec_local(expr, *inc, false, false)?;
             }
@@ -2810,6 +2814,17 @@ impl<'a> Lower<'a> {
         let la = self.local_addr(i);
         let r = if want {
             self.helper_value("rt_local_store", |l| vec![l.cx, la, ka, va])?
+        } else if key.is_some() {
+            let (slow, merge) = (self.b.create_block(), self.b.create_block());
+            self.b.set_cold_block(slow);
+            self.elem_store_fast(la, ka, va, slow, merge);
+            self.b.switch_to_block(slow);
+            let la = self.local_addr(i);
+            let z = self.iconst(0);
+            self.call_checked("rt_local_store", &[self.cx, la, ka, va, z]);
+            self.b.ins().jump(merge, &[]);
+            self.b.switch_to_block(merge);
+            Op::Int(self.iconst(0))
         } else {
             let z = self.iconst(0);
             self.call_checked("rt_local_store", &[self.cx, la, ka, va, z]);
@@ -2875,37 +2890,96 @@ impl<'a> Lower<'a> {
                 }
                 Ok(v)
             }
-            _ => {
-                let (root, name, keys) = self.place(target, false)?;
-                let (np, nl) = name;
-                let (kslot, kn, kids) = keys;
-                let append = matches!(&target.kind, ExprKind::Index { index: None, .. });
-                let v = self.expr(value)?;
-                let v = self.own(v);
-                let v = self.materialize(v);
-                let va = self.addr(v).unwrap();
-                let ka = self.b.ins().stack_addr(types::I64, kslot, 0);
-                let knv = self.iconst(kn as i64);
-                let ap = self.iconst(append as i64);
-                let ra = root.addr;
-                // `$o->name[k] = v` / `$o->name[] = v`: cached slot.
-                let r = match &target.kind {
-                    ExprKind::Index { base, .. } if matches!(&base.kind, ExprKind::Prop { name: MemberName::Ident(_), nullsafe: false, .. }) => {
-                        let ExprKind::Prop { name: MemberName::Ident(name), .. } = &base.kind else { unreachable!() };
-                        let site = Box::new(super::rt::PropSite::new(&name.name));
-                        let sp = &*site as *const super::rt::PropSite as i64;
-                        self.psites.push(site);
+            _ => self.assign_place(target, value, true),
+        }
+    }
+
+    /// Assignment to an element or property path (`$a[k][j] = v`,
+    /// `$o->p[k] = v`, ...); `want`: the assigned value is used.
+    fn assign_place(&mut self, target: &'static Expr, value: &'static Expr, want: bool) -> L<Op> {
+        let (root, name, keys) = self.place(target, false)?;
+        let (np, nl) = name;
+        let (kslot, kn, kids) = keys;
+        let append = matches!(&target.kind, ExprKind::Index { index: None, .. });
+        let v = self.expr(value)?;
+        let v = self.own(v);
+        let v = self.materialize(v);
+        let va = self.addr(v).unwrap();
+        let ka = self.b.ins().stack_addr(types::I64, kslot, 0);
+        let knv = self.iconst(kn as i64);
+        let ap = self.iconst(append as i64);
+        let ra = root.addr;
+        // `$o->name[k] = v` / `$o->name[] = v`: cached slot.
+        let r = match &target.kind {
+            ExprKind::Index { base, .. } if matches!(&base.kind, ExprKind::Prop { name: MemberName::Ident(_), nullsafe: false, .. }) => {
+                let ExprKind::Prop { name: MemberName::Ident(name), .. } = &base.kind else { unreachable!() };
+                let site = Box::new(super::rt::PropSite::new(&name.name));
+                let sp = &*site as *const super::rt::PropSite as i64;
+                self.psites.push(site);
+                match super::layout() {
+                    Some(lay) if !want && !append && kn == 1 => {
+                        // Cached slot checked inline; the element stored
+                        // without the general helper when possible.
+                        let (slow, merge) = (self.b.create_block(), self.b.create_block());
+                        self.b.set_cold_block(slow);
+                        let site_v = self.iconst(sp);
+                        let props = self.prop_guard(lay, ra, site_v, super::rt::PROPSITE_ESHAPE, super::rt::PROPSITE_ESCOPE, slow);
+                        let p = self.prop_slot(lay, props, site_v, super::rt::PROPSITE_ESLOT, slow);
+                        let ka = self.b.ins().stack_addr(types::I64, kslot, 0);
+                        self.elem_store_fast(p, ka, va, slow, merge);
+                        self.b.switch_to_block(slow);
+                        let (sp, ka, z) = (self.iconst(sp), self.b.ins().stack_addr(types::I64, kslot, 0), self.iconst(0));
+                        self.call_checked("rt_prop_elem_assign", &[self.cx, ra, sp, ka, ap, va, z]);
+                        self.b.ins().jump(merge, &[]);
+                        self.b.switch_to_block(merge);
+                        Op::Int(self.iconst(0))
+                    }
+                    _ => {
                         let sp = self.iconst(sp);
                         self.helper_value("rt_prop_elem_assign", |l| vec![l.cx, ra, sp, ka, ap, va])?
                     }
-                    _ => self.helper_value("rt_place_assign", |l| vec![l.cx, ra, np, nl, ka, knv, ap, va])?,
-                };
-                self.release(v);
-                self.release_ids(&kids);
-                self.release_root(root);
-                Ok(r)
+                }
             }
+            _ => self.helper_value("rt_place_assign", |l| vec![l.cx, ra, np, nl, ka, knv, ap, va])?,
+        };
+        self.release(v);
+        self.release_ids(&kids);
+        self.release_root(root);
+        Ok(r)
+    }
+
+    /// `[k] = v` into the array value at `slot` (moving the value at `va`
+    /// in): an int key overwriting a scalar of an unshared packed array
+    /// inline, other int/string keys of an unshared array by
+    /// rt_arr_set_fast; anything else branches to `slow` with nothing
+    /// changed. Done: jumps to `merge`.
+    fn elem_store_fast(&mut self, slot: CValue, ka: CValue, va: CValue, slow: Block, merge: Block) {
+        let helper = self.b.create_block();
+        if super::inline_rc() {
+            let p = self.packed_elem(slot, ka, helper);
+            let (c1, c2, ok) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+            let vt = self.load_tag(p);
+            let scalar = self.b.ins().icmp_imm_u(IntCC::UnsignedLessThan, vt, tag::STR as i64);
+            self.b.ins().brif(scalar, c1, &[], helper, &[]);
+            self.b.switch_to_block(c1);
+            let rc = self.b.ins().load(types::I64, flags(), slot, tag::PAYLOAD);
+            let strong = self.b.ins().load(types::I64, flags(), rc, 0);
+            let one = self.b.ins().icmp_imm_s(IntCC::Equal, strong, 1);
+            self.b.ins().brif(one, c2, &[], helper, &[]);
+            self.b.switch_to_block(c2);
+            let weak = self.b.ins().load(types::I64, flags(), rc, 8);
+            let one = self.b.ins().icmp_imm_s(IntCC::Equal, weak, 1);
+            self.b.ins().brif(one, ok, &[], helper, &[]);
+            self.b.switch_to_block(ok);
+            self.copy16(p, va);
+            self.store_tag(va, tag::NULL);
+            self.b.ins().jump(merge, &[]);
+        } else {
+            self.b.ins().jump(helper, &[]);
         }
+        self.b.switch_to_block(helper);
+        let r = self.call("rt_arr_set_fast", &[slot, ka, va]).unwrap();
+        self.b.ins().brif(r, slow, &[], merge, &[]);
     }
 
     fn class_site(&mut self) -> CValue {

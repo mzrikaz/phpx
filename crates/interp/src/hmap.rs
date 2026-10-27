@@ -110,7 +110,7 @@ impl HMap {
     }
 
     /// Position of a key.
-    #[inline]
+    #[inline(always)]
     pub fn find(&self, k: KeyRef) -> Option<usize> {
         match &self.index {
             None => self.entries.iter().position(|(e, _)| matches(e, k)),

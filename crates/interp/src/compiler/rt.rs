@@ -1102,17 +1102,27 @@ fn prop_elem_slot(it: &Interp, f: &Frame, o: &Obj, name: &str) -> Option<usize> 
 /// Store `v` at `key` (append if None) in the array held by slot `i`.
 /// None: the slot holds no array, or the key needs the general path.
 fn elem_store_at(o: &Obj, i: usize, key: Option<&Value>, v: &Value) -> Option<R<()>> {
-    let k = match key {
-        None => None,
-        Some(Value::Int(n)) => Some(Key::Int(*n)),
-        Some(Value::Str(s)) => Some(Key::from_pstr(s)),
+    if !matches!(key, None | Some(Value::Int(_) | Value::Str(_))) {
         // Other key types convert with warnings: the general path.
-        Some(_) => return None,
-    };
-    let old = {
+        return None;
+    }
+    let old = 'found: {
         let mut props = o.props.borrow_mut();
         let Some(Some(Value::Array(a))) = props.slot_mut(i) else { return None };
         let arr = Rc::make_mut(a);
+        if let Some(Value::Str(ks)) = key {
+            if let Some(slot) = arr.get_mut_ref(KeyRef::from_bytes(ks)) {
+                break 'found match slot {
+                    Value::Ref(r) => Some(std::mem::replace(&mut *r.borrow_mut(), v.clone())),
+                    _ => Some(std::mem::replace(slot, v.clone())),
+                };
+            }
+        }
+        let k = match key {
+            Some(Value::Int(n)) => Some(Key::Int(*n)),
+            Some(Value::Str(s)) => Some(Key::from_pstr(s)),
+            _ => None,
+        };
         match k {
             None => {
                 if arr.next_index() == i64::MAX && arr.len() > 0 {
@@ -1177,6 +1187,21 @@ pub unsafe extern "C" fn rt_local_store(c: *mut Cx, local: *mut Value, key: *con
         put(local, Value::array(PhpArray::new()));
     }
     if let Value::Array(a) = &mut *local {
+        // An existing string key: overwritten without building a Key.
+        if let (false, Value::Str(ks)) = (key.is_null(), &*key.cast::<Value>()) {
+            if let Some(slot) = Rc::make_mut(a).get_mut_ref(KeyRef::from_bytes(ks)) {
+                let v = take(val);
+                if !dst.is_null() {
+                    put(dst, v.clone());
+                }
+                let old = match slot {
+                    Value::Ref(s) => std::mem::replace(&mut *s.borrow_mut(), v),
+                    _ => std::mem::replace(slot, v),
+                };
+                drop(old);
+                return 0;
+            }
+        }
         let k = if key.is_null() {
             None
         } else {
@@ -1265,6 +1290,55 @@ impl PropSite {
             escope: Default::default(),
         }
     }
+}
+
+pub const PROPSITE_ESHAPE: i32 = std::mem::offset_of!(PropSite, eshape) as i32;
+pub const PROPSITE_ESLOT: i32 = std::mem::offset_of!(PropSite, eslot) as i32;
+pub const PROPSITE_ESCOPE: i32 = std::mem::offset_of!(PropSite, escope) as i32;
+
+/// `[key] = val` into the array value at `slot`, when it's an unshared
+/// array and the key an int or string: `val` is moved in and 0 returned.
+/// 1: not handled, nothing changed (shared or no array, other key types,
+/// a reference element, the append limit).
+pub unsafe extern "C" fn rt_arr_set_fast(slot: *mut Value, key: *const Value, val: *mut Value) -> u64 {
+    let Value::Array(a) = &mut *slot else { return 1 };
+    let Some(arr) = Rc::get_mut(a) else { return 1 };
+    let elem = match &*key {
+        Value::Str(s) => match arr.get_mut_ref(KeyRef::from_bytes(s)) {
+            Some(e) => e,
+            None => arr.entry(Key::from_pstr(s)),
+        },
+        Value::Int(n) => match arr.get_mut_ref(KeyRef::Int(*n)) {
+            Some(e) => e,
+            None => arr.entry(Key::Int(*n)),
+        },
+        _ => return 1,
+    };
+    if let Value::Ref(_) = elem {
+        return 1;
+    }
+    // Moved as two words (Value moves copy through a 16-byte register or
+    // overlapping stack stores, which stall on the 8-byte stores generated
+    // code just made); the old value is dropped after the write: it may
+    // run a destructor.
+    let old = move_words(elem, val);
+    if old[0] as u8 >= crate::value::tag::STR {
+        drop(std::mem::transmute::<[u64; 2], Value>(old));
+    }
+    0
+}
+
+/// Move the value at `src` into `dst` word by word, leaving null at
+/// `src`; returns the old value at `dst` as raw words.
+#[inline(always)]
+unsafe fn move_words(dst: *mut Value, src: *mut Value) -> [u64; 2] {
+    let (d, s) = (dst as *mut u64, src as *mut u64);
+    let old = [d.read_volatile(), d.add(1).read_volatile()];
+    let new = [s.read_volatile(), s.add(1).read_volatile()];
+    d.write_volatile(new[0]);
+    d.add(1).write_volatile(new[1]);
+    s.write_volatile(crate::value::tag::NULL as u64);
+    old
 }
 
 pub const PROPSITE_SHAPE: i32 = 0;

@@ -1,0 +1,30 @@
+[[0,10,20],[0,1,2]]
+[{"x":2,"y":-2,"5":"five","-3":"neg"},{"x":1}]
+array(4) {
+  [0]=>
+  string(1) "x"
+  [1]=>
+  string(1) "y"
+  [2]=>
+  int(5)
+  [3]=>
+  int(-3)
+}
+ref1
+drop 1
+drop 2
+after
+aXc
+{"a":1}
+{"2":"a","1":"b"}
+[{"k":2,"0":2,"7":"seven"},[]]
+[1,7]
+Array
+(
+    [h] => v2
+)
+Error: Cannot indirectly modify readonly property Box::$ro
+Error: Cannot access private property Box::$hidden
+a=0,a=1
+drop 3
+props done
