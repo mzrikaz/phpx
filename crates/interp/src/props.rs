@@ -138,11 +138,21 @@ impl Slots {
             return Slots::new();
         }
         let mut n = Slots::with_capacity(s.len() as u32);
+        let (src, dst) = (s.as_ptr() as *const u64, n.ptr.as_ptr() as *mut u64);
         for (i, v) in s.iter().enumerate() {
-            // SAFETY: capacity reserved; len updated as each slot is written.
-            unsafe { n.ptr.as_ptr().add(i).write(v.clone()) };
-            n.len += 1;
+            // A count bump for counted values, then the slot's two words
+            // (a typed copy goes through overlapping stack stores).
+            if let Some(v) = v {
+                std::mem::forget(v.clone());
+            }
+            // SAFETY: capacity reserved; the bits are a valid copy now that
+            // the count is bumped.
+            unsafe {
+                dst.add(2 * i).write(src.add(2 * i).read());
+                dst.add(2 * i + 1).write(src.add(2 * i + 1).read());
+            }
         }
+        n.len = s.len() as u32;
         n
     }
 
@@ -449,7 +459,14 @@ impl Props {
     /// Drop every value now (the slots stay, empty).
     pub fn drop_values(&mut self) {
         for v in self.vals.iter_mut() {
-            drop(v.take());
+            match v {
+                // Nothing to release: emptied without a drop call.
+                None | Some(Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_)) => {
+                    // SAFETY: the old value owns nothing.
+                    unsafe { std::ptr::write(v, None) }
+                }
+                _ => drop(v.take()),
+            }
         }
     }
 
