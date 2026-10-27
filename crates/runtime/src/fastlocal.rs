@@ -49,6 +49,33 @@ pub fn is_main() -> bool {
     false
 }
 
+/// This thread's identity as the main-thread check sees it (0 where the
+/// statics aren't used).
+#[inline]
+pub fn thread_id() -> usize {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        thread_pointer()
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    0
+}
+
+/// Hand the main-thread statics to thread `to` (from `thread_id`): a
+/// server whose interpreter runs on one worker thread gives it the fast
+/// path. Called by the current owner, which uses its thread-locals from
+/// then on; `to` must not run code using the statics until this returns
+/// (it waits for a signal sent after this call). The values move with the
+/// role: they must hold nothing specific to the old owner.
+pub fn hand_main_to(to: usize) {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    if to != 0 && is_main() {
+        OWNER.store(to, std::sync::atomic::Ordering::SeqCst);
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    let _ = to;
+}
+
 /// A thread-local value with a main-thread copy (see the module docs).
 pub struct FastLocal<T: 'static> {
     main: T,

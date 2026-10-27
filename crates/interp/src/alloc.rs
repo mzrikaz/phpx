@@ -307,6 +307,16 @@ pub fn uncharged<T>(f: impl FnOnce() -> T) -> T {
     r
 }
 
+/// This thread just took over the main thread's heap (a server worker,
+/// see `phpx_runtime::fastlocal::hand_main_to`): what the main thread
+/// allocated before isn't this thread's.
+pub fn adopt_main_heap() {
+    with_heap(|h| {
+        h.excluded.set(h.used.get());
+        h.peak.set(h.used.get());
+    });
+}
+
 /// (configured, enforced); None = unlimited.
 pub fn set_limit(limit: Option<(usize, usize)>) {
     with_heap(|h| {

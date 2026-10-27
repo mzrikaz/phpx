@@ -778,11 +778,21 @@ pub fn serve(addr: &str, docroot: Option<&Path>, router: Option<&Path>) -> i32 {
     let mut threads = vec![];
     for _ in 0..workers {
         let (rx, cfg) = (rx.clone(), cfg.clone());
-        let spawned = std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(move || loop {
-            let next = rx.lock().ok().and_then(|r| r.recv().ok());
-            let Some(stream) = next else { return };
-            handle(stream, cfg.clone());
-            crate::reset_request_state();
+        // A single worker takes over the main thread's thread-local fast
+        // path (the main thread only accepts connections from then on).
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<usize>();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let spawned = std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(move || {
+            let _ = ready_tx.send(phpx_runtime::fastlocal::thread_id());
+            if go_rx.recv() == Ok(()) && phpx_runtime::fastlocal::is_main() {
+                crate::alloc::adopt_main_heap();
+            }
+            loop {
+                let next = rx.lock().ok().and_then(|r| r.recv().ok());
+                let Some(stream) = next else { return };
+                handle(stream, cfg.clone());
+                crate::reset_request_state();
+            }
         });
         match spawned {
             Ok(t) => threads.push(t),
@@ -791,6 +801,12 @@ pub fn serve(addr: &str, docroot: Option<&Path>, router: Option<&Path>) -> i32 {
                 return 1;
             }
         }
+        if let Ok(tid) = ready_rx.recv() {
+            if workers == 1 {
+                phpx_runtime::fastlocal::hand_main_to(tid);
+            }
+        }
+        let _ = go_tx.send(());
     }
     // PHPX_SERVE_MAX_REQUESTS=n: stop after n connections (benchmarks and
     // profiling, which report when the process ends).
