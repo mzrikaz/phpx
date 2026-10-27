@@ -1610,12 +1610,43 @@ impl<'a> Lower<'a> {
                 if kind == 3 {
                     return Ok(Op::Bool(self.truthy(v)));
                 }
+                match (kind, &v) {
+                    (0, Op::Int(_)) | (1, Op::Float(_)) => return Ok(v),
+                    _ => {}
+                }
                 let v = self.materialize(v);
                 let va = self.addr(v).unwrap();
                 let k = self.iconst(kind);
-                let r = self.helper_value("rt_cast", |l| vec![l.cx, k, va])?;
+                let want = match kind {
+                    0 => Some(tag::INT),
+                    1 => Some(tag::FLOAT),
+                    2 => Some(tag::STR),
+                    4 => Some(tag::ARRAY),
+                    _ => None,
+                };
+                let Some(want) = want else {
+                    let r = self.helper_value("rt_cast", |l| vec![l.cx, k, va])?;
+                    self.release(v);
+                    return Ok(r);
+                };
+                // Already of that type: a copy (no helper call).
+                let t = self.alloc_temp();
+                let (same, other, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+                let tg = self.load_tag(va);
+                let eq = self.b.ins().icmp_imm_u(IntCC::Equal, tg, want as i64);
+                self.b.ins().brif(eq, same, &[], other, &[]);
+                self.b.switch_to_block(same);
+                let ta = self.temp_addr(t);
+                self.store_into(ta, Op::Ptr(va, None));
+                self.b.ins().jump(merge, &[]);
+                self.b.switch_to_block(other);
+                let ta = self.temp_addr(t);
+                self.call_checked("rt_cast", &[self.cx, k, va, ta]);
+                self.b.ins().jump(merge, &[]);
+                self.b.switch_to_block(merge);
                 self.release(v);
-                r
+                let ta = self.temp_addr(t);
+                Op::Ptr(ta, Some(t))
             }
             Print(x) => {
                 let v = self.expr(x)?;
@@ -2754,6 +2785,40 @@ impl<'a> Lower<'a> {
 
     /// isset/??/empty operand: writes the value (if any) into temp `t` and
     /// returns found (i8).
+    /// `isset($base[$k])` with the base at `base(self)`: rt_isset_index, or
+    /// rt_quiet_index for strings and the rest. Returns the i8 answer.
+    fn isset_index(&mut self, base: impl Fn(&mut Self) -> CValue, ka: CValue, t: usize) -> CValue {
+        let ba = base(self);
+        let r = self.call("rt_isset_index", &[self.cx, ba, ka]).unwrap();
+        let (general, decided, done) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        self.b.append_block_param(done, types::I8);
+        let other = self.b.ins().icmp_imm_u(IntCC::Equal, r, 3);
+        self.b.ins().brif(other, general, &[], decided, &[]);
+        self.b.switch_to_block(decided);
+        let err = self.b.ins().icmp_imm_u(IntCC::Equal, r, 2);
+        let ok = self.b.create_block();
+        self.b.ins().brif(err, self.unwind, &[], ok, &[]);
+        self.b.switch_to_block(ok);
+        let found = self.b.ins().ireduce(types::I8, r);
+        self.b.ins().jump(done, &[found.into()]);
+        self.b.switch_to_block(general);
+        let ba = base(self);
+        let ta = self.temp_addr(t);
+        let r = self.call("rt_quiet_index", &[self.cx, ba, ka, ta]).unwrap();
+        let err = self.b.ins().icmp_imm_s(IntCC::Equal, r, 2);
+        let ok = self.b.create_block();
+        self.b.ins().brif(err, self.unwind, &[], ok, &[]);
+        self.b.switch_to_block(ok);
+        let present = self.b.ins().icmp_imm_s(IntCC::Equal, r, 1);
+        let ta = self.temp_addr(t);
+        let tg = self.load_tag(ta);
+        let nn = self.b.ins().icmp_imm_u(IntCC::NotEqual, tg, tag::NULL as i64);
+        let f = self.b.ins().band(present, nn);
+        self.b.ins().jump(done, &[f.into()]);
+        self.b.switch_to_block(done);
+        self.b.block_params(done)[0]
+    }
+
     fn quiet(&mut self, e: &'static Expr, t: usize) -> L<CValue> {
         self.quiet_mode(e, t, crate::expr::QUIET_READ)
     }
@@ -2780,6 +2845,32 @@ impl<'a> Lower<'a> {
                 self.store_into(ta, Op::Local(i));
                 Ok(found)
             }
+            ExprKind::Index { base, index: Some(index) } if matches!(&base.kind, ExprKind::Var(n) if self.locals.index.contains_key(n.as_str())) => {
+                // `$local[k]`: read in place (no copy of the array).
+                let ExprKind::Var(n) = &base.kind else { unreachable!() };
+                let i = self.locals.index[n.as_str()];
+                let k = self.expr(index)?;
+                let k = self.materialize(k);
+                let ka = self.addr(k).unwrap();
+                let ba = self.local_addr(i);
+                if mode == crate::expr::QUIET_ISSET {
+                    let found = self.isset_index(|l| l.local_addr(i), ka, t);
+                    self.release(k);
+                    return Ok(found);
+                }
+                let ta = self.temp_addr(t);
+                let r = self.call("rt_quiet_index", &[self.cx, ba, ka, ta]).unwrap();
+                self.release(k);
+                let err = self.b.ins().icmp_imm_s(IntCC::Equal, r, 2);
+                let ok = self.b.create_block();
+                self.b.ins().brif(err, self.unwind, &[], ok, &[]);
+                self.b.switch_to_block(ok);
+                let present = self.b.ins().icmp_imm_s(IntCC::Equal, r, 1);
+                let ta = self.temp_addr(t);
+                let tg = self.load_tag(ta);
+                let nn = self.b.ins().icmp_imm_u(IntCC::NotEqual, tg, tag::NULL as i64);
+                Ok(self.b.ins().band(present, nn))
+            }
             ExprKind::Index { base, index: Some(_) } | ExprKind::Prop { object: base, .. } => {
                 let bt = self.alloc_temp();
                 let bfound = self.quiet(base, bt)?;
@@ -2792,6 +2883,19 @@ impl<'a> Lower<'a> {
                 let ba = self.temp_addr(bt);
                 let ta = self.temp_addr(t);
                 let r = match &e.kind {
+                    ExprKind::Index { index: Some(index), .. } if mode == crate::expr::QUIET_ISSET => {
+                        let k = self.expr(index)?;
+                        let k = self.materialize(k);
+                        let ka = self.addr(k).unwrap();
+                        let found = self.isset_index(|l| l.temp_addr(bt), ka, t);
+                        self.release(k);
+                        self.b.ins().jump(merge, &[found.into()]);
+                        self.b.switch_to_block(merge);
+                        let ba = self.temp_addr(bt);
+                        self.clear(ba);
+                        self.free.push(bt);
+                        return Ok(self.b.block_params(merge)[0]);
+                    }
                     ExprKind::Index { index: Some(index), .. } => {
                         let k = self.expr(index)?;
                         let k = self.materialize(k);

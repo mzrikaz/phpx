@@ -742,10 +742,59 @@ pub unsafe extern "C" fn rt_list_get(c: *mut Cx, base: *const Value, key: *const
 
 /// Quiet `$base[$key]` for isset/??/empty: 1 = found (written to dst),
 /// 0 = missing, 2 = error.
+/// `isset($base[$key])` on an array or ArrayAccess object (anything else: 3,
+/// and the caller takes rt_quiet_index): 1 when set, 0 when not, 2 on an
+/// exception. Arrays answer without copying the element; objects are asked
+/// offsetExists() only, as in PHP.
+pub unsafe extern "C" fn rt_isset_index(c: *mut Cx, base: *const Value, key: *const Value) -> u64 {
+    let held;
+    let base: &Value = match &*base {
+        Value::Ref(r) => {
+            held = r.borrow().clone();
+            &held
+        }
+        b => b,
+    };
+    let a = match base {
+        Value::Array(a) => a,
+        Value::Object(o) if o.class.is_a("arrayaccess") => {
+            let (it, _) = cx(c);
+            let r = it.call_method(o, "offsetExists", vec![(*key).deref()]).map(|v| v.truthy() as u64);
+            return match crate::errors::check(r) {
+                Ok(b) => b,
+                Err(e) => {
+                    *it.pending.borrow_mut() = Some(e);
+                    2
+                }
+            };
+        }
+        _ => return 3,
+    };
+    let v = match &*key {
+        Value::Int(n) => a.peek(KeyRef::Int(*n)),
+        Value::Str(s) => a.peek(KeyRef::from_bytes(s)),
+        _ => return 3,
+    };
+    match v {
+        None | Some(Value::Null) => 0,
+        Some(Value::Ref(r)) => !r.borrow().is_null() as u64,
+        Some(_) => 1,
+    }
+}
+
 pub unsafe extern "C" fn rt_quiet_index(c: *mut Cx, base: *const Value, key: *const Value, dst: *mut Value) -> u64 {
     let (it, _) = cx(c);
+    // (A local passed in place may hold a reference.)
+    let held;
+    let base: &Value = match &*base {
+        Value::Ref(r) => {
+            held = r.borrow().clone();
+            &held
+        }
+        b => b,
+    };
     let r: R<Option<Value>> = (|| {
-        Ok(match &*base {
+        Ok(match base {
             Value::Array(a) => match &*key {
                 Value::Int(n) => a.get_ref(KeyRef::Int(*n)),
                 Value::Str(s) => a.get_ref(KeyRef::from_bytes(s)),

@@ -416,6 +416,18 @@ impl PhpArray {
 
     /// Element value by a borrowed key (references dereferenced).
     #[inline]
+    /// The element at a borrowed key, borrowed (a reference stays one).
+    #[inline]
+    pub fn peek(&self, k: KeyRef) -> Option<&Value> {
+        match &self.store {
+            Store::Packed(v) => match k {
+                KeyRef::Int(n) if n >= 0 => v.get(n as usize),
+                _ => None,
+            },
+            Store::Hash(m) => m.find(k).map(|i| &m[i]),
+        }
+    }
+
     pub fn get_ref(&self, k: KeyRef) -> Option<Value> {
         match &self.store {
             Store::Packed(v) => match k {

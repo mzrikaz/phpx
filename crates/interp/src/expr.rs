@@ -1116,6 +1116,10 @@ impl Interp {
                     }
                     Value::Object(o) if o.class.is_a("arrayaccess") => {
                         if self.call_method(o, "offsetExists", vec![k.clone()])?.truthy() {
+                            // isset() asks offsetExists() only.
+                            if mode == QUIET_ISSET {
+                                return Ok(Some(Value::Bool(true)));
+                            }
                             Ok(Some(self.call_method(o, "offsetGet", vec![k])?))
                         } else {
                             Ok(None)

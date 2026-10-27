@@ -167,6 +167,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_local_store: 5 => true,
     rt_quiet_prop: 5 => true,
     rt_quiet_prop_site: 5 => true,
+    rt_isset_index: 3 => true,
     rt_isset_prop: 5 => true,
     rt_empty_prop: 5 => true,
     rt_const: 3 => true,
