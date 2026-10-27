@@ -733,15 +733,36 @@ impl PhpArray {
 /// (where an exception or fatal error can surface). One flag per thread,
 /// at a fixed address so compiled code (also per thread) tests it with
 /// one load.
+#[inline]
 pub fn destruct_pending() -> &'static std::sync::atomic::AtomicBool {
-    THREAD_FLAGS.with(|f| f.0)
+    if phpx_runtime::fastlocal::is_main() {
+        return &MAIN_FLAGS.0;
+    }
+    thread_flags().0
 }
 
 /// Set once a namespaced user function of this request has a built-in's
 /// name; compiled code then stops inlining built-ins (`ns\strlen` could
 /// take precedence).
+#[inline]
 pub fn builtin_shadowed() -> &'static std::sync::atomic::AtomicBool {
-    THREAD_FLAGS.with(|f| f.1)
+    if phpx_runtime::fastlocal::is_main() {
+        return &MAIN_FLAGS.1;
+    }
+    thread_flags().1
+}
+
+/// The main thread's flags, outside thread-local storage (see
+/// `phpx_runtime::fastlocal`); the timeout watcher raises them too.
+pub static MAIN_FLAGS: (std::sync::atomic::AtomicBool, std::sync::atomic::AtomicBool) =
+    (std::sync::atomic::AtomicBool::new(false), std::sync::atomic::AtomicBool::new(false));
+
+/// Other threads' flags. Out of line: inlined, the thread-local lookup (a
+/// call on macOS) could be hoisted above the main-thread check.
+#[cold]
+#[inline(never)]
+fn thread_flags() -> (&'static std::sync::atomic::AtomicBool, &'static std::sync::atomic::AtomicBool) {
+    THREAD_FLAGS.with(|f| *f)
 }
 
 /// Every thread's pending flag (the timeout watcher raises them all).

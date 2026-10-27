@@ -77,29 +77,35 @@ thread_local! {
     /// epoll (Linux) / kqueue (BSD, macOS). TODO: io_uring backend.
     static POLLER: RefCell<Poller> = RefCell::new(Poller::new().expect("failed to create poller"));
     static STACK_SIZE: Cell<usize> = const { Cell::new(DEFAULT_STACK_SIZE) };
+}
+
+// Read on every PHP call: outside thread-local storage on the main thread.
+crate::fast_local! {
     /// Stack limit of the running task, 0 outside tasks.
-    static STACK_LIMIT: Cell<usize> = const { Cell::new(0) };
+    static STACK_LIMIT: Cell<usize> = Cell::new(0);
+}
+crate::fast_local! {
     /// The running task's word (see `task_word`).
-    static TASK_WORD: Cell<usize> = const { Cell::new(0) };
+    static TASK_WORD: Cell<usize> = Cell::new(0);
 }
 
 /// One machine word of task-local state, saved and restored on every
 /// switch (the interpreter keeps its call-stack head here).
 #[inline(always)]
 pub fn task_word() -> usize {
-    TASK_WORD.get()
+    TASK_WORD.with(Cell::get)
 }
 
 #[inline(always)]
 pub fn set_task_word(w: usize) {
-    TASK_WORD.set(w)
+    TASK_WORD.with(|c| c.set(w))
 }
 
 /// Bytes of stack left in the running task (None outside a task). Lets
 /// deeply recursive code (an interpreter) fail cleanly instead of crashing.
 #[inline(never)]
 pub fn stack_remaining() -> Option<usize> {
-    let limit = STACK_LIMIT.get();
+    let limit = STACK_LIMIT.with(Cell::get);
     if limit == 0 {
         return None;
     }
@@ -443,11 +449,11 @@ fn run_task(id: TaskId) {
     });
     let Some((mut co, limit, word)) = co else { return };
 
-    STACK_LIMIT.set(limit);
-    let outer = TASK_WORD.replace(word);
+    STACK_LIMIT.with(|c| c.set(limit));
+    let outer = TASK_WORD.with(|c| c.replace(word));
     let res = co.resume(());
-    let word = TASK_WORD.replace(outer);
-    STACK_LIMIT.set(0);
+    let word = TASK_WORD.with(|c| c.replace(outer));
+    STACK_LIMIT.with(|c| c.set(0));
     YIELDER.set(ptr::null());
 
     let finished = with(|s| {

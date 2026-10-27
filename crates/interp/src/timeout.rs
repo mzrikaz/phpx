@@ -38,6 +38,7 @@ pub fn set(seconds: i64) {
                         let used = cpu_ns().saturating_sub(START_NS.load(Relaxed)) / 1_000_000;
                         if used >= lim {
                             EXPIRED.store(true, Relaxed);
+                            crate::value::MAIN_FLAGS.0.store(true, Relaxed);
                             if let Ok(all) = crate::value::ALL_PENDING.lock() {
                                 all.iter().for_each(|f| f.store(true, Relaxed));
                             }
