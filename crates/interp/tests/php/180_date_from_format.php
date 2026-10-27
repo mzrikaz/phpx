@@ -12,7 +12,7 @@ $cases = [
 ];
 foreach ($cases as [$f, $t]) {
   $d = DateTime::createFromFormat($f, $t);
-  echo json_encode([$f, $t]), ' => ', $d ? $d->format('Y-m-d') . (preg_match('/[HhGgisuvU!|]/', $f) ? $d->format(' H:i:s.u T P') : '') : 'false', ' ', json_encode(DateTime::getLastErrors()), "\n";
+  echo json_encode([$f, $t]), ' => ', $d ? ($d->format('Y-m-d') === date('Y-m-d') ? 'today' : $d->format('Y-m-d')) . (preg_match('/[HhGgisuvU!|]/', $f) ? $d->format(' H:i:s.u T P') : '') : 'false', ' ', json_encode(DateTime::getLastErrors()), "\n";
   $p = date_parse_from_format($f, $t); unset($p['zone_type']); echo '   ', json_encode($p), "\n";
 }
 new DateTime('2026-01-01'); var_dump(DateTime::getLastErrors());

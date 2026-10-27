@@ -32,9 +32,9 @@
    {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0.5,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
 ["Y-m-d H:i:s.v","2026-10-26 06:21:33.12"] => 2026-10-26 06:21:33.120000 UTC +00:00 false
    {"year":2026,"month":10,"day":26,"hour":6,"minute":21,"second":33,"fraction":0.12,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
-["g:i a","6:21 pm"] => 2026-10-26 18:21:00.000000 UTC +00:00 false
+["g:i a","6:21 pm"] => today 18:21:00.000000 UTC +00:00 false
    {"year":false,"month":false,"day":false,"hour":18,"minute":21,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
-["h:i A","12:30 AM"] => 2026-10-26 00:30:00.000000 UTC +00:00 false
+["h:i A","12:30 AM"] => today 00:30:00.000000 UTC +00:00 false
    {"year":false,"month":false,"day":false,"hour":0,"minute":30,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
 ["h:i","13:30"] => false {"warning_count":0,"warnings":[],"error_count":1,"errors":["Hour cannot be higher than 12"]}
    {"year":false,"month":false,"day":false,"hour":13,"minute":30,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":1,"errors":["Hour cannot be higher than 12"],"is_localtime":false}
@@ -54,7 +54,7 @@
    {"year":2026,"month":10,"day":26,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
 ["Y-m-d *","2026-10-26 foo123"] => false {"warning_count":0,"warnings":[],"error_count":1,"errors":{"14":"Trailing data"}}
    {"year":2026,"month":10,"day":26,"hour":false,"minute":false,"second":false,"fraction":false,"warning_count":0,"warnings":[],"error_count":1,"errors":{"14":"Trailing data"},"is_localtime":false}
-["H\\h i\\m","06h 21m"] => 2026-10-26 06:21:00.000000 UTC +00:00 false
+["H\\h i\\m","06h 21m"] => today 06:21:00.000000 UTC +00:00 false
    {"year":false,"month":false,"day":false,"hour":6,"minute":21,"second":0,"fraction":0,"warning_count":0,"warnings":[],"error_count":0,"errors":[],"is_localtime":false}
 ["Y-m-d H:i:s","2026-13-45 25:61:61"] => 2027-02-15 02:02:01.000000 UTC +00:00 {"warning_count":2,"warnings":{"19":"The parsed date was invalid"},"error_count":0,"errors":[]}
    {"year":2026,"month":13,"day":45,"hour":25,"minute":61,"second":61,"fraction":0,"warning_count":2,"warnings":{"19":"The parsed date was invalid"},"error_count":0,"errors":[],"is_localtime":false}
