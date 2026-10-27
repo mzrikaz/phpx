@@ -29,7 +29,7 @@ pub type Slot = Rc<RefCell<Value>>;
 /// 16 bytes total. Native code relies on it (see `tag` below). (The tag
 /// stays a byte: a wider one would cost `Option<Value>` its niche, which
 /// property slots rely on.)
-#[derive(Clone, Default)]
+#[derive(Default)]
 #[repr(C, u8)]
 pub enum Value {
     #[default]
@@ -46,6 +46,26 @@ pub enum Value {
     Ref(Slot),
     /// `resource` (streams, directory handles, stream contexts).
     Resource(Rc<Resource>),
+}
+
+impl Clone for Value {
+    /// A refcount bump and a 16-byte copy. (The derived clone copies the
+    /// payload through overlapping stack stores and reloads them, which
+    /// stalls store-to-load forwarding on every clone.)
+    #[inline]
+    fn clone(&self) -> Value {
+        match self {
+            Value::Str(s) => std::mem::forget(s.clone()),
+            Value::Array(a) => std::mem::forget(a.clone()),
+            Value::Object(o) => std::mem::forget(o.clone()),
+            Value::Ref(r) => std::mem::forget(r.clone()),
+            Value::Resource(r) => std::mem::forget(r.clone()),
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) => {}
+        }
+        // SAFETY: every payload is plain data or a counted pointer whose
+        // clone (counted above) has the same bits.
+        unsafe { std::ptr::read(self) }
+    }
 }
 
 /// A PHP resource: an id, a type name (`get_resource_type()`), and native
