@@ -1668,12 +1668,12 @@ impl Parser {
         let kind = match t.tok {
             // Superglobals are the global variables, from any scope.
             Tok::Var(n) if SUPERGLOBALS.contains(&n.as_str()) => {
-                ExprKind::GlobalVar(Box::new(Expr::new(ExprKind::Str(n), t.span)))
+                ExprKind::GlobalVar(Box::new(Expr::new(ExprKind::Str(n.into()), t.span)))
             }
             Tok::Var(n) => ExprKind::Var(n),
             Tok::Int(n) => ExprKind::Int(n),
             Tok::Float(f) => ExprKind::Float(f),
-            Tok::Str(s) => ExprKind::Str(s),
+            Tok::Str(s) => ExprKind::Str(s.into()),
             Tok::Template { raw, heredoc } => return Ok(self.template(&raw, heredoc, t.span)),
             Tok::Punct("(") => {
                 let e = self.expr()?;
@@ -1860,7 +1860,7 @@ impl Parser {
         }
         if parts.is_empty() {
             return match String::from_utf8(lit) {
-                Ok(s) => Expr::new(ExprKind::Str(s), span),
+                Ok(s) => Expr::new(ExprKind::Str(s.into()), span),
                 Err(e) => Expr::new(ExprKind::Bytes(e.into_bytes()), span),
             };
         }
@@ -1886,7 +1886,7 @@ impl Parser {
             } else if let Ok(n) = key.parse::<i64>() {
                 ExprKind::Int(n)
             } else {
-                ExprKind::Str(key.to_string())
+                ExprKind::Str(key.to_string().into())
             };
             let idx = Expr::new(kind, sp(ks, ke));
             let e = Expr::new(ExprKind::Index { base: Box::new(var), index: Some(Box::new(idx)) }, sp(0, ke + 1));

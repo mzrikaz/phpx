@@ -164,6 +164,32 @@ pub fn fmt_int(n: i64, buf: &mut [u8; 20]) -> &[u8] {
     &buf[i..]
 }
 
+/// Strong count of an immortal string: never reaches zero (clones and
+/// drops move it by one), so it is never freed or changed in place.
+const IMMORTAL: usize = usize::MAX / 2;
+
+impl PStr {
+    /// The literal cached in `cache` (a string literal's slot in the syntax
+    /// tree), made immortal on first use.
+    #[inline]
+    pub fn literal(cache: &std::cell::Cell<usize>, s: &str) -> PStr {
+        let p = cache.get();
+        if p != 0 {
+            // SAFETY: an immortal header leaked below; the count is bumped.
+            unsafe {
+                let h = p as *mut Header;
+                (*h).strong += 1;
+                return PStr { ptr: NonNull::new_unchecked(h) };
+            }
+        }
+        let v = PStr::from_bytes(s.as_bytes());
+        // SAFETY: we own the only reference.
+        unsafe { (*v.ptr.as_ptr()).strong = IMMORTAL };
+        cache.set(v.ptr.as_ptr() as usize);
+        v
+    }
+}
+
 impl Drop for PStr {
     #[inline]
     fn drop(&mut self) {

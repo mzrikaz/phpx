@@ -8,6 +8,46 @@ pub struct File {
     pub stmts: Vec<Stmt>,
 }
 
+/// A string literal. `cache` is one word the interpreter owns: the
+/// literal's value, made once (the tree is per thread), so evaluating it
+/// doesn't copy the bytes (like an interned string in PHP or V8).
+#[derive(Debug, Default)]
+pub struct StrLit {
+    pub s: String,
+    pub cache: std::cell::Cell<usize>,
+}
+
+impl StrLit {
+    pub fn new(s: String) -> StrLit {
+        StrLit { s, cache: std::cell::Cell::new(0) }
+    }
+}
+
+impl Clone for StrLit {
+    fn clone(&self) -> StrLit {
+        StrLit::new(self.s.clone())
+    }
+}
+
+impl PartialEq for StrLit {
+    fn eq(&self, o: &StrLit) -> bool {
+        self.s == o.s
+    }
+}
+
+impl std::ops::Deref for StrLit {
+    type Target = String;
+    fn deref(&self) -> &String {
+        &self.s
+    }
+}
+
+impl From<String> for StrLit {
+    fn from(s: String) -> StrLit {
+        StrLit::new(s)
+    }
+}
+
 /// Name as written: `Foo`, `Foo\Bar`, `\Foo\Bar`, `namespace\Foo`.
 pub type Name = String;
 
@@ -323,7 +363,7 @@ pub struct ArrowFn {
 pub enum ExprKind {
     Int(i64),
     Float(f64),
-    Str(String),
+    Str(StrLit),
     /// A double-quoted string whose escapes produced non-UTF-8 bytes.
     Bytes(Vec<u8>),
     Interp(Vec<InterpPart>),

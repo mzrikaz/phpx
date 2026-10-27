@@ -213,7 +213,7 @@ impl Interp {
         Ok(match &e.kind {
             Int(n) => Value::Int(*n),
             Float(x) => Value::Float(*x),
-            Str(s) => Value::str(s),
+            Str(s) => Value::Str(crate::pstr::PStr::literal(&s.cache, s)),
             Bytes(b) => Value::bytes(b.clone()),
             Bool(b) => Value::Bool(*b),
             Null => Value::Null,
