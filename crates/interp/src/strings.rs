@@ -929,21 +929,38 @@ pub fn number_format(n: f64, dec: usize, dp: &[u8], ts: &[u8]) -> Vec<u8> {
 /// PHP sprintf: %[argnum$][flags][width][.precision]specifier
 pub fn sprintf(it: &Interp, a: &[Value]) -> R<Vec<u8>> {
     let fmt = s(it, a, 0)?;
-    let mut out = vec![];
+    let mut out = Vec::with_capacity(fmt.len() + 16);
     let mut next_arg = 1;
     let mut i = 0;
     while i < fmt.len() {
-        let c = fmt[i];
-        if c != b'%' {
-            out.push(c);
-            i += 1;
-            continue;
+        // Literal text up to the next conversion, in one copy.
+        let lit = fmt[i..].iter().position(|&c| c == b'%').unwrap_or(fmt.len() - i);
+        out.extend_from_slice(&fmt[i..i + lit]);
+        i += lit;
+        if i >= fmt.len() {
+            break;
         }
         i += 1;
         if fmt.get(i) == Some(&b'%') {
             out.push(b'%');
             i += 1;
             continue;
+        }
+        // Plain %d and %s (no argnum, flags, width or precision), written
+        // straight into the output.
+        if let Some(&spec @ (b'd' | b's')) = fmt.get(i) {
+            if next_arg < a.len() {
+                let v = &a[next_arg];
+                next_arg += 1;
+                i += 1;
+                match (spec, v) {
+                    (b'd', Value::Int(n)) => out.extend_from_slice(crate::pstr::fmt_int(*n, &mut [0; 20])),
+                    (b'd', v) => out.extend_from_slice(crate::pstr::fmt_int(it.to_int(v)?, &mut [0; 20])),
+                    (_, Value::Str(st)) => out.extend_from_slice(st),
+                    (_, v) => out.extend_from_slice(&it.to_str(v)?),
+                }
+                continue;
+            }
         }
         // argnum$
         let mut argnum = None;
@@ -1007,7 +1024,7 @@ pub fn sprintf(it: &Interp, a: &[Value]) -> R<Vec<u8>> {
         let (body, numeric): (Vec<u8>, bool) = match spec {
             b'd' | b'i' => {
                 let n = it.to_int(v)?;
-                let mut s = n.abs().to_string().into_bytes();
+                let mut s = n.unsigned_abs().to_string().into_bytes();
                 if n < 0 {
                     s.insert(0, b'-');
                 } else if plus {
