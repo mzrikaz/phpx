@@ -70,6 +70,14 @@ impl<T: 'static> FastLocal<T> {
         if is_main() {
             return f(&self.main);
         }
+        self.tls_with(f)
+    }
+
+    /// Out of line: inlined, the compiler may hoist the thread-local lookup
+    /// (a call on macOS) above the main-thread check.
+    #[cold]
+    #[inline(never)]
+    fn tls_with<R>(&'static self, f: impl FnOnce(&T) -> R) -> R {
         self.key.with(f)
     }
 

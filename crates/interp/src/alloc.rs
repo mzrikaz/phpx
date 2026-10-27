@@ -15,9 +15,9 @@ pub struct Counting;
 // push/pop instead of a general-purpose malloc. Freed blocks go to the
 // freeing thread's list (memory is interchangeable between threads); chunks
 // are kept for reuse, as PHP keeps its heap for the request.
-const CLASSES: usize = 16;
+const CLASSES: usize = 64;
 const MAX_SMALL: usize = CLASSES * 16;
-const CHUNK: usize = 32 * 1024;
+const CHUNK: usize = 64 * 1024;
 
 /// A thread's allocator state, in one thread-local so an allocation looks
 /// it up once (on macOS each thread-local access is a call).
@@ -87,9 +87,23 @@ static MAIN_HEAP: MainHeap = MainHeap(Heap {
 #[inline(always)]
 fn with_heap<T>(f: impl FnOnce(&Heap) -> T) -> T {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    if phpx_runtime::fastlocal::claim_main() {
-        return f(&MAIN_HEAP.0);
+    {
+        if phpx_runtime::fastlocal::claim_main() {
+            return f(&MAIN_HEAP.0);
+        }
+        tls_heap(f)
     }
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    HEAP.with(f)
+}
+
+/// Other threads' heaps. Out of line: inlined, the compiler hoists the
+/// thread-local lookup (a call on macOS) to the top of callers, where
+/// the main thread pays for it too.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[cold]
+#[inline(never)]
+fn tls_heap<T>(f: impl FnOnce(&Heap) -> T) -> T {
     HEAP.with(f)
 }
 
