@@ -2545,6 +2545,13 @@ impl<'a> Lower<'a> {
         let o = self.materialize(o);
         let oa = self.addr(o).unwrap();
         let v = self.expr(value)?;
+        let r = self.prop_store(oa, name, v);
+        self.release(o);
+        r
+    }
+
+    /// The store of `prop_write`, for an object at `oa` and a computed value.
+    fn prop_store(&mut self, oa: CValue, name: &'static str, v: Op) -> L<Op> {
         let v = self.own(v);
         let v = self.materialize(v);
         let va = self.addr(v).unwrap();
@@ -2554,7 +2561,6 @@ impl<'a> Lower<'a> {
         let Some(lay) = super::layout() else {
             let s = self.iconst(sp);
             self.call_checked("rt_prop_write", &[self.cx, oa, s, va, va]);
-            self.release(o);
             return Ok(v);
         };
         let old_t = self.alloc_temp();
@@ -2576,7 +2582,6 @@ impl<'a> Lower<'a> {
         self.b.switch_to_block(merge);
         let olda = self.temp_addr(old_t);
         self.release(Op::Ptr(olda, Some(old_t)));
-        self.release(o);
         Ok(v)
     }
 
@@ -3287,6 +3292,50 @@ impl<'a> Lower<'a> {
             }
             return Ok(Op::Local(i));
         }
+        // `$local->name op= v` (not ??=): read and write through the
+        // property caches, the arithmetic inline. PHP's order: the object,
+        // then the value, then the property is read.
+        if let ExprKind::Prop { object, name: MemberName::Ident(name), nullsafe: false } = &target.kind {
+            if !matches!(op, BinOp::Coalesce) && matches!(&object.kind, ExprKind::Var(n) if self.locals.index.contains_key(n.as_str())) {
+                let o = self.expr(object)?;
+                let o = self.own(o);
+                let o = self.materialize(o);
+                let v = self.expr(value)?;
+                let v = self.own(v);
+                let v = self.materialize(v);
+                let t = self.alloc_temp();
+                let (fast, general, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+                let oa = self.addr(o).unwrap();
+                let tg = self.load_tag(oa);
+                let is_obj = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::OBJECT as i64);
+                self.b.ins().brif(is_obj, fast, &[], general, &[]);
+                self.b.switch_to_block(fast);
+                let site = Box::new(super::rt::PropSite::new(&name.name));
+                let sp = &*site as *const super::rt::PropSite as i64;
+                self.psites.push(site);
+                let oa = self.addr(o).unwrap();
+                let cur = self.prop_read(oa, sp)?;
+                let va = self.addr(v).unwrap();
+                let r = self.binary(op, cur, Op::Ptr(va, None))?;
+                let oa = self.addr(o).unwrap();
+                let r = self.prop_store(oa, &name.name, r)?;
+                let ta = self.temp_addr(t);
+                self.store_into(ta, r);
+                self.b.ins().jump(merge, &[]);
+                // Not an object: the general path (its errors and warnings).
+                self.b.switch_to_block(general);
+                let va = self.addr(v).unwrap();
+                let r = self.place_update_ra(target, binop_code(op) as i64, va)?;
+                let ta = self.temp_addr(t);
+                self.store_into(ta, r);
+                self.b.ins().jump(merge, &[]);
+                self.b.switch_to_block(merge);
+                self.release(v);
+                self.release(o);
+                let ta = self.temp_addr(t);
+                return Ok(Op::Ptr(ta, Some(t)));
+            }
+        }
         self.place_update(target, binop_code(op) as i64, Some(value))
     }
 
@@ -3318,6 +3367,22 @@ impl<'a> Lower<'a> {
         if let Some(rh) = rhs {
             self.release(rh);
         }
+        self.release_ids(&kids);
+        self.release_root(root);
+        Ok(r)
+    }
+
+    /// `place_update` with the right-hand side already evaluated (at `ra`,
+    /// borrowed).
+    fn place_update_ra(&mut self, target: &'static Expr, mode: i64, ra: CValue) -> L<Op> {
+        let (root, name, keys) = self.place(target, false)?;
+        let (np, nl) = name;
+        let (kslot, kn, kids) = keys;
+        let ka = self.b.ins().stack_addr(types::I64, kslot, 0);
+        let knv = self.iconst(kn as i64);
+        let m = self.iconst(mode);
+        let rootp = root.addr;
+        let r = self.helper_value("rt_place_update", |l| vec![l.cx, rootp, np, nl, ka, knv, m, ra])?;
         self.release_ids(&kids);
         self.release_root(root);
         Ok(r)
