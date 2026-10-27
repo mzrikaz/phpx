@@ -414,8 +414,6 @@ impl PhpArray {
         }
     }
 
-    /// Element value by a borrowed key (references dereferenced).
-    #[inline]
     /// The element at a borrowed key, borrowed (a reference stays one).
     #[inline]
     pub fn peek(&self, k: KeyRef) -> Option<&Value> {
@@ -428,6 +426,8 @@ impl PhpArray {
         }
     }
 
+    /// Element value by a borrowed key (references dereferenced).
+    #[inline]
     pub fn get_ref(&self, k: KeyRef) -> Option<Value> {
         match &self.store {
             Store::Packed(v) => match k {

@@ -720,12 +720,18 @@ impl Interp {
         if items.is_empty() {
             return Some(Value::array(PhpArray::new()));
         }
-        if !maybe_const(items) {
+        // The shape check walks every item, so it only pays off on small
+        // literals; a big one (Composer's class map) goes to the cache first.
+        if items.len() <= 8 && !maybe_const(items) {
             return None;
         }
         let key = (e as *const Expr as usize, f.ctx.file);
         if let Some(v) = CONST_ARRAYS.with(|c| c.borrow().get(&key).cloned()) {
             return v;
+        }
+        if items.len() > 8 && !maybe_const(items) {
+            CONST_ARRAYS.with(|c| c.borrow_mut().insert(key, None));
+            return None;
         }
         let path = self.file_path(f.ctx.file);
         let file = (f.ctx.file != crate::interp::PRELUDE_FILE && !path.ends_with("eval()'d code")).then_some(path.as_str());
