@@ -134,7 +134,9 @@ Constructs that currently force interpreter fallback
 
 ## 5. Performance: beat PHP 8.5 on every microbenchmark
 
-See [performance.md](performance.md).
+See [performance.md](performance.md). The longer goal, PHP at Node.js
+speed, and the engine re-engineering it needs are in
+[engine-v2.md](engine-v2.md).
 
 - [x] Inline int fast paths, inline refcounting
 - [x] Inline caches for calls, methods, property reads
