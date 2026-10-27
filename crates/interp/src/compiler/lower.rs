@@ -1423,6 +1423,11 @@ impl<'a> Lower<'a> {
             AssignOp { op, target, value } => self.assign_op(*op, target, value)?,
             IncDec { prefix, inc, expr } => match &expr.kind {
                 Var(_) => self.incdec_local(expr, *inc, *prefix, true)?,
+                Prop { object, name: MemberName::Ident(name), nullsafe: false }
+                    if super::layout().is_some() && matches!(&object.kind, Var(n) if self.locals.index.contains_key(n.as_str())) =>
+                {
+                    self.incdec_prop(expr, object, &name.name, *inc, *prefix)?
+                }
                 _ => {
                     let mode = (if *inc { 100 } else { 101 }) | if *prefix { 256 } else { 0 };
                     self.place_update(expr, mode, None)?
@@ -3422,6 +3427,55 @@ impl<'a> Lower<'a> {
         self.b.switch_to_block(done);
         self.release_ids(&kids);
         self.release_root(root);
+        let ta = self.temp_addr(t);
+        Ok(Op::Ptr(ta, Some(t)))
+    }
+
+    /// `$local->name++` (and --, prefix or postfix): an int in a slot the
+    /// site's own cache knows is updated in place; anything else (a miss,
+    /// another type, overflow) takes the general path, which then fills
+    /// the cache for next time.
+    fn incdec_prop(&mut self, expr: &'static Expr, object: &'static Expr, name: &'static str, inc: bool, prefix: bool) -> L<Op> {
+        let lay = super::layout().unwrap();
+        let site = Box::new(super::rt::PropSite::new(name));
+        let sp = &*site as *const super::rt::PropSite as i64;
+        self.psites.push(site);
+        let o = self.expr(object)?;
+        let o = self.own(o);
+        let o = self.materialize(o);
+        let t = self.alloc_temp();
+        let (general, merge) = (self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(general);
+        let oa = self.addr(o).unwrap();
+        let site_v = self.iconst(sp);
+        let props = self.prop_guard(lay, oa, site_v, super::rt::PROPSITE_WSHAPE, super::rt::PROPSITE_WSCOPE, general);
+        let p = self.prop_slot(lay, props, site_v, super::rt::PROPSITE_WSLOT, general);
+        let tg = self.load_tag(p);
+        let is_int = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::INT as i64);
+        let go = self.b.create_block();
+        self.b.ins().brif(is_int, go, &[], general, &[]);
+        self.b.switch_to_block(go);
+        let old = self.b.ins().load(types::I64, flags(), p, tag::PAYLOAD);
+        let one = self.iconst(1);
+        let (new, of) = if inc { self.b.ins().sadd_overflow(old, one) } else { self.b.ins().ssub_overflow(old, one) };
+        let ok = self.b.create_block();
+        self.b.ins().brif(of, general, &[], ok, &[]);
+        self.b.switch_to_block(ok);
+        self.b.ins().store(flags(), new, p, tag::PAYLOAD);
+        let ta = self.temp_addr(t);
+        self.store_into(ta, Op::Int(if prefix { new } else { old }));
+        self.b.ins().jump(merge, &[]);
+        self.b.switch_to_block(general);
+        let mode = (if inc { 100 } else { 101 }) | if prefix { 256 } else { 0 };
+        let r = self.place_update(expr, mode, None)?;
+        let ta = self.temp_addr(t);
+        self.store_into(ta, r);
+        let oa = self.addr(o).unwrap();
+        let site_v = self.iconst(sp);
+        self.call("rt_incdec_fill", &[self.cx, oa, site_v]);
+        self.b.ins().jump(merge, &[]);
+        self.b.switch_to_block(merge);
+        self.release(o);
         let ta = self.temp_addr(t);
         Ok(Op::Ptr(ta, Some(t)))
     }

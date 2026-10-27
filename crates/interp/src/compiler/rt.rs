@@ -68,6 +68,10 @@ pub struct LocalsSpec {
     /// Per parameter: its default when that is a literal (null, a scalar,
     /// `[]`), copied instead of evaluating the expression each call.
     pub defaults: Vec<Option<Value>>,
+    /// Promoted constructor parameters: the (shape, slot) their property
+    /// was last found at, so the next object of that shape is written by
+    /// slot. Reset with the other caches each request.
+    pub promoted: Vec<std::cell::Cell<(usize, usize)>>,
 }
 
 /// A parameter default that is a plain literal, as a value.
@@ -120,28 +124,33 @@ pub unsafe extern "C" fn rt_check_ret(c: *mut Cx, out: *mut Value, spec: *const 
     }
 }
 
-/// A class-typed check's last accepted input: (the object's class, the
-/// frame's static class, which `static` resolves against). The classes
+/// A class-typed check's recently accepted inputs: (the object's class,
+/// the frame's static class, which `static` resolves against). The classes
 /// are held, so their addresses can't be reused while cached.
 #[derive(Default)]
-pub struct ClassPair(std::cell::RefCell<Option<(Rc<crate::class::Class>, Option<Rc<crate::class::Class>>)>>);
+pub struct ClassPair(std::cell::RefCell<[Option<(Rc<crate::class::Class>, Option<Rc<crate::class::Class>>)>; CLASS_PAIRS]>);
+
+/// Classes a type check remembers: a parameter in shared code (a base
+/// class, an interface) sees several, and one entry would keep swapping.
+const CLASS_PAIRS: usize = 4;
 
 impl ClassPair {
     #[inline]
     fn matches(&self, v: &Value, f: &Frame) -> bool {
         let Value::Object(o) = v else { return false };
-        match &*self.0.borrow() {
-            Some((c, sc)) => Rc::ptr_eq(c, &o.class) && sc.as_ref().map(Rc::as_ptr) == f.static_class.as_ref().map(Rc::as_ptr),
-            None => false,
-        }
+        let sc = f.static_class.as_ref().map(Rc::as_ptr);
+        self.0.borrow().iter().any(|e| matches!(e, Some((c, s)) if Rc::ptr_eq(c, &o.class) && s.as_ref().map(Rc::as_ptr) == sc))
     }
 
     fn remember(&self, o: &Obj, f: &Frame) {
-        *self.0.borrow_mut() = Some((o.class.clone(), f.static_class.clone()));
+        let mut es = self.0.borrow_mut();
+        // Newest first; the oldest drops off the end.
+        es.rotate_right(1);
+        es[0] = Some((o.class.clone(), f.static_class.clone()));
     }
 
     pub fn clear(&self) {
-        *self.0.borrow_mut() = None;
+        *self.0.borrow_mut() = Default::default();
     }
 }
 
@@ -150,6 +159,7 @@ impl LocalsSpec {
     pub fn reset(&self) {
         self.param_ok.iter().for_each(ClassPair::clear);
         self.ret_ok.clear();
+        self.promoted.iter().for_each(|c| c.set((0, 0)));
     }
 }
 
@@ -363,10 +373,37 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
         };
         if p.promote.is_some() {
             if let Some(o) = &f.this {
-                // A private promoted property shadowed by a subclass lives
-                // under its mangled key.
-                let key = it.prop_key(f, o, &p.name.name);
-                o.set_prop(&key, v.clone());
+                let cached = spec.promoted[i].get();
+                let k = shape_key(o);
+                let done = k == Some(cached.0) && cached.0 != 0 && {
+                    let mut props = o.props.borrow_mut();
+                    match props.slot_mut(cached.1) {
+                        Some(slot @ None) => {
+                            *slot = Some(v.clone());
+                            true
+                        }
+                        Some(Some(cur)) if !matches!(cur, Value::Ref(_)) => {
+                            let old = std::mem::replace(cur, v.clone());
+                            drop(props);
+                            drop(old);
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if !done {
+                    // A private promoted property shadowed by a subclass lives
+                    // under its mangled key.
+                    let key = it.prop_key(f, o, &p.name.name);
+                    o.set_prop(&key, v.clone());
+                    // (Not readonly ones: a second constructor call must fail.)
+                    let writable = o.class.find_prop(&key).is_some_and(|d| !d.readonly);
+                    if let (Some(k), true, Some((slot, _, _))) = (k, writable, o.props.borrow().get_full(&key)) {
+                        if shape_key(o) == Some(k) {
+                            spec.promoted[i].set((k, slot));
+                        }
+                    }
+                }
             }
         }
         ptr::drop_in_place(locals.add(i));
@@ -1376,6 +1413,46 @@ pub struct PropSite {
     pub eshape: std::cell::Cell<usize>,
     pub eslot: std::cell::Cell<usize>,
     pub escope: std::cell::Cell<usize>,
+    /// Earlier (shape, scope) pairs of the read, write and typed-write
+    /// caches: code shared by several classes (a base class method, a
+    /// parameter typed by an interface) finds each of them here instead of
+    /// replacing the one inline entry on every call.
+    rpoly: Poly,
+    wpoly: Poly,
+    tpoly: Poly,
+}
+
+/// A few cache entries beside a site's inline one: (shape, scope, slot,
+/// accepted type), empty while the shape is 0.
+#[derive(Default)]
+struct Poly(std::cell::Cell<[(usize, usize, usize, (Quick, bool)); 4]>);
+
+impl Default for Quick {
+    fn default() -> Quick {
+        Quick::Other
+    }
+}
+
+impl Poly {
+    #[inline]
+    fn find(&self, shape: usize, scope: usize) -> Option<(usize, (Quick, bool))> {
+        self.0.get().iter().find(|e| e.0 == shape && e.1 == scope && shape != 0).map(|e| (e.2, e.3))
+    }
+
+    /// Keep the inline entry being replaced (if any).
+    fn keep(&self, shape: usize, scope: usize, slot: usize, q: (Quick, bool)) {
+        if shape == 0 || self.find(shape, scope).is_some() {
+            return;
+        }
+        let mut es = self.0.get();
+        es.rotate_right(1);
+        es[0] = (shape, scope, slot, q);
+        self.0.set(es);
+    }
+
+    fn clear(&self) {
+        self.0.set(Default::default());
+    }
 }
 
 impl PropSite {
@@ -1393,6 +1470,9 @@ impl PropSite {
             tscope: Default::default(),
             tquick: std::cell::Cell::new((Quick::Other, false)),
             tclass: Default::default(),
+            rpoly: Default::default(),
+            wpoly: Default::default(),
+            tpoly: Default::default(),
             eshape: Default::default(),
             eslot: Default::default(),
             escope: Default::default(),
@@ -1476,6 +1556,16 @@ pub unsafe extern "C" fn rt_prop_read(c: *mut Cx, obj: *const Value, site: *cons
     let (it, f) = cx(c);
     let site = &*site;
     if let Value::Object(o) = &*obj {
+        if let Some(k) = shape_key(o) {
+            if let Some((i, _)) = site.rpoly.find(k, scope_key(f)) {
+                if let Some((_, v)) = o.props.borrow().get_index(i) {
+                    if !matches!(v, Value::Ref(_)) {
+                        put(dst, v.clone());
+                        return 0;
+                    }
+                }
+            }
+        }
         // Cache only plain visible, present properties (no __get path).
         let key = it.prop_key(f, o, site.name);
         if it.prop_visible(f, o, &key) {
@@ -1483,6 +1573,7 @@ pub unsafe extern "C" fn rt_prop_read(c: *mut Cx, obj: *const Value, site: *cons
             if let Some((i, _, v)) = props.get_full(&key) {
                 if !matches!(v, Value::Ref(_)) {
                     if let Some(k) = shape_key(o) {
+                        site.rpoly.keep(site.shape.get(), site.scope.get(), site.slot.get(), Default::default());
                         site.shape.set(k);
                         site.slot.set(i);
                         site.scope.set(scope_key(f));
@@ -1498,11 +1589,63 @@ pub unsafe extern "C" fn rt_prop_read(c: *mut Cx, obj: *const Value, site: *cons
 }
 
 /// `$obj->name = val` miss path. `val` is consumed; a copy goes to `dst`.
+/// After `$o->name++` took the general path: remember the property's slot
+/// in the increment site's write fields when an int may be updated there
+/// in place (visible, not readonly, present, not a reference, untyped or
+/// typed to hold an int).
+pub unsafe extern "C" fn rt_incdec_fill(c: *mut Cx, obj: *const Value, site: *const PropSite) -> u64 {
+    let (it, f) = cx(c);
+    let site = &*site;
+    let Value::Object(o) = &*obj else { return 0 };
+    let key = it.prop_key(f, o, site.name);
+    let ok = match o.class.find_prop(&key) {
+        Some(d) => !d.readonly && it.member_visible(f.class.as_deref(), d.vis, &d.declaring) && matches!(Quick::of(d.ty).0, Quick::Untyped | Quick::Int | Quick::Mixed),
+        None => it.prop_visible(f, o, &key),
+    };
+    if !ok {
+        return 0;
+    }
+    let props = o.props.borrow();
+    if let (Some((i, _, v)), Some(k)) = (props.get_full(&key), shape_key(o)) {
+        if !matches!(v, Value::Ref(_)) {
+            site.wshape.set(k);
+            site.wslot.set(i);
+            site.wscope.set(scope_key(f));
+        }
+    }
+    0
+}
+
 pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *const PropSite, val: *mut Value, dst: *mut Value) -> u64 {
     let (it, f) = cx(c);
     let site = &*site;
     let v = take(val);
     if let Value::Object(o) = &*obj {
+        // Other classes seen here: plain and scalar-typed slots.
+        if let Some(k) = shape_key(o) {
+            let sk = scope_key(f);
+            let hit = site.wpoly.find(k, sk).map(|(i, _)| i).or_else(|| site.tpoly.find(k, sk).filter(|(_, q)| Quick::accepts(*q, &v)).map(|(i, _)| i));
+            if let Some(i) = hit {
+                let mut props = o.props.borrow_mut();
+                match props.slot_mut(i) {
+                    Some(Some(cur)) if !matches!(cur, Value::Ref(_)) => {
+                        let old = std::mem::replace(cur, v.clone());
+                        drop(props);
+                        drop(old);
+                        put(dst, v);
+                        return 0;
+                    }
+                    // A typed property's first write (as on the inline path).
+                    Some(slot @ None) => {
+                        *slot = Some(v.clone());
+                        drop(props);
+                        put(dst, v);
+                        return 0;
+                    }
+                    _ => {}
+                }
+            }
+        }
         let fits = Quick::accepts(site.tquick.get(), &v) || matches!((&v, &*site.tclass.borrow()), (Value::Object(x), Some(c)) if Rc::ptr_eq(&x.class, c));
         if site.tshape.get() != 0 && shape_key(o) == Some(site.tshape.get()) && site.tscope.get() == scope_key(f) && fits {
             let mut props = o.props.borrow_mut();
@@ -1546,6 +1689,9 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
             let props = o.props.borrow();
             if let (Some((i, _, cur)), Some(k)) = (props.get_full(&key), shape_key(o)) {
                 if !matches!(cur, Value::Ref(_)) {
+                    if site.tclass.borrow().is_none() && site.tquick.get().0 != Quick::Other {
+                        site.tpoly.keep(site.tshape.get(), site.tscope.get(), site.tslot.get(), site.tquick.get());
+                    }
                     site.tshape.set(k);
                     site.tslot.set(i);
                     site.tscope.set(scope_key(f));
@@ -1567,6 +1713,7 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
             if let Some((i, _, cur)) = props.get_full(&key) {
                 if !matches!(cur, Value::Ref(_)) {
                     if let Some(k) = shape_key(o) {
+                        site.wpoly.keep(site.wshape.get(), site.wscope.get(), site.wslot.get(), Default::default());
                         site.wshape.set(k);
                         site.wslot.set(i);
                         site.wscope.set(scope_key(f));
@@ -3932,6 +4079,9 @@ impl PropSite {
             c.set(0);
         }
         *self.tclass.borrow_mut() = None;
+        self.rpoly.clear();
+        self.wpoly.clear();
+        self.tpoly.clear();
     }
 }
 

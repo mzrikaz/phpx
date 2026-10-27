@@ -168,6 +168,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_quiet_prop: 5 => true,
     rt_quiet_prop_site: 5 => true,
     rt_isset_index: 3 => true,
+    rt_incdec_fill: 3 => true,
     rt_isset_prop: 5 => true,
     rt_empty_prop: 5 => true,
     rt_const: 3 => true,
@@ -578,6 +579,7 @@ impl Native {
             ret_ok: Default::default(),
             quick: t.params.iter().map(|p| rt::Quick::of(p.ty.as_ref())).collect(),
             defaults: t.params.iter().map(|p| p.default.as_ref().and_then(rt::literal_default)).collect(),
+            promoted: t.params.iter().map(|_| Default::default()).collect(),
         });
         let simple = spec.simple;
         // Parameters of scalar types bind inline too: one tag check each
