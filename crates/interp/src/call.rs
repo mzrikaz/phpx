@@ -689,7 +689,7 @@ impl Interp {
                     .iter()
                     .enumerate()
                     .map(|(i, a)| match params.get(i).filter(|_| i < fixed).and_then(|p| f.vars.get(&p.name.name)) {
-                        Some(s) => s.borrow().deref(),
+                        Some(v) => v,
                         None => a.clone(),
                     })
                     .collect();
@@ -697,8 +697,8 @@ impl Interp {
             }
             "get_defined_vars" => {
                 let mut out = PhpArray::new();
-                for (name, s) in f.vars.iter() {
-                    out.insert(Key::Str(crate::value::pstr(name)), s.borrow().clone());
+                for (name, v) in f.vars.iter() {
+                    out.insert(Key::Str(crate::value::pstr(name)), v.deref());
                 }
                 return Ok(Value::array(out));
             }
@@ -830,8 +830,8 @@ impl Interp {
             match v {
                 Value::Str(s) => {
                     let n = crate::pstr::lossy(s);
-                    if let Some(slot) = f.vars.get(&*n) {
-                        out.insert(Key::Str(s.clone()), slot.borrow().clone());
+                    if let Some(v) = f.vars.get(&*n) {
+                        out.insert(Key::Str(s.clone()), v);
                     } else if n == "this" {
                         if let Some(o) = &f.this {
                             out.insert(Key::Str(s.clone()), Value::Object(o.clone()));
@@ -1517,11 +1517,10 @@ impl Interp {
         f.func = inv.func.clone();
         f.fn_id = inv.fn_id;
         for (name, v, by_ref) in inv.captured {
-            let s = match v {
-                Value::Ref(s) if *by_ref => s.clone(),
-                v => slot(v.clone()),
-            };
-            f.vars.insert(name, s);
+            match v {
+                Value::Ref(s) if *by_ref => f.vars.bind(name, s.clone()),
+                v => f.vars.put(name, v.clone()),
+            }
         }
 
         let mut last_named: Option<usize> = None;
@@ -1549,7 +1548,7 @@ impl Interp {
                     }
                     None => rest,
                 };
-                f.vars.insert(pname, slot(Value::array(rest)));
+                f.vars.put(pname, Value::array(rest));
                 break;
             }
             let v = if let Some((_, v)) = pos_iter.next_if(|(j, _)| *j == i) {
@@ -1604,7 +1603,7 @@ impl Interp {
                         o.props.borrow_mut().insert(Rc::from(&*key), Value::Ref(cell.clone()));
                     }
                 }
-                f.vars.insert(pname, cell);
+                f.vars.bind(pname, cell);
                 continue;
             }
             let v = v.into_deref();
@@ -1619,7 +1618,7 @@ impl Interp {
                     self.promote_into(o, &key, pname, v.clone())?;
                 }
             }
-            f.vars.insert(pname, slot(v));
+            f.vars.put(pname, v);
         }
         if let Some((n, _)) = named.first() {
             return Err(self.error("Error", &format!("Unknown named parameter ${n}")));
@@ -1629,7 +1628,7 @@ impl Interp {
         // skipped before it count with their defaults (func_get_args()).
         if let Some(last) = last_named.filter(|&l| l >= f.args.len()) {
             for p in &inv.params[f.args.len()..=last] {
-                let v = f.vars.get(&p.name.name).map(|s| s.borrow().deref()).unwrap_or_default();
+                let v = f.vars.get(&p.name.name).unwrap_or_default();
                 f.args.push(v);
             }
         }

@@ -121,7 +121,8 @@ impl Interp {
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),
             ExprKind::Null => Ok(Value::Null),
             ExprKind::Var(n) => match f.vars.get_hinted(n, &e.hint) {
-                Some(s) => Ok(s.borrow().clone()),
+                Some(Value::Ref(r)) => Ok(r.borrow().clone()),
+                Some(v) => Ok(v.clone()),
                 None => {
                     self.mark(f, e.span.start);
                     self.read_var(f, n)
@@ -143,13 +144,19 @@ impl Interp {
             // `$i++` / `$x = expr` / `$x += expr` on locals: no place machinery.
             ExprKind::IncDec { prefix, inc, expr } if matches!(expr.kind, ExprKind::Var(_)) => {
                 let ExprKind::Var(n) = &expr.kind else { unreachable!() };
-                if let Some(s) = f.vars.get_hinted(n, &expr.hint) {
-                    let mut cell = s.borrow_mut();
-                    if let Value::Int(old) = *cell {
-                        if let Some(new) = if *inc { old.checked_add(1) } else { old.checked_sub(1) } {
-                            *cell = Value::Int(new);
-                            return Ok(Value::Int(if *prefix { new } else { old }));
-                        }
+                if let Some(v) = f.vars.get_hinted_mut(n, &expr.hint) {
+                    let step = |cell: &mut Value| {
+                        let Value::Int(old) = *cell else { return None };
+                        let new = if *inc { old.checked_add(1) } else { old.checked_sub(1) }?;
+                        *cell = Value::Int(new);
+                        Some(Value::Int(if *prefix { new } else { old }))
+                    };
+                    let r = match v {
+                        Value::Ref(r) => step(&mut r.borrow_mut()),
+                        v => step(v),
+                    };
+                    if let Some(r) = r {
+                        return Ok(r);
                     }
                 }
                 self.eval_rest(f, e)
@@ -157,12 +164,16 @@ impl Interp {
             ExprKind::Assign { target, value } if matches!(&target.kind, ExprKind::Var(n) if n != "this") => {
                 let ExprKind::Var(n) = &target.kind else { unreachable!() };
                 let v = self.eval(f, value)?;
-                match f.vars.get_hinted(n, &target.hint) {
-                    Some(s) => *s.borrow_mut() = v.clone(),
+                let old = match f.vars.get_hinted_mut(n, &target.hint) {
+                    Some(Value::Ref(r)) => std::mem::replace(&mut *r.borrow_mut(), v.clone()),
+                    Some(cur) => std::mem::replace(cur, v.clone()),
                     None => {
-                        f.vars.insert(n, slot(v.clone()));
+                        f.vars.put(n, v.clone());
+                        Value::Null
                     }
-                }
+                };
+                // (Dropped once nothing is borrowed: a destructor may run.)
+                drop(old);
                 Ok(v)
             }
             ExprKind::AssignOp { op, target, value }
@@ -170,13 +181,19 @@ impl Interp {
             {
                 let ExprKind::Var(n) = &target.kind else { unreachable!() };
                 let rhs = self.eval(f, value)?;
-                if let (Some(s), Value::Int(y)) = (f.vars.get_hinted(n, &target.hint), &rhs) {
-                    let mut cell = s.borrow_mut();
-                    if let Value::Int(x) = *cell {
-                        if let Some(v) = int_binop(*op, x, *y) {
-                            *cell = v.clone();
-                            return Ok(v);
-                        }
+                if let (Some(cur), Value::Int(y)) = (f.vars.get_hinted_mut(n, &target.hint), &rhs) {
+                    let step = |cell: &mut Value| {
+                        let Value::Int(x) = *cell else { return None };
+                        let v = int_binop(*op, x, *y)?;
+                        *cell = v.clone();
+                        Some(v)
+                    };
+                    let r = match cur {
+                        Value::Ref(r) => step(&mut r.borrow_mut()),
+                        c => step(c),
+                    };
+                    if let Some(v) = r {
+                        return Ok(v);
                     }
                 }
                 self.assign_op_slow(f, *op, target, rhs)
@@ -313,7 +330,7 @@ impl Interp {
             }
             GlobalVar(n) => {
                 let name = self.var_name(f, n)?;
-                match self.with_globals(f, |v| v.get(name).map(|s| s.borrow().clone())) {
+                match self.with_globals(f, |v| v.get(name)) {
                     Some(v) => v,
                     None => {
                         self.warn(&format!("Undefined global variable ${name}"));
@@ -425,7 +442,7 @@ impl Interp {
                         captured.push((name, Value::Ref(f.var_slot(name)), true));
                     } else {
                         let v = match f.vars.get(name) {
-                            Some(s) => s.borrow().clone(),
+                            Some(v) => v,
                             None => {
                                 self.warn(&format!("Undefined variable ${name}"));
                                 Value::Null
@@ -440,7 +457,7 @@ impl Interp {
                 let names = self.arrow_captures(a);
                 let captured = names
                     .iter()
-                    .filter_map(|n| f.vars.get(n).map(|s| (*n, s.borrow().clone(), false)))
+                    .filter_map(|n| f.vars.get(n).map(|v| (*n, v, false)))
                     .collect();
                 self.make_closure(f, ClosureKind::Arrow(a), captured, a.is_static)
             }
@@ -651,13 +668,15 @@ impl Interp {
         };
         match &target.kind {
             ExprKind::Var(n) => {
-                if !f.vars.contains_key(&**n) {
-                    self.warn(&format!("Undefined variable ${n}"));
-                }
-                let s = f.var_slot(n);
-                let cur = std::mem::take(&mut *s.borrow_mut());
+                let cur = match f.vars.take(n) {
+                    Some(v) => v,
+                    None => {
+                        self.warn(&format!("Undefined variable ${n}"));
+                        Value::Null
+                    }
+                };
                 let v = append(self, cur)?;
-                *s.borrow_mut() = v.clone();
+                f.vars.set(n, v.clone());
                 Ok(v)
             }
             ExprKind::Prop { name: MemberName::Ident(name), .. } => {
@@ -679,7 +698,7 @@ impl Interp {
             };
         }
         match f.vars.get(n) {
-            Some(s) => Ok(s.borrow().clone()),
+            Some(v) => Ok(v),
             None if n == "GLOBALS" => Ok(self.globals_array(f)),
             None => {
                 self.warn(&format!("Undefined variable ${n}"));
@@ -1090,7 +1109,7 @@ impl Interp {
                     return Ok(f.this.clone().map(Value::Object));
                 }
                 match f.vars.get(&**n) {
-                    Some(s) => Ok(Some(s.borrow().clone())),
+                    Some(v) => Ok(Some(v)),
                     None if n == "GLOBALS" => Ok(Some(self.globals_array(f))),
                     None => Ok(None),
                 }
@@ -1100,11 +1119,11 @@ impl Interp {
                 if name == "this" {
                     return Ok(f.this.clone().map(Value::Object));
                 }
-                Ok(f.vars.get(name).map(|s| s.borrow().clone()))
+                Ok(f.vars.get(name))
             }
             ExprKind::GlobalVar(n) => {
                 let name = self.var_name(f, n)?;
-                Ok(self.with_globals(f, |v| v.get(name).map(|s| s.borrow().clone())))
+                Ok(self.with_globals(f, |v| v.get(name)))
             }
             ExprKind::Index { base, index: Some(index) } => {
                 let Some(b) = self.eval_quiet(f, base)? else { return Ok(None) };
@@ -1553,17 +1572,17 @@ impl Interp {
     pub fn bind_ref(&self, f: &mut Frame, target: &'static Expr, s: Slot) -> R<()> {
         match &target.kind {
             ExprKind::Var(n) if &**n != "this" => {
-                f.vars.insert(n, s);
+                f.vars.bind(n, s);
                 Ok(())
             }
             ExprKind::VarVar(n) => {
                 let name = self.var_name(f, n)?;
-                f.vars.insert(name, s);
+                f.vars.bind(name, s);
                 Ok(())
             }
             ExprKind::GlobalVar(n) => {
                 let name = self.var_name(f, n)?;
-                self.with_globals(f, |v| v.insert(name, s));
+                self.with_globals(f, |v| v.bind(name, s));
                 Ok(())
             }
             _ => {

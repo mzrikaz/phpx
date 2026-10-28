@@ -88,7 +88,7 @@ fn getopt(it: &Interp, f: &mut Frame, a: &mut [Value]) -> R<Value> {
             long.push(it.to_string_lossy(&v)?);
         }
     }
-    let argv: Vec<String> = match it.with_globals(f, |v| v.get("argv").map(|s| s.borrow().clone())) {
+    let argv: Vec<String> = match it.with_globals(f, |v| v.get("argv")) {
         Some(Value::Array(x)) => x.values().map(|v| it.to_string_lossy(&v).unwrap_or_default()).collect(),
         _ => vec![],
     };

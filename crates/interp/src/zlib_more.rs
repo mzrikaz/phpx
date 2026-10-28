@@ -306,7 +306,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
     t.insert("inflate_get_read_len", |it, _, a| Ok(Value::Int(with_inflate(it, &arg(a, 0), "inflate_get_read_len", |st| st.read as i64)?)));
     t.insert("zlib_get_coding_type", |_, _, _| Ok(Value::Bool(false)));
     t.insert("ob_gzhandler", |it, f, a| {
-        let accept = it.with_globals(f, |v| v.get("_SERVER").map(|s| s.borrow().clone()));
+        let accept = it.with_globals(f, |v| v.get("_SERVER"));
         let accept = match accept {
             Some(Value::Array(srv)) => srv.get(&Key::from_bytes(b"HTTP_ACCEPT_ENCODING")).map(|v| it.to_string_lossy(&v)).transpose()?,
             _ => None,

@@ -127,11 +127,11 @@ unsafe fn args_of(r: &CallRec) -> Vec<Value> {
     for p in params {
         match f.vars.get(&p.name.name) {
             Some(v) if p.variadic => {
-                if let Value::Array(a) = v.borrow().deref() {
+                if let Value::Array(a) = v {
                     out.extend(a.iter().map(|(_, v)| v.clone()));
                 }
             }
-            Some(v) => out.push(v.borrow().deref()),
+            Some(v) => out.push(v),
             None => {}
         }
     }

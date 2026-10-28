@@ -265,16 +265,16 @@ pub unsafe extern "C" fn rt_load_locals(c: *mut Cx, locals: *mut Value, spec: *c
         return 2;
     }
     for name in &spec.names {
-        if let Some(s) = f.vars.get(name) {
+        if let Some(Value::Ref(r)) = f.vars.raw(name) {
             // Shared cell (by-ref capture etc.): v1 locals can't alias.
-            if Rc::strong_count(s) > 1 {
+            if Rc::strong_count(r) > 1 {
                 return 2;
             }
         }
     }
     for (i, name) in spec.names.iter().enumerate() {
-        if let Some(s) = f.vars.get(name) {
-            put(locals.add(i), std::mem::take(&mut *s.borrow_mut()));
+        if let Some(v) = f.vars.take(name) {
+            put(locals.add(i), v);
         }
     }
     if let (Some(i), Some(o)) = (spec.this_slot, &f.this) {
@@ -444,9 +444,10 @@ pub unsafe extern "C" fn rt_bind_slots(c: *mut Cx, ptrs: *mut *mut Value, rcs: *
     let (it, f) = cx(c);
     let global = std::ptr::eq(it.globals.get(), f);
     for (i, name) in (*spec).names.iter().enumerate() {
-        let (s, defined) = match (*name, f.vars.get(name)) {
+        let (s, defined) = match (*name, f.vars.contains_key(name)) {
             ("this", _) => (slot(f.this.clone().map_or(Value::Null, Value::Object)), true),
-            (_, Some(s)) => (s.clone(), true),
+            // (The variable becomes a reference to the cell we point at.)
+            (_, true) => (f.vars.cell(name), true),
             _ if global => (f.var_slot(name), false),
             _ => (slot(Value::Null), false),
         };
@@ -470,7 +471,7 @@ unsafe fn scope_attach(it: &Interp, f: &mut Frame, rcs: *mut *const RefCell<Valu
         let defined = *def.add(i) != 0;
         if global {
             // (Shared by just the frame and us.)
-            let ours = f.vars.get(name).is_some_and(|s| Rc::as_ptr(s) == p && Rc::strong_count(s) == 2);
+            let ours = matches!(f.vars.raw(name), Some(Value::Ref(s)) if Rc::as_ptr(s) == p && Rc::strong_count(s) == 2);
             if ours && !defined {
                 f.vars.remove(name);
             }
@@ -480,7 +481,7 @@ unsafe fn scope_attach(it: &Interp, f: &mut Frame, rcs: *mut *const RefCell<Valu
             continue;
         }
         Rc::increment_strong_count(p);
-        f.vars.insert(name, Rc::from_raw(p));
+        f.vars.bind(name, Rc::from_raw(p));
     }
 }
 
@@ -494,23 +495,25 @@ unsafe fn scope_reattach(it: &Interp, f: &mut Frame, ptrs: *mut *mut Value, rcs:
         if *name == "this" {
             continue;
         }
-        let (new, defined) = match f.vars.get(name) {
-            Some(s) if Rc::as_ptr(s) != p => (s.clone(), true),
-            Some(_) => {
+        let same = matches!(f.vars.raw(name), Some(Value::Ref(s)) if Rc::as_ptr(s) == p);
+        let (new, defined) = match f.vars.contains_key(name) {
+            true if same => {
                 *def.add(i) = 1;
                 continue;
             }
-            None if global => {
+            // Bound elsewhere, or given a plain value: point at its cell.
+            true => (f.vars.cell(name), true),
+            false if global => {
                 if *def.add(i) == 0 && !p.is_null() {
                     // Hidden by scope_attach: bound again.
                     Rc::increment_strong_count(p);
-                    f.vars.insert(name, Rc::from_raw(p));
+                    f.vars.bind(name, Rc::from_raw(p));
                     continue;
                 }
                 (f.var_slot(name), false)
             }
-            None if *def.add(i) != 0 => (slot(Value::Null), false),
-            None => continue,
+            false if *def.add(i) != 0 => (slot(Value::Null), false),
+            false => continue,
         };
         if !p.is_null() {
             drop(Rc::from_raw(p));
@@ -557,7 +560,7 @@ pub unsafe extern "C" fn rt_unset_local(c: *mut Cx, ptrs: *mut *mut Value, rcs: 
     let fresh = slot(Value::Null);
     f.vars.remove(name);
     if std::ptr::eq(it.globals.get(), f) {
-        f.vars.insert(name, fresh.clone());
+        f.vars.bind(name, fresh.clone());
     }
     let p = *rcs.add(i);
     if !p.is_null() {
@@ -603,14 +606,11 @@ pub unsafe extern "C" fn rt_store_locals(c: *mut Cx, locals: *mut Value, spec: *
     let (_, f) = cx(c);
     for (i, name) in (*spec).names.iter().enumerate() {
         let v = take(locals.add(i));
-        match f.vars.get(name) {
-            Some(s) => *s.borrow_mut() = v,
-            None => {
-                // Never-assigned locals stay undefined (isset() is false).
-                if !v.is_null() {
-                    f.vars.insert(name, slot(v));
-                }
-            }
+        if f.vars.contains_key(name) {
+            f.vars.set(name, v);
+        } else if !v.is_null() {
+            // Never-assigned locals stay undefined (isset() is false).
+            f.vars.put(name, v);
         }
     }
 }
@@ -1763,7 +1763,7 @@ fn place_for(it: &Interp, f: &Frame, root_obj: Option<Rc<Obj>>, name: &'static s
 pub unsafe extern "C" fn rt_global_get(c: *mut Cx, name: *const u8, len: u64, quiet: u64, dst: *mut Value) -> u64 {
     let (it, f) = cx(c);
     let n = name_of(name, len);
-    let v = match it.with_globals(f, |v| v.get(n).map(|s| s.borrow().clone())) {
+    let v = match it.with_globals(f, |v| v.get(n)) {
         Some(v) => v,
         None => {
             if quiet == 0 {

@@ -396,7 +396,7 @@ fn start(it: &Interp, f: &mut Frame, a: &[Value]) -> R<Value> {
     let name = ini(it, "session.name");
     let mut id = STATE.with(|s| s.borrow().id.clone());
     if id.is_empty() {
-        let from_cookie = it.with_globals(f, |v| v.get("_COOKIE").map(|s| s.borrow().clone()));
+        let from_cookie = it.with_globals(f, |v| v.get("_COOKIE"));
         if let Some(Value::Array(c)) = from_cookie {
             if let Some(v) = c.get(&Key::from_bytes(name.as_bytes())) {
                 let cand = it.to_string_lossy(&v)?;

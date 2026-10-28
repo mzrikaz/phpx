@@ -406,7 +406,7 @@ impl Page<'_> {
         self.table_start();
         self.header(&["Variable", "Value"]);
         for name in ["_REQUEST", "_GET", "_POST", "_FILES", "_COOKIE", "_SERVER", "_ENV"] {
-            let Some(Value::Array(a)) = it.with_globals(f, |g| g.get(name).map(|c| c.borrow().deref())) else { continue };
+            let Some(Value::Array(a)) = it.with_globals(f, |g| g.get(name)) else { continue };
             for (k, v) in a.iter() {
                 let key = match &k {
                     crate::value::Key::Int(n) => n.to_string(),

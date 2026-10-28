@@ -180,12 +180,15 @@ fn file_stamp(m: &std::fs::Metadata) -> FileStamp {
     (m.mtime(), m.mtime_nsec(), m.size(), m.ino())
 }
 
-/// A function's variables. Keys borrow from the (leaked) AST: phpx has no
-/// `$$var`, so every name is known statically. Small frames use a linear
-/// scan (no hashing, one allocation); big ones (top-level scripts) add an index.
+/// A function's variables. Keys borrow from the (leaked) AST. Each holds
+/// its value directly; a variable that is a reference (`&`, `global`,
+/// `static`, by-reference arguments and captures) holds `Value::Ref` to
+/// the cell it shares, as compiled code's locals do. Small frames use a
+/// linear scan (no hashing, one allocation); big ones (top-level scripts)
+/// add an index.
 #[derive(Default)]
 pub struct Vars {
-    items: Vec<(&'static str, Slot)>,
+    items: Vec<(&'static str, Value)>,
     index: Option<FxHashMap<&'static str, usize>>,
 }
 
@@ -258,37 +261,124 @@ impl Vars {
         }
     }
 
-    pub fn get(&self, name: &str) -> Option<&Slot> {
+    /// The variable's value (a reference's target).
+    pub fn get(&self, name: &str) -> Option<Value> {
+        self.pos(name).map(|i| self.items[i].1.deref())
+    }
+
+    /// The variable as stored: its value, or `Value::Ref` when it is a
+    /// reference.
+    pub fn raw(&self, name: &str) -> Option<&Value> {
         self.pos(name).map(|i| &self.items[i].1)
     }
 
-    /// Lookup with an inline-cache hint (the slot index this AST node found
+    /// `raw` with an inline-cache hint (the position this AST node found
     /// last time). The hint is verified by name, so a stale one is harmless.
     #[inline]
-    pub fn get_hinted(&self, name: &str, hint: &std::cell::Cell<u32>) -> Option<&Slot> {
-        if let Some((n, s)) = self.items.get(hint.get() as usize) {
+    pub fn get_hinted(&self, name: &str, hint: &std::cell::Cell<u32>) -> Option<&Value> {
+        let i = self.pos_hinted(name, hint)?;
+        Some(&self.items[i].1)
+    }
+
+    /// The variable as stored, mutably.
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
+        self.pos(name).map(|i| &mut self.items[i].1)
+    }
+
+    /// Take the variable's value out (a reference's target), leaving null.
+    pub fn take(&mut self, name: &str) -> Option<Value> {
+        Some(match self.get_mut(name)? {
+            Value::Ref(r) => std::mem::take(&mut *r.borrow_mut()),
+            v => std::mem::take(v),
+        })
+    }
+
+    /// Mutable `get_hinted`.
+    #[inline]
+    pub fn get_hinted_mut(&mut self, name: &str, hint: &std::cell::Cell<u32>) -> Option<&mut Value> {
+        let i = self.pos_hinted(name, hint)?;
+        Some(&mut self.items[i].1)
+    }
+
+    #[inline]
+    fn pos_hinted(&self, name: &str, hint: &std::cell::Cell<u32>) -> Option<usize> {
+        if let Some((n, _)) = self.items.get(hint.get() as usize) {
             if crate::hmap::bytes_eq(n.as_bytes(), name.as_bytes()) {
-                return Some(s);
+                return Some(hint.get() as usize);
             }
         }
         let i = self.pos(name)?;
         hint.set(i as u32);
-        Some(&self.items[i].1)
+        Some(i)
     }
 
     pub fn contains_key(&self, name: &str) -> bool {
         self.pos(name).is_some()
     }
 
-    pub fn insert(&mut self, name: &'static str, s: Slot) {
+    /// Assign: through the cell when the variable is a reference.
+    pub fn set(&mut self, name: &'static str, v: Value) {
+        match self.pos(name) {
+            Some(i) => match &self.items[i].1 {
+                Value::Ref(r) => {
+                    let old = std::mem::replace(&mut *r.borrow_mut(), v);
+                    drop(old);
+                }
+                _ => {
+                    let old = std::mem::replace(&mut self.items[i].1, v);
+                    drop(old);
+                }
+            },
+            None => self.push(name, v),
+        }
+    }
+
+    /// A new variable holding `v` as is (a fresh frame's parameters: no
+    /// variable of that name exists yet).
+    #[inline]
+    pub fn put(&mut self, name: &'static str, v: Value) {
+        self.push(name, v);
+    }
+
+    /// Make the variable an alias of `s` (`$a = &$b`, `global`, `static`).
+    pub fn bind(&mut self, name: &'static str, s: Slot) {
         if let Some(i) = self.pos(name) {
-            if !Rc::ptr_eq(&self.items[i].1, &s) {
+            if !matches!(&self.items[i].1, Value::Ref(r) if Rc::ptr_eq(r, &s)) {
                 bump_scope_epoch();
             }
-            self.items[i].1 = s;
+            self.items[i].1 = Value::Ref(s);
             return;
         }
-        self.items.push((name, s));
+        self.push(name, Value::Ref(s));
+    }
+
+    /// The variable's cell, making it a reference first (created as null
+    /// when absent): what `&$x` and by-reference passing take.
+    pub fn cell(&mut self, name: &'static str) -> Slot {
+        let i = match self.pos(name) {
+            Some(i) => i,
+            None => {
+                self.push(name, Value::Null);
+                self.items.len() - 1
+            }
+        };
+        let v = &mut self.items[i].1;
+        if let Value::Ref(r) = v {
+            return r.clone();
+        }
+        let s = slot(std::mem::take(v));
+        *v = Value::Ref(s.clone());
+        s
+    }
+
+    /// `cell` for a variable that exists; None otherwise.
+    pub fn cell_if(&mut self, name: &'static str) -> Option<Slot> {
+        self.pos(name)?;
+        Some(self.cell(name))
+    }
+
+    fn push(&mut self, name: &'static str, v: Value) {
+        self.items.push((name, v));
         if let Some(ix) = &mut self.index {
             ix.insert(name, self.items.len() - 1);
         } else if self.items.len() > VARS_INDEX_AT {
@@ -299,15 +389,16 @@ impl Vars {
     pub fn remove(&mut self, name: &str) {
         if let Some(i) = self.pos(name) {
             bump_scope_epoch();
-            self.items.remove(i);
+            let (_, old) = self.items.remove(i);
             if self.index.is_some() {
                 self.index = Some(self.items.iter().enumerate().map(|(i, (n, _))| (*n, i)).collect());
             }
+            drop(old);
         }
     }
 
-    /// Variables in definition order.
-    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &Slot)> {
+    /// Variables in definition order, as stored (references as `Value::Ref`).
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &Value)> {
         self.items.iter().map(|(n, s)| (*n, s))
     }
 
@@ -404,13 +495,9 @@ impl Frame {
         self.closure = None;
     }
 
+    /// The variable's cell (it becomes a reference; created as null).
     pub fn var_slot(&mut self, name: &'static str) -> Slot {
-        if let Some(s) = self.vars.get(name) {
-            return s.clone();
-        }
-        let s = slot(Value::Null);
-        self.vars.insert(name, s.clone());
-        s
+        self.vars.cell(name)
     }
 }
 
@@ -1249,14 +1336,7 @@ impl Interp {
     }
 
     pub fn global_slot(&self, f: &mut Frame, name: &'static str) -> Slot {
-        self.with_globals(f, |v| match v.get(name) {
-            Some(s) => s.clone(),
-            None => {
-                let s = slot(Value::Null);
-                v.insert(name, s.clone());
-                s
-            }
-        })
+        self.with_globals(f, |v| v.cell(name))
     }
 
     /// `$GLOBALS` as a value: a read-only copy (PHP 8.1+).
@@ -1264,7 +1344,7 @@ impl Interp {
         let mut out = crate::value::PhpArray::new();
         self.with_globals(f, |v| {
             for (n, s) in v.iter() {
-                out.insert(crate::value::Key::Str(crate::value::pstr(n)), s.borrow().clone());
+                out.insert(crate::value::Key::Str(crate::value::pstr(n)), s.deref());
             }
         });
         Value::array(out)
@@ -1281,7 +1361,7 @@ impl Interp {
                         _ => continue,
                     };
                     let s = self.global_slot(f, name);
-                    f.vars.insert(name, s);
+                    f.vars.bind(name, s);
                 }
             }
             StmtKind::Expr(e) => {
@@ -1472,7 +1552,7 @@ impl Interp {
                             s
                         }
                     };
-                    f.vars.insert(&name.name, s);
+                    f.vars.bind(&name.name, s);
                 }
             }
             StmtKind::Unset(es) => {
@@ -1536,7 +1616,12 @@ impl Interp {
     /// a loop over it.
     fn long_array_var(&self, f: &Frame, e: &ast::Expr) -> bool {
         let ast::ExprKind::Var(name) = &e.kind else { return false };
-        f.vars.get(name).is_some_and(|s| matches!(&*s.borrow(), Value::Array(a) if a.len() >= crate::compiler::OSR_ITERATIONS as usize))
+        let long = |v: &Value| matches!(v, Value::Array(a) if a.len() >= crate::compiler::OSR_ITERATIONS as usize);
+        match f.vars.raw(name) {
+            Some(Value::Ref(r)) => long(&r.borrow()),
+            Some(v) => long(v),
+            None => false,
+        }
     }
 
     fn exec_foreach(
