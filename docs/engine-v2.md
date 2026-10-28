@@ -90,6 +90,29 @@ default tier, and an optimizing tier with guards and deoptimization.
 - Machine code is emitted only for code that is hot, so its size stops
   mattering.
 
+First version, before the bytecode tier exists (2026-10-28): speculation
+inside the native compiler, per loop, with fallback per statement.
+
+- **Why speculation.** Declared types alone don't cover real hot loops:
+  in n-body `$b = $bs[$i]` comes from an untyped array, so `$b->x` has no
+  static type; in spectral-norm `$v[$j]` is an untyped element; int
+  arithmetic isn't closed (overflow gives a float).
+- **Observe.** A loop compiled for the first time runs as generic code
+  that records, per local and per property/element read, the types it
+  saw (and the shape behind each property read).
+- **Specialise.** When the loop is recompiled, it gets a specialised body:
+  locals of one observed type live unboxed in registers, property reads
+  on the observed shape are direct loads, float/int arithmetic runs in
+  registers, and each object's shape is checked once per iteration.
+- **Fall back per statement.** In the specialised body every check of a
+  statement comes before its side effect (the final store, a call, an
+  echo). A failed check writes the unboxed locals back to their slots and
+  jumps to the generic code for that same statement, which runs it again
+  from the start; nothing has happened yet, so that is safe. Statements
+  that can't be ordered that way stay generic.
+- **Widen.** A loop whose checks keep failing is recompiled with the wider
+  types (or left generic).
+
 ### 4. Values, objects, arrays
 
 - Objects in one allocation: header, class, inline property slots
