@@ -103,7 +103,17 @@ pub struct Lower<'a> {
     no_osr: usize,
     /// Start of the statement being lowered.
     stmt_start: u32,
+    /// Speculation (see `spec`): the plan of the loop being specialised,
+    /// set while its specialised body is lowered.
+    spec: Option<spec::Plan>,
+    spec_on: bool,
+    /// Generic code's entry block of each statement a fallback can enter.
+    spec_entries: HashMap<usize, Block>,
+    /// Statements already part of a speculated loop.
+    spec_done: std::collections::HashSet<usize>,
 }
+
+mod spec;
 
 /// A property or array-element argument (`sort($this->items)`): passed
 /// through a temp the runtime binds by reference, then stored back.
@@ -249,6 +259,10 @@ impl<'a> Lower<'a> {
             osr_entry: None,
             no_osr: 0,
             stmt_start: u32::MAX,
+            spec: None,
+            spec_on: false,
+            spec_entries: HashMap::new(),
+            spec_done: Default::default(),
         }
     }
 
@@ -606,12 +620,26 @@ impl<'a> Lower<'a> {
     }
 
     pub fn stmt(&mut self, s: &'static Stmt) -> L<()> {
+        let key = s as *const Stmt as usize;
+        if !self.spec_on {
+            // A fallback from speculative code continues here.
+            if let Some(b) = self.spec_entries.remove(&key) {
+                self.b.ins().jump(b, &[]);
+                self.b.switch_to_block(b);
+            }
+        }
         self.boundary_check();
         self.set_pos(s.span.start);
         self.stmt_start = s.span.start;
         self.epoch_check()?;
         if self.escapes.contains(&(s as *const Stmt as usize)) {
             return self.escape_stmt(s);
+        }
+        if !self.spec_on && matches!(s.kind, StmtKind::For { .. } | StmtKind::While { .. }) && !self.spec_done.contains(&key) {
+            if let Some(plan) = self.spec_plan(s) {
+                self.spec_done.extend(spec::plan_stmts(s));
+                return self.spec_loop_stmt(s, plan);
+            }
         }
         self.stmt_body(s)
     }

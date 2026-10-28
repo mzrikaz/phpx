@@ -1563,6 +1563,34 @@ unsafe fn scope_key(f: &Frame) -> usize {
     *(std::ptr::addr_of!(f.class) as *const usize)
 }
 
+/// A property read with no side effects, for speculative code: 1 = a
+/// plain, visible, present property's value is in `dst` (and the site's
+/// read cache knows its slot); 0 = anything else (no `__get`, no warning:
+/// nothing happened, the caller falls back).
+pub unsafe extern "C" fn rt_prop_peek(c: *mut Cx, obj: *const Value, site: *const PropSite, dst: *mut Value) -> u64 {
+    let (it, f) = cx(c);
+    let site = &*site;
+    let Value::Object(o) = &*obj else { return 0 };
+    let key = it.prop_key(f, o, site.name);
+    if !it.prop_visible(f, o, &key) {
+        return 0;
+    }
+    let props = o.props.borrow();
+    match props.get_full(&key) {
+        Some((i, _, v)) if !matches!(v, Value::Ref(_)) => {
+            if let Some(k) = shape_key(o) {
+                site.rpoly.keep(site.shape.get(), site.scope.get(), site.slot.get(), Default::default());
+                site.shape.set(k);
+                site.slot.set(i);
+                site.scope.set(scope_key(f));
+            }
+            put(dst, v.clone());
+            1
+        }
+        _ => 0,
+    }
+}
+
 pub unsafe extern "C" fn rt_prop_read(c: *mut Cx, obj: *const Value, site: *const PropSite, dst: *mut Value) -> u64 {
     let (it, f) = cx(c);
     let site = &*site;

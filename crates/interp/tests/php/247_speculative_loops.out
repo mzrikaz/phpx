@@ -1,0 +1,30 @@
+TypeError: Unsupported operand types: float - string
+-17.5
+get(x) get(y) get(x) get(y) -1.5
+0
+div0: Division by zero
+[6,2][0,"unset"]
+[8,"shadowed"]
+8.25 [4,5]
+ true
+TypeError: Unsupported operand types: float + string
+TypeError: Unsupported operand types: float - string
+-17.5
+get(x) get(y) get(x) get(y) -1.5
+0
+div0: Division by zero
+[6,2][0,"unset"]
+[8,"shadowed"]
+8.25 [4,5]
+ true
+TypeError: Unsupported operand types: float + string
+TypeError: Unsupported operand types: float - string
+-17.5
+get(x) get(y) get(x) get(y) -1.5
+0
+div0: Division by zero
+[6,2][0,"unset"]
+[8,"shadowed"]
+8.25 [4,5]
+ true
+TypeError: Unsupported operand types: float + string
