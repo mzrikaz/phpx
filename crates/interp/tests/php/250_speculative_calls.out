@@ -1,0 +1,15 @@
+31 calls=10
+[0][1][2][3]13[0][1][2] TypeError
+TypeError: Unsupported operand types: array + float
+caught boom at 2
+3.5
+31 calls=10
+[0][1][2][3]13[0][1][2] TypeError
+TypeError: Unsupported operand types: array + float
+caught boom at 2
+3.5
+31 calls=10
+[0][1][2][3]13[0][1][2] TypeError
+TypeError: Unsupported operand types: array + float
+caught boom at 2
+3.5
