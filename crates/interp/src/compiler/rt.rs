@@ -1409,6 +1409,9 @@ pub struct PropSite {
     pub tslot: std::cell::Cell<usize>,
     pub tscope: std::cell::Cell<usize>,
     pub tquick: std::cell::Cell<(Quick, bool)>,
+    /// The value tag a store into the typed-write slot needs no coercion
+    /// for (0: none): generated code stores such values inline.
+    pub ttag: std::cell::Cell<u64>,
     /// Class-typed property: the object class last stored unchanged.
     pub tclass: std::cell::RefCell<Option<Rc<crate::class::Class>>>,
     /// Element-write cache (`$o->name[k] = v`): shape, slot and scope of a
@@ -1472,6 +1475,7 @@ impl PropSite {
             tslot: Default::default(),
             tscope: Default::default(),
             tquick: std::cell::Cell::new((Quick::Other, false)),
+            ttag: Default::default(),
             tclass: Default::default(),
             rpoly: Default::default(),
             wpoly: Default::default(),
@@ -1483,6 +1487,10 @@ impl PropSite {
     }
 }
 
+pub const PROPSITE_TSHAPE: i32 = std::mem::offset_of!(PropSite, tshape) as i32;
+pub const PROPSITE_TSLOT: i32 = std::mem::offset_of!(PropSite, tslot) as i32;
+pub const PROPSITE_TSCOPE: i32 = std::mem::offset_of!(PropSite, tscope) as i32;
+pub const PROPSITE_TTAG: i32 = std::mem::offset_of!(PropSite, ttag) as i32;
 pub const PROPSITE_ESHAPE: i32 = std::mem::offset_of!(PropSite, eshape) as i32;
 pub const PROPSITE_ESLOT: i32 = std::mem::offset_of!(PropSite, eslot) as i32;
 pub const PROPSITE_ESCOPE: i32 = std::mem::offset_of!(PropSite, escope) as i32;
@@ -1699,6 +1707,14 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
                     site.tslot.set(i);
                     site.tscope.set(scope_key(f));
                     site.tquick.set(q);
+                    site.ttag.set(match q.0 {
+                        Quick::Int => crate::value::tag::INT,
+                        Quick::Float => crate::value::tag::FLOAT,
+                        Quick::Str => crate::value::tag::STR,
+                        Quick::Bool => crate::value::tag::BOOL,
+                        Quick::Array => crate::value::tag::ARRAY,
+                        _ => 0,
+                    } as u64);
                     // A class-typed property that just stored this object
                     // unchanged accepts its class (class types never
                     // coerce objects); anything else accepts no class.
@@ -4086,6 +4102,7 @@ impl PropSite {
             c.set(0);
         }
         *self.tclass.borrow_mut() = None;
+        self.ttag.set(0);
         self.rpoly.clear();
         self.wpoly.clear();
         self.tpoly.clear();

@@ -2570,12 +2570,29 @@ impl<'a> Lower<'a> {
         };
         let old_t = self.alloc_temp();
         let site_v = self.iconst(sp);
-        let (slow, merge) = (self.b.create_block(), self.b.create_block());
+        let (typed, slow, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
         self.b.set_cold_block(slow);
-        let props = self.prop_guard(lay, oa, site_v, super::rt::PROPSITE_WSHAPE, super::rt::PROPSITE_WSCOPE, slow);
-        let p = self.prop_slot(lay, props, site_v, super::rt::PROPSITE_WSLOT, slow);
+        let props = self.prop_guard(lay, oa, site_v, super::rt::PROPSITE_WSHAPE, super::rt::PROPSITE_WSCOPE, typed);
+        let p = self.prop_slot(lay, props, site_v, super::rt::PROPSITE_WSLOT, typed);
         // Old value out, a copy of the new value in; the old one is
         // released after the merge (its destructor may run PHP code).
+        let olda = self.temp_addr(old_t);
+        self.copy16(olda, p);
+        self.store_into(p, Op::Ptr(va, None));
+        self.b.ins().jump(merge, &[]);
+        // A typed property, for a value of exactly its type (no coercion).
+        self.b.switch_to_block(typed);
+        let site_v = self.iconst(sp);
+        let want = self.b.ins().load(types::I8, flags(), site_v, super::rt::PROPSITE_TTAG);
+        let have = self.load_tag(va);
+        let same = self.b.ins().icmp(IntCC::Equal, want, have);
+        let set = self.b.ins().icmp_imm_u(IntCC::NotEqual, want, 0);
+        let fits = self.b.ins().band(same, set);
+        let go = self.b.create_block();
+        self.b.ins().brif(fits, go, &[], slow, &[]);
+        self.b.switch_to_block(go);
+        let props = self.prop_guard(lay, oa, site_v, super::rt::PROPSITE_TSHAPE, super::rt::PROPSITE_TSCOPE, slow);
+        let p = self.prop_slot(lay, props, site_v, super::rt::PROPSITE_TSLOT, slow);
         let olda = self.temp_addr(old_t);
         self.copy16(olda, p);
         self.store_into(p, Op::Ptr(va, None));
