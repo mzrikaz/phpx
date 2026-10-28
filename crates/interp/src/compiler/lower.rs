@@ -114,6 +114,12 @@ pub struct Lower<'a> {
     /// On-stack replacement into a speculated loop: (its entry, the block
     /// that continues at the generic entry once that exists).
     spec_osr: Option<(Block, Block)>,
+    /// Generic code's block right after each statement, for speculative
+    /// code that completed it itself.
+    spec_after: HashMap<usize, Block>,
+    /// Inside a speculated call statement: the reads made before the call
+    /// (by node address) and the call's float result.
+    pre: Option<(HashMap<usize, CValue>, CValue)>,
 }
 
 mod spec;
@@ -267,6 +273,8 @@ impl<'a> Lower<'a> {
             spec_entries: HashMap::new(),
             spec_done: Default::default(),
             spec_osr: None,
+            spec_after: HashMap::new(),
+            pre: None,
         }
     }
 
@@ -645,7 +653,18 @@ impl<'a> Lower<'a> {
                 return self.spec_loop_stmt(s, plan);
             }
         }
-        self.stmt_body(s)
+        self.stmt_body(s)?;
+        if !self.spec_on {
+            // Speculative code that finished this statement itself (after a
+            // call) continues in the generic code from here.
+            if let Some(b) = self.spec_after.remove(&key) {
+                if !self.terminated {
+                    self.b.ins().jump(b, &[]);
+                }
+                self.b.switch_to_block(b);
+            }
+        }
+        Ok(())
     }
 
     /// File code: if variables were unbound or rebound since the cells

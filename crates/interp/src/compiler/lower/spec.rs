@@ -44,6 +44,8 @@ pub(super) struct Plan {
     /// Statements of the loop (itself included): where their generic code
     /// starts, for the fallback.
     entries: HashMap<usize, Block>,
+    /// Expression statements: the generic code right after them.
+    after: HashMap<usize, Block>,
 }
 
 impl<'a> Lower<'a> {
@@ -80,7 +82,7 @@ impl<'a> Lower<'a> {
             let snapshot = cands.clone();
             cands.retain(|n| {
                 assigns[n].iter().all(|(op, rhs)| {
-                    let r = self.ty(rhs, &snapshot);
+                    let r = if call_ok(rhs, &snapshot) { self.ty(rhs, &snapshot) } else { Ty::X };
                     match op {
                         None => r == Ty::F,
                         Some(_) => r != Ty::X,
@@ -117,16 +119,20 @@ impl<'a> Lower<'a> {
             vars.insert(i, (v, d));
         }
         let mut entries = HashMap::new();
+        let mut after = HashMap::new();
         let mut all = vec![];
         region_stmts(s, &mut all);
         for st in all {
             entries.insert(st as *const Stmt as usize, self.b.create_block());
+            if matches!(st.kind, StmtKind::Expr(_)) {
+                after.insert(st as *const Stmt as usize, self.b.create_block());
+            }
         }
         if std::env::var_os("PHPX_SPEC_LOG").is_some() {
             eprintln!("[spec] loop at {}: candidates {:?}, loaded at entry {:?}", s.span.start, cands, entry);
         }
         let entry = entry.iter().map(|n| self.locals.index[n]).collect();
-        Some(Plan { vars, entry, entries })
+        Some(Plan { vars, entry, entries, after })
     }
 
     /// Candidates mentioned where the specialised code can't keep them:
@@ -140,16 +146,16 @@ impl<'a> Lower<'a> {
                         let handled_op = !matches!(&e.kind, ExprKind::AssignOp { op, .. } if !matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div));
                         let r = self.ty(value, cands);
                         match &target.kind {
-                            ExprKind::Var(n) if cands.contains(n.as_str()) && handled_op && r != Ty::X => leaf_uses(value, cands, bad),
+                            ExprKind::Var(n) if cands.contains(n.as_str()) && handled_op && r != Ty::X && call_ok(value, cands) => leaf_uses(value, cands, bad),
                             // A property store the specialised code makes (a float value).
                             ExprKind::Prop { object, name: MemberName::Ident(_), nullsafe: false }
-                                if handled_op && r == Ty::F && matches!(&object.kind, ExprKind::Var(o) if !cands.contains(o.as_str()) && self.locals.index.contains_key(o.as_str())) =>
+                                if handled_op && r == Ty::F && calls(value) == 0 && matches!(&object.kind, ExprKind::Var(o) if !cands.contains(o.as_str()) && self.locals.index.contains_key(o.as_str())) =>
                             {
                                 leaf_uses(value, cands, bad)
                             }
                             // Generic code that only reads candidates (they are
                             // written back first): `$r[$i] = $s`.
-                            _ if !matches!(&target.kind, ExprKind::Var(n) if cands.contains(n.as_str())) && arith_shape(value) => {
+                            _ if !matches!(&target.kind, ExprKind::Var(n) if cands.contains(n.as_str())) && arith_shape(value) && calls(value) == 0 => {
                                 mentions(target, cands, bad);
                                 leaf_uses(value, cands, bad);
                             }
@@ -201,6 +207,9 @@ impl<'a> Lower<'a> {
                 Ty::X => Ty::X,
                 _ => Ty::F,
             },
+            // A function call (plain local or literal arguments), speculated
+            // to return a float; see `call_ok` for the rest of its statement.
+            ExprKind::Call { .. } if call_leaf(e) => Ty::F,
             _ => Ty::X,
         }
     }
@@ -244,6 +253,7 @@ impl<'a> Lower<'a> {
         self.b.ins().jump(after, &[]);
         // The generic loop (fallbacks enter its statements).
         self.spec_entries.extend(plan.entries);
+        self.spec_after.extend(plan.after);
         self.b.switch_to_block(generic);
         self.stmt_body(s)?;
         if !self.terminated {
@@ -396,6 +406,9 @@ impl<'a> Lower<'a> {
                     if let ExprKind::Var(n) = &target.kind {
                         if let Some(&i) = self.locals.index.get(n.as_str()) {
                             if let Some(&(v, d)) = self.spec.as_ref().unwrap().vars.get(&i) {
+                                if calls(value) == 1 {
+                                    return self.spec_call_stmt(s, i, v, d, op, value, fb);
+                                }
                                 let fail = self.fail_block(fb);
                                 let mut r = self.fexpr(value, fail)?;
                                 if let Some(op) = op {
@@ -448,6 +461,103 @@ impl<'a> Lower<'a> {
         self.stmt(s)
     }
 
+    /// `$cand = E` / `$cand op= E` where E holds one call: every other read
+    /// first (checked; the callee can't change them), then the call. A
+    /// float result goes on in registers; anything else completes this
+    /// statement in generic code with that result and continues in the
+    /// generic code after it (the call never runs twice).
+    #[allow(clippy::too_many_arguments)]
+    fn spec_call_stmt(&mut self, s: &'static Stmt, i: u32, v: Variable, d: Variable, op: Option<BinOp>, value: &'static Expr, fb: Block) -> L<()> {
+        let fail = self.fail_block(fb);
+        let mut pre = HashMap::new();
+        self.prefetch(value, fail, &mut pre)?;
+        let call = find_call(value).expect("one call");
+        let r = self.expr(call)?;
+        let r = self.materialize(r);
+        let ra = self.addr(r).unwrap();
+        let tg = self.load_tag(ra);
+        let is_f = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::FLOAT as i64);
+        let (fast, slow, done) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(slow);
+        self.b.ins().brif(is_f, fast, &[], slow, &[]);
+        // Not a float: generic arithmetic on what was read, the result into
+        // the slot, then the generic code after this statement.
+        self.b.switch_to_block(slow);
+        let plan = self.spec.take().unwrap();
+        self.spill(&plan);
+        let after = plan.after[&(s as *const Stmt as usize)];
+        self.spec = Some(plan);
+        let g = self.gexpr(value, call, r)?;
+        let g = match op {
+            Some(op) => {
+                let cur = self.b.use_var(v);
+                self.binary(op, Op::Float(cur), g)?
+            }
+            None => g,
+        };
+        self.assign_local(i, g);
+        self.b.ins().jump(after, &[]);
+        // A float: on in registers.
+        self.b.switch_to_block(fast);
+        let x = self.b.ins().load(types::F64, flags(), ra, tag::PAYLOAD);
+        // (The generic path above gave the temp back; here it just holds a
+        // float, which needs no release.)
+        self.store_tag(ra, tag::NULL);
+        self.pre = Some((pre, x));
+        let mut res = self.fexpr(value, done);
+        self.pre = None;
+        if let (Ok(y), Some(op)) = (&res, op) {
+            let cur = self.b.use_var(v);
+            res = Ok(self.fbin(op, cur, *y, done));
+        }
+        let y = res?;
+        self.b.def_var(v, y);
+        let yes = self.b.ins().iconst(types::I8, 1);
+        self.b.def_var(d, yes);
+        // (`done` is unreachable: nothing after the call can fail.)
+        let cont = self.b.create_block();
+        self.b.ins().jump(cont, &[]);
+        self.b.switch_to_block(done);
+        self.b.ins().trap(cranelift_codegen::ir::TrapCode::unwrap_user(1));
+        self.b.switch_to_block(cont);
+        Ok(())
+    }
+
+    /// The reads of a call statement before the call, by node address.
+    fn prefetch(&mut self, e: &'static Expr, fail: Block, out: &mut HashMap<usize, CValue>) -> L<()> {
+        match &e.kind {
+            ExprKind::Binary { left, right, .. } => {
+                self.prefetch(left, fail, out)?;
+                self.prefetch(right, fail, out)
+            }
+            ExprKind::Unary { expr, .. } => self.prefetch(expr, fail, out),
+            ExprKind::Call { .. } if call_leaf(e) => Ok(()),
+            ExprKind::Call { args, .. } => self.prefetch(&args[0].value, fail, out),
+            _ => {
+                let x = self.fexpr(e, fail)?;
+                out.insert(e as *const Expr as usize, x);
+                Ok(())
+            }
+        }
+    }
+
+    /// Generic evaluation of a call statement's value, the call's result
+    /// already in `r` (candidates were written back to their slots).
+    fn gexpr(&mut self, e: &'static Expr, call: &'static Expr, r: Op) -> L<Op> {
+        if std::ptr::eq(e, call) {
+            return Ok(self.own(r));
+        }
+        match &e.kind {
+            ExprKind::Binary { op, left, right } => {
+                let a = if contains(left, call) { self.gexpr(left, call, r)? } else { self.expr(left)? };
+                let a = self.own(a);
+                let b = if contains(right, call) { self.gexpr(right, call, r)? } else { self.expr(right)? };
+                self.binary(*op, a, b)
+            }
+            _ => self.expr(e),
+        }
+    }
+
     fn cand_names(&self) -> HashSet<&'static str> {
         let plan = self.spec.as_ref().unwrap();
         self.locals.index.iter().filter(|(_, i)| plan.vars.contains_key(i)).map(|(n, _)| *n).collect()
@@ -471,6 +581,14 @@ impl<'a> Lower<'a> {
     /// Evaluate a speculated expression (`ty` not X) as an f64; checks
     /// branch to `fail`.
     fn fexpr(&mut self, e: &'static Expr, fail: Block) -> L<CValue> {
+        if let Some((pre, x)) = &self.pre {
+            if let Some(v) = pre.get(&(e as *const Expr as usize)) {
+                return Ok(*v);
+            }
+            if call_leaf(e) {
+                return Ok(*x);
+            }
+        }
         Ok(match &e.kind {
             ExprKind::Float(x) => self.b.ins().f64const(*x),
             ExprKind::Int(n) => self.b.ins().f64const(*n as f64),
@@ -681,6 +799,8 @@ fn leaf_uses(e: &Expr, cands: &HashSet<&'static str>, bad: &mut HashSet<&'static
             mentions(base, cands, bad);
             mentions(k, cands, bad);
         }
+        // (A candidate passed to a function could be taken by reference.)
+        ExprKind::Call { .. } if call_leaf(e) => mentions(e, cands, bad),
         _ => mentions(e, cands, bad),
     }
 }
@@ -760,7 +880,90 @@ fn arith_shape(e: &Expr) -> bool {
         ExprKind::Index { base, index: Some(k) } => matches!(base.kind, ExprKind::Var(_)) && matches!(k.kind, ExprKind::Var(_) | ExprKind::Int(_)),
         ExprKind::Unary { op: UnOp::Neg, expr } => arith_shape(expr),
         ExprKind::Binary { op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div, left, right } => arith_shape(left) && arith_shape(right),
-        ExprKind::Call { callee, args } => is_sqrt(callee, args) && arith_shape(&args[0].value),
+        ExprKind::Call { callee, args } if is_sqrt(callee, args) => arith_shape(&args[0].value),
+        ExprKind::Call { .. } => call_leaf(e),
+        _ => false,
+    }
+}
+
+/// `f($local, 2, ...)`: a call by name with plain positional arguments.
+fn call_leaf(e: &Expr) -> bool {
+    let ExprKind::Call { callee, args } = &e.kind else { return false };
+    matches!(callee.kind, ExprKind::Name(_))
+        && !is_sqrt(callee, args)
+        && args.iter().all(|a| !a.spread && a.name.is_none() && matches!(a.value.kind, ExprKind::Var(_) | ExprKind::Int(_) | ExprKind::Float(_)))
+}
+
+/// Calls (other than sqrt) in a speculated expression.
+fn calls(e: &Expr) -> usize {
+    match &e.kind {
+        ExprKind::Call { .. } if call_leaf(e) => 1,
+        ExprKind::Unary { expr, .. } => calls(expr),
+        ExprKind::Binary { left, right, .. } => calls(left) + calls(right),
+        ExprKind::Call { args, .. } => args.iter().map(|a| calls(&a.value)).sum(),
+        _ => 0,
+    }
+}
+
+/// A statement with a call is speculated only if nothing after the call
+/// can fail and the callee can't change what was read before it: one
+/// call, no division, no property reads, no candidate passed to it.
+fn call_ok(e: &Expr, cands: &HashSet<&'static str>) -> bool {
+    fn bad(e: &Expr) -> bool {
+        match &e.kind {
+            ExprKind::Prop { .. } => true,
+            ExprKind::Binary { op: BinOp::Div, .. } => true,
+            ExprKind::Unary { expr, .. } => bad(expr),
+            ExprKind::Binary { left, right, .. } => bad(left) || bad(right),
+            ExprKind::Call { args, .. } => args.iter().any(|a| bad(&a.value)),
+            _ => false,
+        }
+    }
+    match calls(e) {
+        0 => true,
+        1 => {
+            let mut m = HashSet::new();
+            collect_call_args(e, cands, &mut m);
+            !bad(e) && m.is_empty()
+        }
+        _ => false,
+    }
+}
+
+fn collect_call_args(e: &Expr, cands: &HashSet<&'static str>, out: &mut HashSet<&'static str>) {
+    match &e.kind {
+        ExprKind::Call { args, .. } if call_leaf(e) => {
+            for a in args {
+                mentions(&a.value, cands, out);
+            }
+        }
+        ExprKind::Unary { expr, .. } => collect_call_args(expr, cands, out),
+        ExprKind::Binary { left, right, .. } => {
+            collect_call_args(left, cands, out);
+            collect_call_args(right, cands, out);
+        }
+        _ => {}
+    }
+}
+
+fn find_call(e: &'static Expr) -> Option<&'static Expr> {
+    match &e.kind {
+        ExprKind::Call { .. } if call_leaf(e) => Some(e),
+        ExprKind::Unary { expr, .. } => find_call(expr),
+        ExprKind::Binary { left, right, .. } => find_call(left).or_else(|| find_call(right)),
+        ExprKind::Call { args, .. } => args.iter().find_map(|a| find_call(&a.value)),
+        _ => None,
+    }
+}
+
+fn contains(e: &Expr, target: &Expr) -> bool {
+    if std::ptr::eq(e, target) {
+        return true;
+    }
+    match &e.kind {
+        ExprKind::Unary { expr, .. } => contains(expr, target),
+        ExprKind::Binary { left, right, .. } => contains(left, target) || contains(right, target),
+        ExprKind::Call { args, .. } => args.iter().any(|a| contains(&a.value, target)),
         _ => false,
     }
 }
