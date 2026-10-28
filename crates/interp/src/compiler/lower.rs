@@ -120,6 +120,10 @@ pub struct Lower<'a> {
     /// Inside a speculated call statement: the reads made before the call
     /// (by node address) and the call's float result.
     pre: Option<(HashMap<usize, CValue>, CValue)>,
+    /// The interpreter compiling (for looking up functions to inline) and
+    /// the namespace context of the code.
+    pub interp: *const crate::interp::Interp,
+    pub ctx: Option<std::rc::Rc<crate::interp::NsCtx>>,
 }
 
 mod spec;
@@ -275,6 +279,8 @@ impl<'a> Lower<'a> {
             spec_osr: None,
             spec_after: HashMap::new(),
             pre: None,
+            interp: std::ptr::null(),
+            ctx: None,
         }
     }
 

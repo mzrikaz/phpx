@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{types, Block, InstBuilder, Value as CValue};
 use cranelift_frontend::Variable;
-use phpx_syntax::ast::{BinOp, Expr, ExprKind, MemberName, Stmt, StmtKind, UnOp};
+use phpx_syntax::ast::{self, BinOp, Expr, ExprKind, MemberName, Stmt, StmtKind, UnOp};
 
 use super::{flags, Lower, L, Op};
 use crate::value::tag;
@@ -82,7 +82,7 @@ impl<'a> Lower<'a> {
             let snapshot = cands.clone();
             cands.retain(|n| {
                 assigns[n].iter().all(|(op, rhs)| {
-                    let r = if call_ok(rhs, &snapshot) { self.ty(rhs, &snapshot) } else { Ty::X };
+                    let r = if self.call_ok(rhs, &snapshot) { self.ty(rhs, &snapshot) } else { Ty::X };
                     match op {
                         None => r == Ty::F,
                         Some(_) => r != Ty::X,
@@ -138,7 +138,7 @@ impl<'a> Lower<'a> {
     /// Candidates mentioned where the specialised code can't keep them:
     /// statements it lowers generically (those read the slots), and any
     /// expression shape `ty` doesn't speculate.
-    fn uses_outside(&self, body: &[Stmt], cands: &HashSet<&'static str>, bad: &mut HashSet<&'static str>) {
+    fn uses_outside(&self, body: &'static [Stmt], cands: &HashSet<&'static str>, bad: &mut HashSet<&'static str>) {
         for s in body {
             match &s.kind {
                 StmtKind::Expr(e) => match &e.kind {
@@ -146,16 +146,16 @@ impl<'a> Lower<'a> {
                         let handled_op = !matches!(&e.kind, ExprKind::AssignOp { op, .. } if !matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div));
                         let r = self.ty(value, cands);
                         match &target.kind {
-                            ExprKind::Var(n) if cands.contains(n.as_str()) && handled_op && r != Ty::X && call_ok(value, cands) => leaf_uses(value, cands, bad),
+                            ExprKind::Var(n) if cands.contains(n.as_str()) && handled_op && r != Ty::X && self.call_ok(value, cands) => leaf_uses(value, cands, bad),
                             // A property store the specialised code makes (a float value).
                             ExprKind::Prop { object, name: MemberName::Ident(_), nullsafe: false }
-                                if handled_op && r == Ty::F && calls(value) == 0 && matches!(&object.kind, ExprKind::Var(o) if !cands.contains(o.as_str()) && self.locals.index.contains_key(o.as_str())) =>
+                                if handled_op && r == Ty::F && self.calls(value) == 0 && matches!(&object.kind, ExprKind::Var(o) if !cands.contains(o.as_str()) && self.locals.index.contains_key(o.as_str())) =>
                             {
                                 leaf_uses(value, cands, bad)
                             }
                             // Generic code that only reads candidates (they are
                             // written back first): `$r[$i] = $s`.
-                            _ if !matches!(&target.kind, ExprKind::Var(n) if cands.contains(n.as_str())) && arith_shape(value) && calls(value) == 0 => {
+                            _ if !matches!(&target.kind, ExprKind::Var(n) if cands.contains(n.as_str())) && arith_shape(value) && self.calls(value) == 0 => {
                                 mentions(target, cands, bad);
                                 leaf_uses(value, cands, bad);
                             }
@@ -207,6 +207,8 @@ impl<'a> Lower<'a> {
                 Ty::X => Ty::X,
                 _ => Ty::F,
             },
+            // A small function, inlined: pure arithmetic.
+            ExprKind::Call { .. } if self.inline_target(e).is_some() => self.inline_ty(e),
             // A function call (plain local or literal arguments), speculated
             // to return a float; see `call_ok` for the rest of its statement.
             ExprKind::Call { .. } if call_leaf(e) => Ty::F,
@@ -406,7 +408,7 @@ impl<'a> Lower<'a> {
                     if let ExprKind::Var(n) = &target.kind {
                         if let Some(&i) = self.locals.index.get(n.as_str()) {
                             if let Some(&(v, d)) = self.spec.as_ref().unwrap().vars.get(&i) {
-                                if calls(value) == 1 {
+                                if self.calls(value) == 1 {
                                     return self.spec_call_stmt(s, i, v, d, op, value, fb);
                                 }
                                 let fail = self.fail_block(fb);
@@ -471,7 +473,7 @@ impl<'a> Lower<'a> {
         let fail = self.fail_block(fb);
         let mut pre = HashMap::new();
         self.prefetch(value, fail, &mut pre)?;
-        let call = find_call(value).expect("one call");
+        let call = self.find_call(value).expect("one call");
         let r = self.expr(call)?;
         let r = self.materialize(r);
         let ra = self.addr(r).unwrap();
@@ -531,8 +533,8 @@ impl<'a> Lower<'a> {
                 self.prefetch(right, fail, out)
             }
             ExprKind::Unary { expr, .. } => self.prefetch(expr, fail, out),
-            ExprKind::Call { .. } if call_leaf(e) => Ok(()),
-            ExprKind::Call { args, .. } => self.prefetch(&args[0].value, fail, out),
+            ExprKind::Call { .. } if self.real_call(e) => Ok(()),
+            ExprKind::Call { args, .. } if is_sqrt_call(e) => self.prefetch(&args[0].value, fail, out),
             _ => {
                 let x = self.fexpr(e, fail)?;
                 out.insert(e as *const Expr as usize, x);
@@ -555,6 +557,249 @@ impl<'a> Lower<'a> {
                 self.binary(*op, a, b)
             }
             _ => self.expr(e),
+        }
+    }
+
+    /// A call that stays a call (not sqrt, not inlined).
+    fn real_call(&self, e: &Expr) -> bool {
+        call_leaf(e) && self.inline_target(e).is_none()
+    }
+
+    /// Calls (other than sqrt and inlined ones) in a speculated expression.
+    fn calls(&self, e: &Expr) -> usize {
+        match &e.kind {
+            ExprKind::Call { .. } if self.real_call(e) => 1,
+            ExprKind::Unary { expr, .. } => self.calls(expr),
+            ExprKind::Binary { left, right, .. } => self.calls(left) + self.calls(right),
+            ExprKind::Call { args, .. } if is_sqrt_call(e) => args.iter().map(|a| self.calls(&a.value)).sum(),
+            _ => 0,
+        }
+    }
+
+    /// A statement with a call is speculated only if nothing after the call
+    /// can fail and the callee can't change what was read before it: one
+    /// call, no division, no property reads, no candidate passed to it.
+    fn call_ok(&self, e: &'static Expr, cands: &HashSet<&'static str>) -> bool {
+        fn bad(e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Prop { .. } => true,
+                ExprKind::Binary { op: BinOp::Div, .. } => true,
+                ExprKind::Unary { expr, .. } => bad(expr),
+                ExprKind::Binary { left, right, .. } => bad(left) || bad(right),
+                ExprKind::Call { args, .. } => args.iter().any(|a| bad(&a.value)),
+                _ => false,
+            }
+        }
+        match self.calls(e) {
+            0 => true,
+            1 => {
+                let call = self.find_call(e).unwrap();
+                let mut m = HashSet::new();
+                mentions(call, cands, &mut m);
+                !bad(e) && m.is_empty()
+            }
+            _ => false,
+        }
+    }
+
+    fn find_call(&self, e: &'static Expr) -> Option<&'static Expr> {
+        match &e.kind {
+            ExprKind::Call { .. } if self.real_call(e) => Some(e),
+            ExprKind::Unary { expr, .. } => self.find_call(expr),
+            ExprKind::Binary { left, right, .. } => self.find_call(left).or_else(|| self.find_call(right)),
+            ExprKind::Call { args, .. } => args.iter().find_map(|a| self.find_call(&a.value)),
+            _ => None,
+        }
+    }
+
+    // ---- inlining ----------------------------------------------------------
+
+    /// The function a call by name inlines to: one `return` of arithmetic
+    /// over int/float parameters, a float return type or none, and a name
+    /// that can only ever mean it (qualified, global code, or already
+    /// declared in the namespace).
+    fn inline_target(&self, e: &Expr) -> Option<&'static ast::Function> {
+        let ExprKind::Call { callee, args } = &e.kind else { return None };
+        let ExprKind::Name(n) = &callee.kind else { return None };
+        if self.interp.is_null() || is_sqrt(callee, args) {
+            return None;
+        }
+        let it = unsafe { &*self.interp };
+        let ctx = self.ctx.as_ref()?;
+        let crate::interp::Callable::User(u) = it.find_function(ctx, n)? else { return None };
+        if !(n.starts_with('\\') || ctx.ns.is_empty() || u.name.contains('\\')) {
+            return None;
+        }
+        let d: &'static ast::Function = u.decl;
+        if d.by_ref || d.is_generator || d.params.len() != args.len() {
+            return None;
+        }
+        let mut env = HashMap::new();
+        for (p, a) in d.params.iter().zip(args) {
+            if p.by_ref || p.variadic || p.promote.is_some() || a.spread || a.name.is_some() {
+                return None;
+            }
+            let t = param_ty(p)?;
+            // Arguments: plain locals, or literals of the parameter's type.
+            match (&a.value.kind, t) {
+                (ExprKind::Var(v), _) if self.locals.index.contains_key(v.as_str()) && v != "this" => {}
+                (ExprKind::Int(_), _) | (ExprKind::Float(_), T2::F) => {}
+                _ => return None,
+            }
+            env.insert(p.name.name.as_str(), t);
+        }
+        match &d.ret {
+            None => {}
+            Some(ast::Type::Named(t)) if t.eq_ignore_ascii_case("float") => {}
+            _ => return None,
+        }
+        let body = d.body.as_ref()?;
+        let [st] = body.as_slice() else { return None };
+        let StmtKind::Return(Some(rv)) = &st.kind else { return None };
+        tty(rv, &env)?;
+        Some(d)
+    }
+
+    fn inline_ty(&self, e: &Expr) -> Ty {
+        let d = self.inline_target(e).unwrap();
+        let StmtKind::Return(Some(rv)) = &d.body.as_ref().unwrap()[0].kind else { unreachable!() };
+        let env: HashMap<&str, T2> = d.params.iter().map(|p| (p.name.name.as_str(), param_ty(p).unwrap())).collect();
+        match (tty(rv, &env), &d.ret) {
+            (Some(T2::F), _) | (_, Some(_)) => Ty::F,
+            _ => Ty::N,
+        }
+    }
+
+    /// An inlined call as an f64 (an int result converted; the type says
+    /// which it was). Checks branch to `fail` (nothing has happened yet).
+    fn inline_call(&mut self, e: &'static Expr, fail: Block) -> L<CValue> {
+        let d = self.inline_target(e).unwrap();
+        let ExprKind::Call { callee, args } = &e.kind else { unreachable!() };
+        let ExprKind::Name(n) = &callee.kind else { unreachable!() };
+        let site: &'static crate::compiler::rt::InlineSite =
+            Box::leak(Box::new(crate::compiler::rt::InlineSite { seen: Default::default(), name: n.as_str(), decl: d as *const ast::Function }));
+        // Checked once per interpreter: the name still means this function.
+        let sp = self.iconst(site as *const _ as i64);
+        let seen = self.b.ins().load(types::I64, flags(), sp, crate::compiler::rt::INLINESITE_SEEN);
+        let itp = self.b.ins().load(types::I64, flags(), self.cx, crate::compiler::rt::CX_IT);
+        let seq = self.b.ins().load(types::I64, flags(), itp, crate::compiler::rt::INTERP_SEQ_OFF);
+        let same = self.b.ins().icmp(IntCC::Equal, seen, seq);
+        let (check, go) = (self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(check);
+        self.b.ins().brif(same, go, &[], check, &[]);
+        self.b.switch_to_block(check);
+        let ok = self.call("rt_inline_check", &[self.cx, sp]).unwrap();
+        self.b.ins().brif(ok, go, &[], fail, &[]);
+        self.b.switch_to_block(go);
+        // Arguments, checked against the parameter types.
+        let mut env = HashMap::new();
+        for (p, a) in d.params.iter().zip(args) {
+            let t = param_ty(p).unwrap();
+            let v = match (&a.value.kind, t) {
+                (ExprKind::Int(k), T2::I) => TV::I(self.iconst(*k)),
+                (ExprKind::Int(k), T2::F) => TV::F(self.b.ins().f64const(*k as f64)),
+                (ExprKind::Float(x), _) => TV::F(self.b.ins().f64const(*x)),
+                (ExprKind::Var(v), T2::I) => {
+                    let la = self.local_addr(self.locals.index[v.as_str()]);
+                    let tg = self.load_tag(la);
+                    let is_i = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::INT as i64);
+                    let next = self.b.create_block();
+                    self.b.ins().brif(is_i, next, &[], fail, &[]);
+                    self.b.switch_to_block(next);
+                    TV::I(self.b.ins().load(types::I64, flags(), la, tag::PAYLOAD))
+                }
+                (ExprKind::Var(v), T2::F) => {
+                    let la = self.local_addr(self.locals.index[v.as_str()]);
+                    TV::F(self.num_at(la, fail, false))
+                }
+                _ => unreachable!(),
+            };
+            env.insert(p.name.name.as_str(), v);
+        }
+        let StmtKind::Return(Some(rv)) = &d.body.as_ref().unwrap()[0].kind else { unreachable!() };
+        Ok(match self.texpr(rv, &env, fail) {
+            TV::F(x) => x,
+            TV::I(i) => self.b.ins().fcvt_from_sint(types::F64, i),
+        })
+    }
+
+    /// An inlined body's expression, ints and floats in registers; integer
+    /// overflow and out-of-range shifts branch to `fail`.
+    fn texpr(&mut self, e: &Expr, env: &HashMap<&str, TV>, fail: Block) -> TV {
+        match &e.kind {
+            ExprKind::Int(n) => TV::I(self.iconst(*n)),
+            ExprKind::Float(x) => TV::F(self.b.ins().f64const(*x)),
+            ExprKind::Var(n) => env[n.as_str()],
+            ExprKind::Unary { op: UnOp::Neg, expr } => match self.texpr(expr, env, fail) {
+                TV::F(x) => TV::F(self.b.ins().fneg(x)),
+                TV::I(x) => {
+                    let z = self.iconst(0);
+                    let (r, of) = self.b.ins().ssub_overflow(z, x);
+                    self.ok_unless(of, fail);
+                    TV::I(r)
+                }
+            },
+            ExprKind::Binary { op, left, right } => {
+                let a = self.texpr(left, env, fail);
+                let b = self.texpr(right, env, fail);
+                match (a, b) {
+                    (TV::I(x), TV::I(y)) => TV::I(self.ibin(*op, x, y, fail)),
+                    (a, b) => {
+                        let x = self.to_f(a);
+                        let y = self.to_f(b);
+                        TV::F(self.fbin(*op, x, y, fail))
+                    }
+                }
+            }
+            ExprKind::Call { args, .. } => {
+                let x = self.texpr(&args[0].value, env, fail);
+                let x = self.to_f(x);
+                TV::F(self.b.ins().sqrt(x))
+            }
+            _ => unreachable!("not inlined"),
+        }
+    }
+
+    fn to_f(&mut self, v: TV) -> CValue {
+        match v {
+            TV::F(x) => x,
+            TV::I(i) => self.b.ins().fcvt_from_sint(types::F64, i),
+        }
+    }
+
+    fn ok_unless(&mut self, bad: CValue, fail: Block) {
+        let next = self.b.create_block();
+        self.b.ins().brif(bad, fail, &[], next, &[]);
+        self.b.switch_to_block(next);
+    }
+
+    fn ibin(&mut self, op: BinOp, x: CValue, y: CValue, fail: Block) -> CValue {
+        match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul => {
+                let (r, of) = match op {
+                    BinOp::Add => self.b.ins().sadd_overflow(x, y),
+                    BinOp::Sub => self.b.ins().ssub_overflow(x, y),
+                    _ => self.b.ins().smul_overflow(x, y),
+                };
+                self.ok_unless(of, fail);
+                r
+            }
+            BinOp::Shl | BinOp::Shr => {
+                let bad = self.b.ins().icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, y, 64);
+                self.ok_unless(bad, fail);
+                if matches!(op, BinOp::Shl) { self.b.ins().ishl(x, y) } else { self.b.ins().sshr(x, y) }
+            }
+            BinOp::Mod => {
+                let z = self.b.ins().icmp_imm_s(IntCC::Equal, y, 0);
+                let m1 = self.b.ins().icmp_imm_s(IntCC::Equal, y, -1);
+                let bad = self.b.ins().bor(z, m1);
+                self.ok_unless(bad, fail);
+                self.b.ins().srem(x, y)
+            }
+            BinOp::BitAnd => self.b.ins().band(x, y),
+            BinOp::BitOr => self.b.ins().bor(x, y),
+            BinOp::BitXor => self.b.ins().bxor(x, y),
+            _ => unreachable!("int op not inlined"),
         }
     }
 
@@ -585,7 +830,7 @@ impl<'a> Lower<'a> {
             if let Some(v) = pre.get(&(e as *const Expr as usize)) {
                 return Ok(*v);
             }
-            if call_leaf(e) {
+            if self.real_call(e) {
                 return Ok(*x);
             }
         }
@@ -629,6 +874,7 @@ impl<'a> Lower<'a> {
                 let y = self.fexpr(right, fail)?;
                 self.fbin(*op, x, y, fail)
             }
+            ExprKind::Call { .. } if !is_sqrt_call(e) => self.inline_call(e, fail)?,
             ExprKind::Call { args, .. } => {
                 // sqrt(), unless a namespaced function shadows the built-in.
                 let flag = self.iconst(crate::value::builtin_shadowed() as *const _ as i64);
@@ -894,67 +1140,7 @@ fn call_leaf(e: &Expr) -> bool {
         && args.iter().all(|a| !a.spread && a.name.is_none() && matches!(a.value.kind, ExprKind::Var(_) | ExprKind::Int(_) | ExprKind::Float(_)))
 }
 
-/// Calls (other than sqrt) in a speculated expression.
-fn calls(e: &Expr) -> usize {
-    match &e.kind {
-        ExprKind::Call { .. } if call_leaf(e) => 1,
-        ExprKind::Unary { expr, .. } => calls(expr),
-        ExprKind::Binary { left, right, .. } => calls(left) + calls(right),
-        ExprKind::Call { args, .. } => args.iter().map(|a| calls(&a.value)).sum(),
-        _ => 0,
-    }
-}
 
-/// A statement with a call is speculated only if nothing after the call
-/// can fail and the callee can't change what was read before it: one
-/// call, no division, no property reads, no candidate passed to it.
-fn call_ok(e: &Expr, cands: &HashSet<&'static str>) -> bool {
-    fn bad(e: &Expr) -> bool {
-        match &e.kind {
-            ExprKind::Prop { .. } => true,
-            ExprKind::Binary { op: BinOp::Div, .. } => true,
-            ExprKind::Unary { expr, .. } => bad(expr),
-            ExprKind::Binary { left, right, .. } => bad(left) || bad(right),
-            ExprKind::Call { args, .. } => args.iter().any(|a| bad(&a.value)),
-            _ => false,
-        }
-    }
-    match calls(e) {
-        0 => true,
-        1 => {
-            let mut m = HashSet::new();
-            collect_call_args(e, cands, &mut m);
-            !bad(e) && m.is_empty()
-        }
-        _ => false,
-    }
-}
-
-fn collect_call_args(e: &Expr, cands: &HashSet<&'static str>, out: &mut HashSet<&'static str>) {
-    match &e.kind {
-        ExprKind::Call { args, .. } if call_leaf(e) => {
-            for a in args {
-                mentions(&a.value, cands, out);
-            }
-        }
-        ExprKind::Unary { expr, .. } => collect_call_args(expr, cands, out),
-        ExprKind::Binary { left, right, .. } => {
-            collect_call_args(left, cands, out);
-            collect_call_args(right, cands, out);
-        }
-        _ => {}
-    }
-}
-
-fn find_call(e: &'static Expr) -> Option<&'static Expr> {
-    match &e.kind {
-        ExprKind::Call { .. } if call_leaf(e) => Some(e),
-        ExprKind::Unary { expr, .. } => find_call(expr),
-        ExprKind::Binary { left, right, .. } => find_call(left).or_else(|| find_call(right)),
-        ExprKind::Call { args, .. } => args.iter().find_map(|a| find_call(&a.value)),
-        _ => None,
-    }
-}
 
 fn contains(e: &Expr, target: &Expr) -> bool {
     if std::ptr::eq(e, target) {
@@ -966,4 +1152,58 @@ fn contains(e: &Expr, target: &Expr) -> bool {
         ExprKind::Call { args, .. } => args.iter().any(|a| contains(&a.value, target)),
         _ => false,
     }
+}
+
+fn is_sqrt_call(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Call { callee, args } if is_sqrt(callee, args))
+}
+
+/// Types inside an inlined body.
+#[derive(Clone, Copy, PartialEq)]
+enum T2 {
+    I,
+    F,
+}
+
+/// A value inside an inlined body.
+#[derive(Clone, Copy)]
+enum TV {
+    I(CValue),
+    F(CValue),
+}
+
+fn param_ty(p: &ast::Param) -> Option<T2> {
+    match &p.ty {
+        Some(ast::Type::Named(t)) if t.eq_ignore_ascii_case("int") => Some(T2::I),
+        Some(ast::Type::Named(t)) if t.eq_ignore_ascii_case("float") => Some(T2::F),
+        _ => None,
+    }
+}
+
+/// The type of an inlined body's expression (None: not inlinable).
+fn tty(e: &Expr, env: &HashMap<&str, T2>) -> Option<T2> {
+    Some(match &e.kind {
+        ExprKind::Int(_) => T2::I,
+        ExprKind::Float(_) => T2::F,
+        ExprKind::Var(n) => *env.get(n.as_str())?,
+        ExprKind::Unary { op: UnOp::Neg, expr } => tty(expr, env)?,
+        ExprKind::Binary { op, left, right } => {
+            let (a, b) = (tty(left, env)?, tty(right, env)?);
+            match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mul => {
+                    if a == T2::I && b == T2::I { T2::I } else { T2::F }
+                }
+                // int / int is an int or a float: not inlined.
+                BinOp::Div if a == T2::F || b == T2::F => T2::F,
+                BinOp::Shl | BinOp::Shr | BinOp::Mod | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor if a == T2::I && b == T2::I => T2::I,
+                _ => return None,
+            }
+        }
+        ExprKind::Call { .. } if is_sqrt_call(e) => {
+            let ExprKind::Call { args, .. } = &e.kind else { unreachable!() };
+            tty(&args[0].value, env)?;
+            T2::F
+        }
+        _ => return None,
+    })
 }

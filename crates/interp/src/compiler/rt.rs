@@ -1563,6 +1563,34 @@ unsafe fn scope_key(f: &Frame) -> usize {
     *(std::ptr::addr_of!(f.class) as *const usize)
 }
 
+/// A call speculative code inlined: the function it inlined, and the
+/// interpreter it last checked that the name still means it in (a
+/// function, once declared, stays for the request).
+#[repr(C)]
+pub struct InlineSite {
+    pub seen: std::cell::Cell<u64>,
+    pub name: &'static str,
+    pub decl: *const ast::Function,
+}
+
+pub const INLINESITE_SEEN: i32 = 0;
+pub const CX_IT: i32 = std::mem::offset_of!(Cx, it) as i32;
+pub const INTERP_SEQ_OFF: i32 = std::mem::offset_of!(Interp, seq) as i32;
+
+/// Does the inlined call's name still mean the function it inlined? 1 =
+/// yes (remembered for this interpreter), 0 = no (the caller falls back).
+pub unsafe extern "C" fn rt_inline_check(c: *mut Cx, site: *const InlineSite) -> u64 {
+    let (it, f) = cx(c);
+    let site = &*site;
+    match it.find_function(&f.ctx, site.name) {
+        Some(crate::interp::Callable::User(u)) if std::ptr::eq(u.decl, site.decl) => {
+            site.seen.set(it.seq);
+            1
+        }
+        _ => 0,
+    }
+}
+
 /// A property read with no side effects, for speculative code: 1 = a
 /// plain, visible, present property's value is in `dst` (and the site's
 /// read cache knows its slot); 0 = anything else (no `__get`, no warning:

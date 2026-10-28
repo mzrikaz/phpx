@@ -170,6 +170,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_isset_index: 3 => true,
     rt_incdec_fill: 3 => true,
     rt_prop_peek: 4 => true,
+    rt_inline_check: 2 => true,
     rt_isset_prop: 5 => true,
     rt_empty_prop: 5 => true,
     rt_const: 3 => true,
@@ -632,6 +633,8 @@ impl Native {
                 &mut consts, &mut sites,
             );
             l.osr_target = osr;
+            l.interp = _it as *const Interp;
+            l.ctx = Some(t.ctx.clone());
             // The call-stack record (functions and methods, not files; an
             // OSR entry continues a call the interpreter already recorded).
             // (Pushed in `init`, before parameters bind; popped on every exit.)

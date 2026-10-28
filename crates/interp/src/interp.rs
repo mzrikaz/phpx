@@ -501,7 +501,13 @@ impl Frame {
     }
 }
 
+/// Interpreters made so far (each gets the next number: see `Interp::seq`).
+static INTERP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct Interp {
+    /// This interpreter's number, unique in the process: what compiled code
+    /// remembers a check by when it holds for the rest of a request.
+    pub seq: u64,
     pub files: RefCell<Vec<Rc<FileInfo>>>,
     pub functions: RefCell<FxHashMap<Rc<str>, Rc<UserFn>>>,
     pub builtins: &'static FxHashMap<&'static str, BuiltinFn>,
@@ -632,6 +638,7 @@ impl Interp {
             generators: RefCell::new(vec![]),
             autoloading: RefCell::new(HashSet::new()),
             place_verb: Cell::new("assign"),
+            seq: INTERP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             included: RefCell::new(indexmap::IndexSet::default()),
             preloaded: RefCell::new(HashMap::default()),
             declared: RefCell::new(HashSet::new()),
