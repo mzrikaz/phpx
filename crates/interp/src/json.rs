@@ -156,7 +156,8 @@ fn encode(it: &Interp, v: &Value, flags: i64, depth: usize, out: &mut String) ->
                 return Err(EncErr::Json(7, "Inf and NaN cannot be JSON encoded"));
             }
             let s = if flags & PRESERVE_ZERO_FRACTION != 0 { fmt_float_repr(*f) } else { crate::value::fmt_float(*f) };
-            out.push_str(&s);
+            // JSON's exponent is lowercase (`1.0e+25`), unlike echo's.
+            out.push_str(&s.replace('E', "e"));
         }
         Value::Str(b) => encode_str(b, flags, out)?,
         Value::Array(a) => {
