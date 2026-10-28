@@ -147,6 +147,12 @@ impl<'a> Lower<'a> {
                             {
                                 leaf_uses(value, cands, bad)
                             }
+                            // Generic code that only reads candidates (they are
+                            // written back first): `$r[$i] = $s`.
+                            _ if !matches!(&target.kind, ExprKind::Var(n) if cands.contains(n.as_str())) && arith_shape(value) => {
+                                mentions(target, cands, bad);
+                                leaf_uses(value, cands, bad);
+                            }
                             _ => mentions(e, cands, bad),
                         }
                     }
@@ -156,6 +162,11 @@ impl<'a> Lower<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// A local that isn't a candidate (read as a Value from its slot).
+    fn plain_local(&self, n: &str, cands: &HashSet<&'static str>) -> bool {
+        n != "this" && !cands.contains(n) && self.locals.index.contains_key(n)
     }
 
     /// The static type of a speculated expression, given the candidates.
@@ -168,6 +179,13 @@ impl<'a> Lower<'a> {
             // Speculated to hold a float (checked strictly when read).
             ExprKind::Prop { object, name: MemberName::Ident(_), nullsafe: false } => match &object.kind {
                 ExprKind::Var(o) if !cands.contains(o.as_str()) && self.locals.index.contains_key(o.as_str()) => Ty::F,
+                _ => Ty::X,
+            },
+            // `$local[$k]` (a literal or local key): speculated to be a float
+            // in a packed array.
+            ExprKind::Index { base, index: Some(k) } => match (&base.kind, &k.kind) {
+                (ExprKind::Var(b), ExprKind::Int(_)) if self.plain_local(b, cands) => Ty::F,
+                (ExprKind::Var(b), ExprKind::Var(kv)) if self.plain_local(b, cands) && self.plain_local(kv, cands) => Ty::F,
                 _ => Ty::X,
             },
             ExprKind::Unary { op: UnOp::Neg, expr } => self.ty(expr, cands),
@@ -232,8 +250,59 @@ impl<'a> Lower<'a> {
             self.b.ins().jump(after, &[]);
         }
         self.terminated = false;
+        // Entered mid-run (on-stack replacement) at one of these loops: the
+        // specialised entry, which falls back to the generic one.
+        if let Some((entry, gen_entry)) = self.spec_osr.take() {
+            if let Some(g) = self.osr_entry {
+                self.b.switch_to_block(gen_entry);
+                self.b.ins().jump(g, &[]);
+                self.osr_entry = Some(entry);
+            }
+        }
         self.b.switch_to_block(after);
         Ok(())
+    }
+
+    /// The on-stack replacement entry of speculated loop `s` (its head
+    /// comes next): candidates the loop reads must hold floats, the others
+    /// are loaded when they do; else the generic entry.
+    fn spec_osr_entry(&mut self, s: &'static Stmt, head: Block) {
+        if self.no_osr != 0 || self.osr_target != Some(s as *const Stmt as usize) {
+            return;
+        }
+        let cur = self.b.current_block().unwrap();
+        let (entry, gen_entry) = (self.b.create_block(), self.b.create_block());
+        self.b.switch_to_block(entry);
+        let cands = self.cand_names();
+        let mut read = HashSet::new();
+        if let Some(body) = loop_body(s) {
+            for st in body {
+                if let StmtKind::Expr(e) = &st.kind {
+                    mentions(e, &cands, &mut read);
+                }
+            }
+        }
+        let mut vars: Vec<(u32, (Variable, Variable))> = self.spec.as_ref().unwrap().vars.iter().map(|(&i, &vd)| (i, vd)).collect();
+        vars.sort_by_key(|e| e.0);
+        let names: HashMap<u32, &'static str> = self.locals.index.iter().map(|(n, i)| (*i, *n)).collect();
+        for (i, (v, d)) in vars {
+            let a = self.local_addr(i);
+            let tg = self.load_tag(a);
+            let is_f = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::FLOAT as i64);
+            let x = self.b.ins().load(types::F64, flags(), a, tag::PAYLOAD);
+            let zero = self.b.ins().f64const(0.0);
+            let x = self.b.ins().select(is_f, x, zero);
+            self.b.def_var(v, x);
+            self.b.def_var(d, is_f);
+            if names.get(&i).is_some_and(|n| read.contains(n)) {
+                let next = self.b.create_block();
+                self.b.ins().brif(is_f, next, &[], gen_entry, &[]);
+                self.b.switch_to_block(next);
+            }
+        }
+        self.b.ins().jump(head, &[]);
+        self.b.switch_to_block(cur);
+        self.spec_osr = Some((entry, gen_entry));
     }
 
     /// Candidates assigned so far back into their slots (as floats).
@@ -260,6 +329,7 @@ impl<'a> Lower<'a> {
                 for e in init {
                     self.discard(e)?;
                 }
+                self.spec_osr_entry(s, head);
                 self.b.ins().jump(head, &[]);
                 self.b.switch_to_block(head);
                 if cond.is_empty() {
@@ -281,6 +351,7 @@ impl<'a> Lower<'a> {
                 self.b.ins().jump(head, &[]);
             }
             StmtKind::While { cond, body } => {
+                self.spec_osr_entry(s, head);
                 self.b.ins().jump(head, &[]);
                 self.b.switch_to_block(head);
                 let op = self.expr(cond)?;
@@ -362,7 +433,18 @@ impl<'a> Lower<'a> {
             },
             _ => {}
         }
-        // Anything else mentions no candidate: its generic code, in place.
+        // Anything else only reads candidates, if it mentions them at all:
+        // its generic code, in place, after writing them back.
+        let cands = self.cand_names();
+        let mut seen = HashSet::new();
+        if let StmtKind::Expr(e) = &s.kind {
+            mentions(e, &cands, &mut seen);
+        }
+        if !seen.is_empty() {
+            let plan = self.spec.take().unwrap();
+            self.spill(&plan);
+            self.spec = Some(plan);
+        }
         self.stmt(s)
     }
 
@@ -405,6 +487,20 @@ impl<'a> Lower<'a> {
                 let ExprKind::Var(o) = &object.kind else { unreachable!() };
                 let oa = self.local_addr(self.locals.index[o.as_str()]);
                 self.peek_prop(oa, &name.name, fail, true)?
+            }
+            ExprKind::Index { base, index: Some(k) } => {
+                let ExprKind::Var(b) = &base.kind else { unreachable!() };
+                let ba = self.local_addr(self.locals.index[b.as_str()]);
+                let ka = match &k.kind {
+                    ExprKind::Var(kv) => self.local_addr(self.locals.index[kv.as_str()]),
+                    ExprKind::Int(n) => {
+                        let c = self.const_value(crate::value::Value::Int(*n));
+                        c
+                    }
+                    _ => unreachable!(),
+                };
+                let p = self.packed_elem(ba, ka, fail);
+                self.num_at(p, fail, true)
             }
             ExprKind::Unary { op: UnOp::Neg, expr } => {
                 let x = self.fexpr(expr, fail)?;
@@ -581,6 +677,10 @@ fn leaf_uses(e: &Expr, cands: &HashSet<&'static str>, bad: &mut HashSet<&'static
         }
         ExprKind::Call { callee, args } if is_sqrt(callee, args) => leaf_uses(&args[0].value, cands, bad),
         ExprKind::Prop { object, .. } if matches!(&object.kind, ExprKind::Var(o) if !cands.contains(o.as_str())) => {}
+        ExprKind::Index { base, index: Some(k) } => {
+            mentions(base, cands, bad);
+            mentions(k, cands, bad);
+        }
         _ => mentions(e, cands, bad),
     }
 }
@@ -657,6 +757,7 @@ fn arith_shape(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Float(_) | ExprKind::Int(_) | ExprKind::Var(_) => true,
         ExprKind::Prop { name: MemberName::Ident(_), nullsafe: false, .. } => true,
+        ExprKind::Index { base, index: Some(k) } => matches!(base.kind, ExprKind::Var(_)) && matches!(k.kind, ExprKind::Var(_) | ExprKind::Int(_)),
         ExprKind::Unary { op: UnOp::Neg, expr } => arith_shape(expr),
         ExprKind::Binary { op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div, left, right } => arith_shape(left) && arith_shape(right),
         ExprKind::Call { callee, args } => is_sqrt(callee, args) && arith_shape(&args[0].value),

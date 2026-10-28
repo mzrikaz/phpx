@@ -111,6 +111,9 @@ pub struct Lower<'a> {
     spec_entries: HashMap<usize, Block>,
     /// Statements already part of a speculated loop.
     spec_done: std::collections::HashSet<usize>,
+    /// On-stack replacement into a speculated loop: (its entry, the block
+    /// that continues at the generic entry once that exists).
+    spec_osr: Option<(Block, Block)>,
 }
 
 mod spec;
@@ -263,6 +266,7 @@ impl<'a> Lower<'a> {
             spec_on: false,
             spec_entries: HashMap::new(),
             spec_done: Default::default(),
+            spec_osr: None,
         }
     }
 
