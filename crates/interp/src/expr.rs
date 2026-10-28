@@ -102,6 +102,18 @@ fn int_binop(op: BinOp, x: i64, y: i64) -> Option<Value> {
         BinOp::BitAnd => Value::Int(x & y),
         BinOp::BitOr => Value::Int(x | y),
         BinOp::BitXor => Value::Int(x ^ y),
+        // (Counts of 64 and more, and negative ones, take the general path.)
+        BinOp::Shl if (0..64).contains(&y) => Value::Int(x.wrapping_shl(y as u32)),
+        BinOp::Shr if (0..64).contains(&y) => Value::Int(x >> y),
+        // int / int: an int when exact, else the float quotient (zero and
+        // PHP_INT_MIN / -1 take the general path).
+        BinOp::Div if y != 0 && !(x == i64::MIN && y == -1) => {
+            if x % y == 0 {
+                Value::Int(x / y)
+            } else {
+                Value::Float(x as f64 / y as f64)
+            }
+        }
         _ => return None,
     })
 }

@@ -3634,7 +3634,7 @@ impl<'a> Lower<'a> {
                 self.release(b);
                 Ok(Op::Bool(self.b.block_params(merge)[0]))
             }
-            Add | Sub | Mul | Mod | BitAnd | BitOr | BitXor => {
+            Add | Sub | Mul | Mod | BitAnd | BitOr | BitXor | Shl | Shr => {
                 let (ai, ak) = self.int_check(a);
                 let (bi, bk) = self.int_check(b);
                 let both = self.b.ins().band(ai, bi);
@@ -3650,6 +3650,12 @@ impl<'a> Lower<'a> {
                     BitAnd => (self.b.ins().band(x, y), self.b.ins().iconst(types::I8, 0)),
                     BitOr => (self.b.ins().bor(x, y), self.b.ins().iconst(types::I8, 0)),
                     BitXor => (self.b.ins().bxor(x, y), self.b.ins().iconst(types::I8, 0)),
+                    // Counts outside 0..64 (negative: an error) take the slow path.
+                    Shl | Shr => {
+                        let bad = self.b.ins().icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, y, 64);
+                        let r = if matches!(op, Shl) { self.b.ins().ishl(x, y) } else { self.b.ins().sshr(x, y) };
+                        (r, bad)
+                    }
                     _ => {
                         // `%`: divisors 0 (error) and -1 (INT_MIN edge) take the slow path.
                         let z = self.b.ins().icmp_imm_s(IntCC::Equal, y, 0);
@@ -3707,6 +3713,39 @@ impl<'a> Lower<'a> {
                 // in the helper).
                 let t = self.alloc_temp();
                 let (slow, merge) = (self.b.create_block(), self.b.create_block());
+                // int / int: an int when exact, else the float quotient;
+                // zero and PHP_INT_MIN / -1 take the helper.
+                let (ai, ak) = self.int_check(a);
+                let (bi, bk) = self.int_check(b);
+                let both = self.b.ins().band(ai, bi);
+                let (ints, not_ints) = (self.b.create_block(), self.b.create_block());
+                self.b.ins().brif(both, ints, &[], not_ints, &[]);
+                self.b.switch_to_block(ints);
+                let (x, y) = (self.int_payload(a, ak), self.int_payload(b, bk));
+                let z = self.b.ins().icmp_imm_s(IntCC::Equal, y, 0);
+                let m1 = self.b.ins().icmp_imm_s(IntCC::Equal, y, -1);
+                let min = self.b.ins().icmp_imm_s(IntCC::Equal, x, i64::MIN);
+                let edge = self.b.ins().band(m1, min);
+                let bad = self.b.ins().bor(z, edge);
+                let go = self.b.create_block();
+                self.b.ins().brif(bad, slow, &[], go, &[]);
+                self.b.switch_to_block(go);
+                let rem = self.b.ins().srem(x, y);
+                let exact = self.b.ins().icmp_imm_s(IntCC::Equal, rem, 0);
+                let (q_int, q_flt) = (self.b.create_block(), self.b.create_block());
+                self.b.ins().brif(exact, q_int, &[], q_flt, &[]);
+                self.b.switch_to_block(q_int);
+                let q = self.b.ins().sdiv(x, y);
+                let ta = self.temp_addr(t);
+                self.store_into(ta, Op::Int(q));
+                self.b.ins().jump(merge, &[]);
+                self.b.switch_to_block(q_flt);
+                let (fx, fy) = (self.b.ins().fcvt_from_sint(types::F64, x), self.b.ins().fcvt_from_sint(types::F64, y));
+                let q = self.b.ins().fdiv(fx, fy);
+                let ta = self.temp_addr(t);
+                self.store_into(ta, Op::Float(q));
+                self.b.ins().jump(merge, &[]);
+                self.b.switch_to_block(not_ints);
                 let (af, bf) = (self.float_tag(a), self.float_tag(b));
                 let any = self.b.ins().bor(af, bf);
                 let try_f = self.b.create_block();
