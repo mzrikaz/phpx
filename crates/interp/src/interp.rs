@@ -488,6 +488,18 @@ impl Frame {
 
     /// Make a site-cached frame ready for the next call: drop what this
     /// call left behind (variables, `$this`, arguments).
+    /// Like `reset_after_call`, keeping the frame's `$this` and closure
+    /// (a frame dedicated to one callable).
+    pub fn reset_vars(&mut self) {
+        if !self.vars.items.is_empty() {
+            self.vars = Vars::default();
+        }
+        if !self.args.is_empty() {
+            self.args.clear();
+        }
+        self.gen = None;
+    }
+
     pub fn reset_after_call(&mut self) {
         if !self.vars.items.is_empty() {
             self.vars = Vars::default();

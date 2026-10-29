@@ -4,10 +4,9 @@
 //! Anything that can't run that way (built-ins, generators, by-reference
 //! parameters, code that doesn't compile) takes the general call path.
 
-use std::rc::Rc;
 
 use crate::compiler::Entry;
-use crate::interp::{Callable, ClosureData, ClosureKind, Frame, Interp, R};
+use crate::interp::{Callable, ClosureKind, Frame, Interp, R};
 use crate::value::Value;
 
 pub struct Callback<'a> {
@@ -18,16 +17,11 @@ pub struct Callback<'a> {
     tries: u8,
 }
 
+/// The compiled entry and its frame, set up once for the callable (scope,
+/// `$this`, the closure); calls only reset what a call leaves behind.
 struct Prepared {
     entry: Entry,
     frame: Frame,
-    kind: Kind,
-}
-
-enum Kind {
-    Closure(Rc<ClosureData>),
-    Function,
-    Method(Option<Rc<crate::value::Obj>>),
 }
 
 impl Interp {
@@ -61,17 +55,8 @@ impl Callback<'_> {
             // SAFETY: the entry follows the Entry ABI; `args` and `out`
             // outlive the call; a declined call leaves the arguments as they
             // were.
-            let st = unsafe {
-                match &p.kind {
-                    Kind::Closure(cd) => crate::compiler::rt::enter_closure(it, cd, p.entry, &mut p.frame, ptr, n, &mut out),
-                    Kind::Function => crate::compiler::rt::enter(it, p.entry, &mut p.frame, ptr, n, &mut out),
-                    Kind::Method(this) => {
-                        p.frame.this = this.clone();
-                        crate::compiler::rt::enter(it, p.entry, &mut p.frame, ptr, n, &mut out)
-                    }
-                }
-            };
-            p.frame.reset_after_call();
+            let st = unsafe { crate::compiler::rt::enter(it, p.entry, &mut p.frame, ptr, n, &mut out) };
+            p.frame.reset_vars();
             match st {
                 Some(0) => return Ok(out),
                 Some(_) => return Err(it.pending.borrow_mut().take().expect("native error without pending exception")),
@@ -107,8 +92,12 @@ impl Callback<'_> {
                     class: cd.scope.clone(),
                     ret,
                 })?;
-                let frame = Frame::for_call(cd.ctx.clone(), cd.name.clone(), fn_id);
-                Some(Prepared { entry, frame, kind: Kind::Closure(cd.clone()) })
+                let mut frame = Frame::for_call(cd.ctx.clone(), cd.name.clone(), fn_id);
+                frame.this = cd.this.clone();
+                frame.class = cd.scope.clone();
+                frame.static_class = cd.static_class.clone();
+                frame.closure = Some(cd.clone());
+                Some(Prepared { entry, frame })
             }
             Callable::User(u) => {
                 if !plain(&u.decl.params) || u.decl.is_generator {
@@ -126,7 +115,7 @@ impl Callback<'_> {
                     class: None,
                     ret: u.decl.ret.as_ref(),
                 })?;
-                Some(Prepared { entry, frame: Frame::for_call(u.ctx.clone(), u.name.clone(), fn_id), kind: Kind::Function })
+                Some(Prepared { entry, frame: Frame::for_call(u.ctx.clone(), u.name.clone(), fn_id) })
             }
             Callable::Method { this, method, static_class, .. } => {
                 let crate::class::MethodBody::User(func) = &method.body else { return None };
@@ -138,8 +127,8 @@ impl Callback<'_> {
                 let mut frame = Frame::for_call(method.ctx.clone(), method.name.clone(), *func as *const _ as usize);
                 frame.class = decl_class;
                 frame.static_class = Some(static_class.clone());
-                let this = if method.is_static { None } else { this.clone() };
-                Some(Prepared { entry, frame, kind: Kind::Method(this) })
+                frame.this = if method.is_static { None } else { this.clone() };
+                Some(Prepared { entry, frame })
             }
             Callable::Builtin(..) | Callable::Magic { .. } => None,
         }
