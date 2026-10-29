@@ -161,3 +161,41 @@ arithmetic, compound assignment to properties through the generic place
 path), spectral-norm 1.5 s (short loops never reached on-stack
 replacement) and oop 213 ms (one-entry caches swapping on code shared by
 several classes).
+
+## Progress (2026-10-29)
+
+Same suite, after speculation (phase D, first version) and the call-path
+work of phase E. The machine was faster than for the baseline, so compare
+ratios:
+
+| Benchmark | phpx/PHP before | phpx/PHP now | phpx/Node now |
+|---|---|---|---|
+| assoc | 1.42 | 1.60 | 1.5 |
+| binary-trees | 2.59 | 1.13 | 10 |
+| closures | 2.29 | 1.11 | 3.9 |
+| fannkuch-redux | 0.59 | 0.59 | 3.9 |
+| json | 1.64 | 1.54 | 1.7 |
+| n-body | 1.83 | 0.58 | 15 |
+| oop | 2.22 | 1.79 | 8.3 |
+| spectral-norm | 1.68 | 0.18 | 2.7 |
+| strings | 1.27 | 1.15 | 1.4 |
+
+What changed for calls and objects:
+
+- Compiled prologues bind without the general helper for class-typed
+  parameters (the object's class compared with the two classes last
+  accepted), scalar literal defaults, promoted constructor parameters
+  (`$this->p = $p` statements ahead of the body, as PHP compiles them)
+  and closures' captured values.
+- Return types are checked inline the same way.
+- A call site keeps a frame per call depth, so recursion calls compiled
+  code directly; frames carry an in-use flag because fibers, generators
+  and green threads release them out of call order.
+- The call-stack record is linked inline (compiled code belongs to one
+  thread, so it writes the thread's task word directly).
+- Typed property writes stay inline for null into nullable types, objects
+  of the class last stored, and uninitialized slots (constructors).
+- The cycle collector backs off after runs that find no garbage (it scans
+  the whole heap; for binary-trees it was 42% of the time) and indexes
+  objects by handle instead of a hash map.
+- Callbacks from built-ins set their frame up once per callable.
