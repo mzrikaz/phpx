@@ -3745,7 +3745,7 @@ impl<'a> Lower<'a> {
                 self.release(b);
                 Ok(Op::Bool(self.b.block_params(merge)[0]))
             }
-            Add | Sub | Mul | Mod | BitAnd | BitOr | BitXor | Shl | Shr => {
+            Add | Sub | Mul | Mod | BitAnd | BitOr | BitXor | Shl | Shr | Spaceship => {
                 let (ai, ak) = self.int_check(a);
                 let (bi, bk) = self.int_check(b);
                 let both = self.b.ins().band(ai, bi);
@@ -3761,6 +3761,12 @@ impl<'a> Lower<'a> {
                     BitAnd => (self.b.ins().band(x, y), self.b.ins().iconst(types::I8, 0)),
                     BitOr => (self.b.ins().bor(x, y), self.b.ins().iconst(types::I8, 0)),
                     BitXor => (self.b.ins().bxor(x, y), self.b.ins().iconst(types::I8, 0)),
+                    Spaceship => {
+                        let gt = self.b.ins().icmp(IntCC::SignedGreaterThan, x, y);
+                        let lt = self.b.ins().icmp(IntCC::SignedLessThan, x, y);
+                        let (gt, lt) = (self.b.ins().uextend(types::I64, gt), self.b.ins().uextend(types::I64, lt));
+                        (self.b.ins().isub(gt, lt), self.b.ins().iconst(types::I8, 0))
+                    }
                     // Counts outside 0..64 (negative: an error) take the slow path.
                     Shl | Shr => {
                         let bad = self.b.ins().icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, y, 64);
