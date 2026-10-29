@@ -2164,13 +2164,13 @@ impl<'a> Lower<'a> {
     /// Call `helper(args..., dst)` with a fresh temp as dst.
     /// `foo(...)`: once the site has cached a compiled target, call its entry
     /// directly (with the site's frame) instead of going through `rt_call`;
-    /// `rt_call` handles the first calls, recursion (frame busy) and
+    /// `rt_call` handles the first calls, calls deeper than the site keeps frames for and
     /// declined bindings (arguments untouched).
     fn direct_call(&mut self, lay: super::Layout, sp: CValue, aa: CValue, n: CValue, la: CValue, meta: CValue) -> Op {
         self.emit_direct(
             lay,
             sp,
-            lay.site_busy,
+            lay.site_frame,
             aa,
             n,
             |l, slow| {
@@ -2178,8 +2178,7 @@ impl<'a> Lower<'a> {
                 let c1 = l.b.create_block();
                 l.b.ins().brif(entry, c1, &[], slow, &[]);
                 l.b.switch_to_block(c1);
-                let frame = l.b.ins().load(types::I64, flags(), sp, lay.site_frame);
-                (entry, frame, None)
+                (entry, None)
             },
             |l, ta| l.call_checked("rt_call", &[l.cx, sp, aa, n, la, meta, ta]),
         )
@@ -2192,7 +2191,7 @@ impl<'a> Lower<'a> {
         self.emit_direct(
             lay,
             sp,
-            lay.msite_busy,
+            lay.msite_frame,
             aa,
             n,
             |l, slow| {
@@ -2217,8 +2216,7 @@ impl<'a> Lower<'a> {
                 let c4 = l.b.create_block();
                 l.b.ins().brif(entry, c4, &[], slow, &[]);
                 l.b.switch_to_block(c4);
-                let frame = l.b.ins().load(types::I64, flags(), sp, lay.msite_frame);
-                (entry, frame, Some(rc))
+                (entry, Some(rc))
             },
             |l, ta| l.call_checked("rt_method_call", &[l.cx, oa, sp, aa, n, la, meta, ta]),
         )
@@ -2231,7 +2229,7 @@ impl<'a> Lower<'a> {
         self.emit_direct(
             lay,
             sp,
-            lay.msite_busy,
+            lay.msite_frame,
             aa,
             n,
             |l, slow| {
@@ -2250,8 +2248,7 @@ impl<'a> Lower<'a> {
                 let entry = l.b.ins().load(types::I64, flags(), sp, lay.msite_direct);
                 l.b.ins().brif(entry, c3, &[], slow, &[]);
                 l.b.switch_to_block(c3);
-                let frame = l.b.ins().load(types::I64, flags(), sp, lay.msite_frame);
-                (entry, frame, None)
+                (entry, None)
             },
             |l, ta| l.call_checked("rt_static_call", &[l.cx, cr, sp, aa, n, la, meta, ta]),
         )
@@ -2283,7 +2280,7 @@ impl<'a> Lower<'a> {
         let r = self.emit_direct(
             lay,
             sp,
-            lay.msite_busy,
+            lay.msite_frame,
             aa,
             n,
             |l, slow| {
@@ -2291,9 +2288,8 @@ impl<'a> Lower<'a> {
                 let c1 = l.b.create_block();
                 l.b.ins().brif(entry, c1, &[], slow, &[]);
                 l.b.switch_to_block(c1);
-                let frame = l.b.ins().load(types::I64, flags(), sp, lay.msite_frame);
                 let rc = l.b.ins().load(types::I64, flags(), ta, tag::PAYLOAD);
-                (entry, frame, Some(rc))
+                (entry, Some(rc))
             },
             |l, out| l.call_checked("rt_new_ctor", &[l.cx, ta, sp, aa, n, la, meta, out]),
         );
@@ -2321,32 +2317,57 @@ impl<'a> Lower<'a> {
     }
 
     /// The shared shape of a direct call. `guard` branches to `slow` unless
-    /// the cached target applies, returning (entry, site frame, `$this`'s
-    /// Rc pointer for methods); `slow_call` runs the helper path, writing
-    /// the result to the given address.
+    /// the cached target applies, returning (entry, `$this`'s Rc pointer
+    /// for methods); the callee frame is the site's for the current call
+    /// depth (`sf_off`: the site's `SiteFrame`); `slow_call` runs the
+    /// helper path, writing the result to the given address.
     #[allow(clippy::too_many_arguments)]
     fn emit_direct(
         &mut self,
         lay: super::Layout,
         sp: CValue,
-        busy_off: i32,
+        sf_off: i32,
         aa: CValue,
         n: CValue,
-        guard: impl FnOnce(&mut Self, Block) -> (CValue, CValue, Option<CValue>),
+        guard: impl FnOnce(&mut Self, Block) -> (CValue, Option<CValue>),
         slow_call: impl FnOnce(&mut Self, CValue),
     ) -> Op {
+        use super::rt::SiteFrame;
         let t = self.alloc_temp();
         let (slow, done) = (self.b.create_block(), self.b.create_block());
-        let (entry, frame, this) = guard(self, slow);
+        let (entry, this) = guard(self, slow);
         let (c2, fast, chk) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
-        self.b.ins().brif(frame, c2, &[], slow, &[]);
+        let depth_off = sf_off + SiteFrame::DEPTH as i32;
+        let d = self.b.ins().load(types::I32, flags(), sp, depth_off);
+        let len = self.b.ins().load(types::I32, flags(), sp, sf_off + SiteFrame::LEN as i32);
+        let have = self.b.ins().icmp(IntCC::UnsignedLessThan, d, len);
+        self.b.ins().brif(have, c2, &[], slow, &[]);
         self.b.switch_to_block(c2);
-        let busy = self.b.ins().load(types::I8, flags(), sp, busy_off);
-        self.b.ins().brif(busy, slow, &[], fast, &[]);
+        // Room on the native stack (the general path raises PHP's error
+        // for runaway recursion): at least 256 KiB above the task's limit
+        // (no limit outside tasks: the difference is then the address).
+        let spv = self.b.ins().get_stack_pointer(types::I64);
+        let la = self.iconst(phpx_runtime::stack_limit_addr() as i64);
+        let lim = self.b.ins().load(types::I64, flags(), la, 0);
+        let room = self.b.ins().isub(spv, lim);
+        let low = self.b.ins().icmp_imm_u(IntCC::UnsignedLessThan, room, 256 * 1024);
+        self.b.ins().brif(low, slow, &[], fast, &[]);
 
         self.b.switch_to_block(fast);
+        let buf = self.b.ins().load(types::I64, flags(), sp, sf_off + SiteFrame::BUF as i32);
+        let dw = self.b.ins().uextend(types::I64, d);
+        let off = self.b.ins().ishl_imm_u(dw, 3);
+        let fp = self.b.ins().iadd(buf, off);
+        let frame = self.b.ins().load(types::I64, flags(), fp, 0);
+        // (Lent: to a call suspended in another task.)
+        let lent = self.b.ins().load(types::I8, flags(), frame, lay.frame_lent);
+        let take = self.b.create_block();
+        self.b.ins().brif(lent, slow, &[], take, &[]);
+        self.b.switch_to_block(take);
         let one = self.b.ins().iconst(types::I8, 1);
-        self.b.ins().store(flags(), one, sp, busy_off);
+        self.b.ins().store(flags(), one, frame, lay.frame_lent);
+        let d1 = self.b.ins().iadd_imm_s(d, 1);
+        self.b.ins().store(flags(), d1, sp, depth_off);
         if let Some(rc) = this {
             // Lend `$this` to the frame (one more reference).
             let cnt = self.b.ins().load(types::I64, flags(), rc, 0);
@@ -2373,7 +2394,8 @@ impl<'a> Lower<'a> {
         let st = self.b.inst_results(inst)[0];
         self.b.ins().store(flags(), saved, pa, 0);
         let zero = self.b.ins().iconst(types::I8, 0);
-        self.b.ins().store(flags(), zero, sp, busy_off);
+        self.b.ins().store(flags(), zero, frame, lay.frame_lent);
+        self.b.ins().store(flags(), d, sp, depth_off);
         if let Some(rc) = this {
             // Take `$this` back and drop the frame's reference.
             let null = self.iconst(0);

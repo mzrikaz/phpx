@@ -242,24 +242,24 @@ pub struct Layout {
     pub frame_class: i32,
     /// `Frame::this` (an `Option<Rc<Obj>>`: the Rc's inner pointer or 0).
     pub frame_this: i32,
+    /// `Frame::lent` (a site frame in use).
+    pub frame_lent: i32,
     /// `Frame::static_class` (raw Rc word or 0).
     pub frame_static: i32,
-    /// `CallSite::direct`, its frame pointer and busy flag.
+    /// `CallSite::direct` and its `SiteFrame`.
     pub site_direct: i32,
     pub site_frame: i32,
-    pub site_busy: i32,
     /// Frame variable and argument counts (non-zero: the frame needs a
     /// reset after a direct call).
     pub frame_vars_len: i32,
     pub frame_args_len: i32,
     /// From an object's Rc pointer to its class pointer.
     pub obj_class: i32,
-    /// `MethodSite::direct`, `direct_class`, `direct_scope`, frame, busy.
+    /// `MethodSite::direct`, `direct_class`, `direct_scope`, `SiteFrame`.
     pub msite_direct: i32,
     pub msite_class: i32,
     pub msite_scope: i32,
     pub msite_frame: i32,
-    pub msite_busy: i32,
 }
 
 pub fn layout() -> Option<Layout> {
@@ -319,18 +319,17 @@ fn probe_layout() -> Option<Layout> {
         cx_frame: offset_of!(rt::Cx, frame) as i32,
         frame_class: offset_of!(crate::interp::Frame, class) as i32,
         frame_this: offset_of!(crate::interp::Frame, this) as i32,
+        frame_lent: offset_of!(crate::interp::Frame, lent) as i32,
         frame_static: offset_of!(crate::interp::Frame, static_class) as i32,
         site_direct: offset_of!(rt::CallSite, direct) as i32,
-        site_frame: (offset_of!(rt::CallSite, frame) + rt::SiteFrame::FRAME) as i32,
-        site_busy: (offset_of!(rt::CallSite, frame) + rt::SiteFrame::BUSY) as i32,
+        site_frame: offset_of!(rt::CallSite, frame) as i32,
         frame_vars_len: frame_vars_len as i32,
         frame_args_len: frame_args_len as i32,
         obj_class: (2 * size_of::<usize>() + offset_of!(crate::value::Obj, class)) as i32,
         msite_direct: offset_of!(rt::MethodSite, direct) as i32,
         msite_class: offset_of!(rt::MethodSite, direct_class) as i32,
         msite_scope: offset_of!(rt::MethodSite, direct_scope) as i32,
-        msite_frame: (offset_of!(rt::MethodSite, frame) + rt::SiteFrame::FRAME) as i32,
-        msite_busy: (offset_of!(rt::MethodSite, frame) + rt::SiteFrame::BUSY) as i32,
+        msite_frame: offset_of!(rt::MethodSite, frame) as i32,
     })
 }
 

@@ -101,6 +101,12 @@ pub fn set_task_word(w: usize) {
     TASK_WORD.with(|c| c.set(w))
 }
 
+/// Address of this thread's stack-limit word (the running task's lowest
+/// usable stack address, 0 outside tasks), for generated code.
+pub fn stack_limit_addr() -> usize {
+    STACK_LIMIT.with(|c| c as *const Cell<usize> as usize)
+}
+
 /// Bytes of stack left in the running task (None outside a task). Lets
 /// deeply recursive code (an interpreter) fail cleanly instead of crashing.
 #[inline(never)]

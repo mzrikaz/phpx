@@ -2260,17 +2260,25 @@ unsafe fn jit_site_call(site: &CallSite, args: *mut Value, n: u64, dst: *mut Val
     Some(0)
 }
 
-/// A reusable callee frame, lent out while not busy. `#[repr(C)]`: the
-/// frame pointer (0 = none yet) and busy flag are read by generated code.
+/// Reusable callee frames, one per call depth through the site (a
+/// recursive function's call to itself reuses them level by level).
+/// `#[repr(C)]`: generated code takes the frame at index `depth` when it
+/// is below `len` (from `buf`, the frames' addresses) and counts `depth`
+/// up around the call.
 #[derive(Default)]
 #[repr(C)]
 pub struct SiteFrame {
-    frame: std::cell::UnsafeCell<Option<Box<Frame>>>,
-    busy: std::cell::Cell<bool>,
+    buf: std::cell::Cell<usize>,
+    len: std::cell::Cell<u32>,
+    depth: std::cell::Cell<u32>,
+    frames: std::cell::UnsafeCell<Vec<Box<Frame>>>,
     /// Frames replaced while in use (the cached callee changed during a
-    /// recursive call): kept alive until that call has returned.
+    /// call through the site): kept alive until that call has returned.
     retired: std::cell::UnsafeCell<Vec<Box<Frame>>>,
 }
+
+/// Deeper calls through one site use a temporary frame each.
+const MAX_SITE_FRAMES: usize = 256;
 
 /// After a direct call from generated code: ready the site frame for the
 /// next call.
@@ -2279,40 +2287,65 @@ pub unsafe extern "C" fn rt_site_reset(frame: *mut Frame) {
 }
 
 impl SiteFrame {
-    /// Run `g` with this site's frame (built by `make` on first use) or,
-    /// when it's in use (recursion), with a fresh one.
-    unsafe fn with<T>(&self, make: impl FnOnce() -> Frame, g: impl FnOnce(&mut Frame) -> T) -> T {
-        if self.busy.get() {
+    pub const BUF: usize = std::mem::offset_of!(SiteFrame, buf);
+    pub const LEN: usize = std::mem::offset_of!(SiteFrame, len);
+    pub const DEPTH: usize = std::mem::offset_of!(SiteFrame, depth);
+
+    /// Publish the frames' addresses to generated code (a `Box<Frame>` is
+    /// the frame's address).
+    fn sync(&self) {
+        let frames = unsafe { &*self.frames.get() };
+        self.buf.set(frames.as_ptr() as usize);
+        self.len.set(frames.len() as u32);
+    }
+
+    /// Run `g` with this site's frame for the current depth (built by
+    /// `make` on first use), or a temporary one when that frame is lent
+    /// (to a call suspended in another task) or the calls go too deep.
+    unsafe fn with<T>(&self, make: impl Fn() -> Frame, g: impl FnOnce(&mut Frame) -> T) -> T {
+        let d = self.depth.get() as usize;
+        if d >= MAX_SITE_FRAMES {
             let mut f = make();
             return g(&mut f);
         }
-        self.busy.set(true);
-        (*self.retired.get()).clear();
-        let slot = &mut *self.frame.get();
-        // The frame itself (on the heap), not the slot: the slot may be
+        if d == 0 {
+            (*self.retired.get()).retain(|f| f.lent);
+        }
+        let frames = &mut *self.frames.get();
+        if frames.len() <= d {
+            while frames.len() <= d {
+                frames.push(Box::new(make()));
+            }
+            self.sync();
+        }
+        // The frame itself (on the heap), not the vector: it may be
         // emptied while the call runs (see `invalidate`).
-        let f: &mut Frame = &mut **slot.get_or_insert_with(|| Box::new(make()));
-        let r = g(f);
-        f.reset_after_call();
-        self.busy.set(false);
+        let f: *mut Frame = &mut *frames[d];
+        if (*f).lent {
+            let mut f = make();
+            return g(&mut f);
+        }
+        (*f).lent = true;
+        self.depth.set(d as u32 + 1);
+        let r = g(&mut *f);
+        (*f).reset_after_call();
+        (*f).lent = false;
+        self.depth.set(d as u32);
         r
     }
 
-    /// Forget the frame (the cached callee changed). A frame in use is
-    /// retired rather than dropped: the running call still holds it, and it
-    /// must not be reused for the new callee (its scope would be stale).
+    /// Forget the frames (the cached callee changed). Frames in use are
+    /// retired rather than dropped: the running calls still hold them, and
+    /// they must not be reused for the new callee (their scope would be
+    /// stale).
     fn invalidate(&self) {
         unsafe {
-            let slot = &mut *self.frame.get();
-            if self.busy.get() {
-                if let Some(f) = slot.take() {
-                    (*self.retired.get()).push(f);
-                }
-            } else {
-                *slot = None;
-                (*self.retired.get()).clear();
-            }
+            let frames = std::mem::take(&mut *self.frames.get());
+            let retired = &mut *self.retired.get();
+            retired.retain(|f| f.lent);
+            retired.extend(frames.into_iter().filter(|f| f.lent));
         }
+        self.sync();
     }
 }
 
@@ -4254,7 +4287,3 @@ impl ClassSite {
     }
 }
 
-impl SiteFrame {
-    pub const FRAME: usize = std::mem::offset_of!(SiteFrame, frame);
-    pub const BUSY: usize = std::mem::offset_of!(SiteFrame, busy);
-}

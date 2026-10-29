@@ -426,6 +426,9 @@ pub struct Frame {
     /// The running closure, when called through a native call site (its
     /// captured values are bound straight into native locals).
     pub closure: Option<Rc<ClosureData>>,
+    /// A call site's reusable frame in use by a call (which may be
+    /// suspended in another task: frames aren't released in call order).
+    pub lent: bool,
 }
 
 /// Offset of a `Vec`'s length word (probed: std doesn't fix the layout).
@@ -462,6 +465,7 @@ impl Frame {
             fn_id,
             gen: None,
             closure: None,
+            lent: false,
         }
     }
 
@@ -478,6 +482,7 @@ impl Frame {
             fn_id: 0,
             gen: None,
             closure: None,
+            lent: false,
         }
     }
 
