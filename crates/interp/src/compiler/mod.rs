@@ -589,6 +589,7 @@ impl Native {
             defaults: t.params.iter().map(|p| p.default.as_ref().and_then(rt::literal_default)).collect(),
             promoted: t.params.iter().map(|_| Default::default()).collect(),
             fast_class: t.params.iter().map(|_| Default::default()).collect(),
+            ret_fast: Default::default(),
             promote_in_body: promo.is_some(),
         });
         let simple = spec.simple;
@@ -724,13 +725,66 @@ impl Native {
             // locals back to the frame first).
             for (blk, status) in [(exit_ok, 0i64), (unwind, 1), (exit_ret, 3)] {
                 l.b.switch_to_block(blk);
-                if status == 0 && t.ret.is_some() {
-                    // Declared return type (coerces the value in place).
+                if status == 0 && t.ret.is_some() && !matches!(spec.ret_quick.0, rt::Quick::Mixed) {
+                    // Declared return type (coerces the value in place):
+                    // a value of a scalar type as declared, or an object of
+                    // a class accepted before, passes inline.
                     use cranelift_codegen::ir::condcodes::IntCC;
+                    let fl = cranelift_codegen::ir::MemFlagsData::trusted();
+                    let (check, ok) = (l.b.create_block(), l.b.create_block());
+                    l.b.set_cold_block(check);
+                    let want = match spec.ret_quick.0 {
+                        rt::Quick::Int => Some(tag::INT),
+                        rt::Quick::Float => Some(tag::FLOAT),
+                        rt::Quick::Str => Some(tag::STR),
+                        rt::Quick::Bool => Some(tag::BOOL),
+                        rt::Quick::Array => Some(tag::ARRAY),
+                        _ => None,
+                    };
+                    let lay = layout().filter(|_| inline_rc());
+                    let class = rt::plain_class_type(t.ret).filter(|_| lay.is_some());
+                    if want.is_some() || class.is_some() {
+                        let tg = l.b.ins().load(types::I8, fl, outv, 0);
+                        let null_ok = spec.ret_quick.1 || class == Some(true);
+                        let pass = match want {
+                            Some(w) => l.b.ins().icmp_imm_u(IntCC::Equal, tg, w as i64),
+                            None => l.b.ins().iconst(types::I8, 0),
+                        };
+                        let pass = if null_ok {
+                            let null = l.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::NULL as i64);
+                            l.b.ins().bor(pass, null)
+                        } else {
+                            pass
+                        };
+                        match (class, lay) {
+                            (Some(_), Some(lay)) => {
+                                let (obj_chk, cls_chk) = (l.b.create_block(), l.b.create_block());
+                                l.b.ins().brif(pass, ok, &[], obj_chk, &[]);
+                                l.b.switch_to_block(obj_chk);
+                                let is_obj = l.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::OBJECT as i64);
+                                l.b.ins().brif(is_obj, cls_chk, &[], check, &[]);
+                                l.b.switch_to_block(cls_chk);
+                                let rc = l.b.ins().load(types::I64, fl, outv, tag::PAYLOAD);
+                                let cls = l.b.ins().load(types::I64, fl, rc, lay.obj_class);
+                                let cells = l.b.ins().iconst(types::I64, spec.ret_fast.ptr.as_ptr() as i64);
+                                let c0 = l.b.ins().load(types::I64, fl, cells, 0);
+                                let c1 = l.b.ins().load(types::I64, fl, cells, 8);
+                                let e0 = l.b.ins().icmp(IntCC::Equal, cls, c0);
+                                let e1 = l.b.ins().icmp(IntCC::Equal, cls, c1);
+                                let hit = l.b.ins().bor(e0, e1);
+                                l.b.ins().brif(hit, ok, &[], check, &[]);
+                            }
+                            _ => {
+                                l.b.ins().brif(pass, ok, &[], check, &[]);
+                            }
+                        }
+                    } else {
+                        l.b.ins().jump(check, &[]);
+                    }
+                    l.b.switch_to_block(check);
                     let sp = l.b.ins().iconst(types::I64, spec_addr);
                     let st = l.call("rt_check_ret", &[cxv, outv, sp]).unwrap();
                     let bad = l.b.ins().icmp_imm_s(IntCC::NotEqual, st, 0);
-                    let ok = l.b.create_block();
                     l.b.ins().brif(bad, unwind, &[], ok, &[]);
                     l.b.switch_to_block(ok);
                 }

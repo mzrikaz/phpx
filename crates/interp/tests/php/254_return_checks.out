@@ -1,0 +1,14 @@
+[["dog",false,8,3,"DogPuppyPuppy",3,null],["cat",false,1410,703,"DogPuppyPuppy",703,null],["dog",false,2811,1403,"DogPuppyPuppy",1403,null],"bad(): Return value must be of type Animal, Rock returned"]
+int(12)
+int(3)
+int(1)
+float(2)
+float(1.5)
+string(2) "15"
+string(3) "1.5"
+NULL
+int(2)
+num(): Return value must be of type int, string returned
+num(): Return value must be of type int, null returned
+str(): Return value must be of type string, array returned
+Error

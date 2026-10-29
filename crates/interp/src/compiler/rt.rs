@@ -76,6 +76,8 @@ pub struct LocalsSpec {
     /// objects last accepted unchanged, which generated code compares
     /// against to bind without calling `rt_bind_args`.
     pub fast_class: Vec<FastClass>,
+    /// The same for a class-typed return.
+    pub ret_fast: FastClass,
     /// Promoted parameters are assigned by statements the compiler put
     /// ahead of the body, not while binding.
     pub promote_in_body: bool,
@@ -170,6 +172,9 @@ pub unsafe extern "C" fn rt_check_ret(c: *mut Cx, out: *mut Value, spec: *const 
             if let (Some(Value::Object(g)), Value::Object(o)) = (&given, &v) {
                 if Rc::ptr_eq(g, o) {
                     spec.ret_ok.remember(o, f);
+                    if plain_class_type(Some(ty)).is_some() {
+                        spec.ret_fast.remember(&o.class);
+                    }
                 }
             }
             put(out, v);
@@ -219,6 +224,7 @@ impl LocalsSpec {
         self.ret_ok.clear();
         self.promoted.iter().for_each(|c| c.set((0, 0)));
         self.fast_class.iter().for_each(FastClass::clear);
+        self.ret_fast.clear();
     }
 }
 
