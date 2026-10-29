@@ -735,8 +735,7 @@ impl Native {
                     l.b.switch_to_block(ok);
                 }
                 if let Some(slot) = call_rec {
-                    let rec = l.b.ins().stack_addr(types::I64, slot, 0);
-                    l.call("rt_call_pop", &[rec]);
+                    rec_pop(&mut l, slot);
                 }
                 l.cleanup(nlocals);
                 if let (Some(rcs), Some(def)) = (top_rcs, top_def) {
@@ -750,8 +749,7 @@ impl Native {
             }
             l.b.switch_to_block(decline);
             if let Some(slot) = call_rec {
-                let rec = l.b.ins().stack_addr(types::I64, slot, 0);
-                l.call("rt_call_pop", &[rec]);
+                rec_pop(&mut l, slot);
             }
             let two = l.b.ins().iconst(types::I64, 2);
             l.b.ins().return_(&[two]);
@@ -759,10 +757,7 @@ impl Native {
             l.b.switch_to_block(init);
             l.init_slots(nlocals);
             if let Some(slot) = call_rec {
-                let rec = l.b.ins().stack_addr(types::I64, slot, 0);
-                let sp = l.b.ins().iconst(types::I64, spec_addr);
-                let locals = l.b.ins().stack_addr(types::I64, locals_slot, 0);
-                l.call("rt_call_push", &[cxv, sp, locals, rec]);
+                rec_push(&mut l, slot, cxv, spec_addr, locals_slot, t.ctx.file == crate::interp::PRELUDE_FILE);
             }
             if let Some(rcs) = top_rcs {
                 let zero = l.b.ins().iconst(types::I64, 0);
@@ -1269,4 +1264,45 @@ fn promoted_stmts(params: &'static [ast::Param]) -> &'static [ast::Stmt] {
             &*Box::leak(stmts.into_boxed_slice())
         })
     })
+}
+
+/// Link the call's record as the innermost call (`trace::push`, inline:
+/// the task word's address is this thread's, like the compiled code).
+fn rec_push(l: &mut lower::Lower, slot: cranelift_codegen::ir::StackSlot, cxv: cranelift_codegen::ir::Value, spec_addr: i64, locals_slot: cranelift_codegen::ir::StackSlot, internal: bool) {
+    use crate::trace::CallRec;
+    use std::mem::offset_of;
+    let fl = cranelift_codegen::ir::MemFlagsData::trusted();
+    let rec = l.b.ins().stack_addr(types::I64, slot, 0);
+    let tw = l.b.ins().iconst(types::I64, phpx_runtime::task_word_addr() as i64);
+    let prev = l.b.ins().load(types::I64, fl, tw, 0);
+    l.b.ins().store(fl, prev, rec, offset_of!(CallRec, prev) as i32);
+    let frame = l.b.ins().load(types::I64, fl, cxv, offset_of!(rt::Cx, frame) as i32);
+    l.b.ins().store(fl, frame, rec, offset_of!(CallRec, frame) as i32);
+    let sp = l.b.ins().iconst(types::I64, spec_addr);
+    l.b.ins().store(fl, sp, rec, offset_of!(CallRec, spec) as i32);
+    let locals = l.b.ins().stack_addr(types::I64, locals_slot, 0);
+    l.b.ins().store(fl, locals, rec, offset_of!(CallRec, locals) as i32);
+    let zero = l.b.ins().iconst(types::I64, 0);
+    l.b.ins().store(fl, zero, rec, offset_of!(CallRec, params) as i32);
+    l.b.ins().store(fl, zero, rec, offset_of!(CallRec, nparams) as i32);
+    let pos = l.b.ins().load(types::I64, fl, l.pos_addr, 0);
+    l.b.ins().store(fl, pos, rec, offset_of!(CallRec, pos) as i32);
+    let int = l.b.ins().iconst(types::I8, internal as i64);
+    l.b.ins().store(fl, int, rec, offset_of!(CallRec, internal) as i32);
+    l.b.ins().store(fl, l.pos_addr, rec, offset_of!(CallRec, cur) as i32);
+    l.b.ins().store(fl, rec, tw, 0);
+}
+
+/// Unlink the call's record and point diagnostics back at the caller's
+/// statement (`trace::pop`, inline).
+fn rec_pop(l: &mut lower::Lower, slot: cranelift_codegen::ir::StackSlot) {
+    use crate::trace::CallRec;
+    use std::mem::offset_of;
+    let fl = cranelift_codegen::ir::MemFlagsData::trusted();
+    let rec = l.b.ins().stack_addr(types::I64, slot, 0);
+    let tw = l.b.ins().iconst(types::I64, phpx_runtime::task_word_addr() as i64);
+    let prev = l.b.ins().load(types::I64, fl, rec, offset_of!(CallRec, prev) as i32);
+    l.b.ins().store(fl, prev, tw, 0);
+    let pos = l.b.ins().load(types::I64, fl, rec, offset_of!(CallRec, pos) as i32);
+    l.b.ins().store(fl, pos, l.pos_addr, 0);
 }

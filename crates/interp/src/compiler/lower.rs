@@ -79,7 +79,7 @@ pub struct Lower<'a> {
     pub unwind: Block,
     pub cx: CValue,
     pub out: CValue,
-    pos_addr: CValue,
+    pub pos_addr: CValue,
     file: u32,
     terminated: bool,
     /// Constant Values (strings, null) referenced by address; kept alive by the caller.

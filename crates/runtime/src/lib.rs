@@ -13,7 +13,7 @@ mod scheduler;
 
 pub use error::{Error, Result};
 pub use promise::{spawn, Promise};
-pub use scheduler::{after_fork, current_task, defer, set_stack_size, set_task_word, stack_limit_addr, stack_remaining, stack_size, task_word, yield_now, TaskId};
+pub use scheduler::{after_fork, current_task, defer, set_stack_size, set_task_word, stack_limit_addr, stack_remaining, stack_size, task_word, task_word_addr, yield_now, TaskId};
 
 use std::time::{Duration, Instant};
 

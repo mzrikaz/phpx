@@ -101,6 +101,12 @@ pub fn set_task_word(w: usize) {
     TASK_WORD.with(|c| c.set(w))
 }
 
+/// Address of this thread's task word (see `task_word`), for generated
+/// code.
+pub fn task_word_addr() -> usize {
+    TASK_WORD.with(|c| c as *const Cell<usize> as usize)
+}
+
 /// Address of this thread's stack-limit word (the running task's lowest
 /// usable stack address, 0 outside tasks), for generated code.
 pub fn stack_limit_addr() -> usize {
