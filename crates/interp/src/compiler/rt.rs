@@ -72,6 +72,64 @@ pub struct LocalsSpec {
     /// was last found at, so the next object of that shape is written by
     /// slot. Reset with the other caches each request.
     pub promoted: Vec<std::cell::Cell<(usize, usize)>>,
+    /// Parameters of a plain class or interface type: the classes of
+    /// objects last accepted unchanged, which generated code compares
+    /// against to bind without calling `rt_bind_args`.
+    pub fast_class: Vec<FastClass>,
+    /// Promoted parameters are assigned by statements the compiler put
+    /// ahead of the body, not while binding.
+    pub promote_in_body: bool,
+}
+
+/// Two classes a type check accepted, as raw addresses for generated code
+/// (0: none), each held by `hold` so the address stays valid.
+#[derive(Default)]
+#[repr(C)]
+pub struct FastClass {
+    pub ptr: [std::cell::Cell<usize>; 2],
+    hold: std::cell::RefCell<[Option<Rc<crate::class::Class>>; 2]>,
+}
+
+impl FastClass {
+    fn remember(&self, c: &Rc<crate::class::Class>) {
+        // Keyed the way generated code reads an object's class: the raw
+        // Rc word.
+        let addr = unsafe { *(c as *const Rc<crate::class::Class> as *const usize) };
+        if self.ptr.iter().any(|p| p.get() == addr) {
+            return;
+        }
+        let mut hold = self.hold.borrow_mut();
+        // Newest in front; the older one moves back (the oldest drops).
+        hold[1] = hold[0].replace(c.clone());
+        self.ptr[1].set(self.ptr[0].get());
+        self.ptr[0].set(addr);
+    }
+
+    fn clear(&self) {
+        self.ptr.iter().for_each(|p| p.set(0));
+        *self.hold.borrow_mut() = Default::default();
+    }
+}
+
+/// A declared type that only an object of some class or interface named
+/// by it passes (not `self`/`static`/`parent`, which depend on the
+/// calling context, nor built-in type names): (nullable).
+pub fn plain_class_type(ty: Option<&ast::Type>) -> Option<bool> {
+    let (n, nullable) = match ty? {
+        ast::Type::Named(n) => (n, false),
+        ast::Type::Nullable(t) => match &**t {
+            ast::Type::Named(n) => (n, true),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let lower = n.to_ascii_lowercase();
+    let builtin = matches!(
+        lower.trim_start_matches('\\'),
+        "int" | "float" | "string" | "bool" | "array" | "mixed" | "self" | "static" | "parent" | "iterable" | "callable" | "object"
+            | "void" | "never" | "null" | "false" | "true"
+    );
+    (!builtin).then_some(nullable)
 }
 
 /// A parameter default that is a plain literal, as a value.
@@ -160,6 +218,7 @@ impl LocalsSpec {
         self.param_ok.iter().for_each(ClassPair::clear);
         self.ret_ok.clear();
         self.promoted.iter().for_each(|c| c.set((0, 0)));
+        self.fast_class.iter().for_each(FastClass::clear);
     }
 }
 
@@ -355,6 +414,9 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
                         if let (Value::Object(a), Value::Object(b)) = (&v, &nv) {
                             if Rc::ptr_eq(a, b) {
                                 spec.param_ok[i].remember(b, f);
+                                if plain_class_type(Some(ty)).is_some() {
+                                    spec.fast_class[i].remember(&b.class);
+                                }
                             }
                         }
                         nv
@@ -371,7 +433,7 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
             }
             _ => v,
         };
-        if p.promote.is_some() {
+        if p.promote.is_some() && !spec.promote_in_body {
             if let Some(o) = &f.this {
                 let cached = spec.promoted[i].get();
                 let k = shape_key(o);
@@ -1414,6 +1476,11 @@ pub struct PropSite {
     pub ttag: std::cell::Cell<u64>,
     /// Class-typed property: the object class last stored unchanged.
     pub tclass: std::cell::RefCell<Option<Rc<crate::class::Class>>>,
+    /// The same class as generated code reads an object's class (the raw
+    /// Rc word; 0: none), and 1 when the type is nullable: such objects
+    /// and null are stored inline too.
+    pub tclassw: std::cell::Cell<usize>,
+    pub tnull: std::cell::Cell<u64>,
     /// Element-write cache (`$o->name[k] = v`): shape, slot and scope of a
     /// visible, writable property (checked here, not by generated code).
     pub eshape: std::cell::Cell<usize>,
@@ -1477,6 +1544,8 @@ impl PropSite {
             tquick: std::cell::Cell::new((Quick::Other, false)),
             ttag: Default::default(),
             tclass: Default::default(),
+            tclassw: Default::default(),
+            tnull: Default::default(),
             rpoly: Default::default(),
             wpoly: Default::default(),
             tpoly: Default::default(),
@@ -1491,6 +1560,8 @@ pub const PROPSITE_TSHAPE: i32 = std::mem::offset_of!(PropSite, tshape) as i32;
 pub const PROPSITE_TSLOT: i32 = std::mem::offset_of!(PropSite, tslot) as i32;
 pub const PROPSITE_TSCOPE: i32 = std::mem::offset_of!(PropSite, tscope) as i32;
 pub const PROPSITE_TTAG: i32 = std::mem::offset_of!(PropSite, ttag) as i32;
+pub const PROPSITE_TCLASSW: i32 = std::mem::offset_of!(PropSite, tclassw) as i32;
+pub const PROPSITE_TNULL: i32 = std::mem::offset_of!(PropSite, tnull) as i32;
 pub const PROPSITE_ESHAPE: i32 = std::mem::offset_of!(PropSite, eshape) as i32;
 pub const PROPSITE_ESLOT: i32 = std::mem::offset_of!(PropSite, eslot) as i32;
 pub const PROPSITE_ESCOPE: i32 = std::mem::offset_of!(PropSite, escope) as i32;
@@ -1759,6 +1830,9 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
                     if site.tclass.borrow().is_none() && site.tquick.get().0 != Quick::Other {
                         site.tpoly.keep(site.tshape.get(), site.tscope.get(), site.tslot.get(), site.tquick.get());
                     }
+                    // (A null into the same slot keeps the class accepted.)
+                    let same = site.tshape.get() == k && site.tslot.get() == i && site.tscope.get() == scope_key(f);
+                    let keep = same && v.is_null() && q.1 && q.0 == Quick::Other;
                     site.tshape.set(k);
                     site.tslot.set(i);
                     site.tscope.set(scope_key(f));
@@ -1778,7 +1852,11 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
                         (Value::Object(x), Value::Object(y)) if q.0 == Quick::Other && Rc::ptr_eq(x, y) => Some(x.class.clone()),
                         _ => None,
                     };
-                    *site.tclass.borrow_mut() = class;
+                    site.tnull.set(q.1 as u64);
+                    if !keep {
+                        site.tclassw.set(class.as_ref().map_or(0, |c| unsafe { *(c as *const Rc<crate::class::Class> as *const usize) }));
+                        *site.tclass.borrow_mut() = class;
+                    }
                 }
             }
         }
@@ -4158,6 +4236,8 @@ impl PropSite {
             c.set(0);
         }
         *self.tclass.borrow_mut() = None;
+        self.tclassw.set(0);
+        self.tnull.set(0);
         self.ttag.set(0);
         self.rpoly.clear();
         self.wpoly.clear();

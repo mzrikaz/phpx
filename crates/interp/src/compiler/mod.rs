@@ -556,6 +556,13 @@ impl Native {
             return Err("excluded (PHPX_NATIVE_MAX / PHPX_NATIVE_SKIP)");
         }
         let mut a = analyze::analyze_mode(t.params, &t.captured, t.body, top_level)?;
+        // Promoted constructor parameters: `$this->p = $p` statements ahead
+        // of the body (as PHP compiles them), run when the arguments were
+        // bound here (the interpreter has promoted them otherwise).
+        let promo = (!top_level && t.params.iter().any(|p| p.promote.is_some())).then(|| promoted_stmts(t.params));
+        if let Some(stmts) = promo {
+            a.extra_stmts(stmts)?;
+        }
         let escapes = std::mem::take(&mut a.escapes);
         if top_level && a.uses_this {
             // A file included from a method sees its `$this`; file code
@@ -582,14 +589,41 @@ impl Native {
             quick: t.params.iter().map(|p| rt::Quick::of(p.ty.as_ref())).collect(),
             defaults: t.params.iter().map(|p| p.default.as_ref().and_then(rt::literal_default)).collect(),
             promoted: t.params.iter().map(|_| Default::default()).collect(),
+            fast_class: t.params.iter().map(|_| Default::default()).collect(),
+            promote_in_body: promo.is_some(),
         });
         let simple = spec.simple;
-        // Parameters of scalar types bind inline too: one tag check each
-        // (anything else takes rt_bind_args, which coerces or throws).
+        // Parameters of scalar types bind inline too: one tag check each;
+        // class-typed ones compare the object's class with the classes the
+        // general check last accepted; missing arguments with a scalar
+        // literal default get it stored (anything else takes rt_bind_args,
+        // which coerces or throws).
+        let class_ty: Vec<Option<bool>> = t.params.iter().map(|p| rt::plain_class_type(p.ty.as_ref())).collect();
+        let inline_default: Vec<Option<Value>> = t
+            .params
+            .iter()
+            .map(|p| {
+                let d = p.default.as_ref().and_then(rt::literal_default)?;
+                let (q, _) = rt::Quick::of(p.ty.as_ref());
+                match (q, d) {
+                    (_, Value::Null) => Some(Value::Null),
+                    (rt::Quick::Untyped | rt::Quick::Mixed, d @ (Value::Bool(_) | Value::Int(_) | Value::Float(_))) => Some(d),
+                    (rt::Quick::Int, d @ Value::Int(_)) | (rt::Quick::Float, d @ Value::Float(_)) | (rt::Quick::Bool, d @ Value::Bool(_)) => Some(d),
+                    (rt::Quick::Float, Value::Int(n)) => Some(Value::Float(n as f64)),
+                    _ => None,
+                }
+            })
+            .collect();
+        let required = t.params.iter().rposition(|p| p.default.is_none()).map_or(0, |i| i + 1);
+        // Fewest arguments bound inline: every parameter after them has an
+        // inline default.
+        let min_inline = inline_default.iter().rposition(|d| d.is_none()).map_or(0, |i| i + 1).max(required);
         let inline_bind = simple
             || (t.captured.is_empty()
                 && !a.func_args
-                && t.params.iter().all(|p| !p.by_ref && !p.variadic && p.promote.is_none() && !matches!(rt::Quick::of(p.ty.as_ref()).0, rt::Quick::Other)));
+                && t.params.iter().enumerate().all(|(i, p)| {
+                    !p.by_ref && !p.variadic && (p.promote.is_none() || promo.is_some()) && (!matches!(rt::Quick::of(p.ty.as_ref()).0, rt::Quick::Other) || class_ty[i].is_some())
+                }));
         let quick = spec.quick.clone();
         let spec_addr = &*spec as *const LocalsSpec as i64;
 
@@ -657,6 +691,19 @@ impl Native {
             let top_epoch = l.top_epoch;
             l.spec_addr = spec_addr;
             l.escapes = escapes;
+            // Set to 1 when the arguments bound here (see `promo`).
+            let promo_flag = promo.map(|_| l.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3)));
+            if let (Some(stmts), Some(flag)) = (promo, promo_flag) {
+                use cranelift_codegen::ir::condcodes::IntCC;
+                let (run, body) = (l.b.create_block(), l.b.create_block());
+                let f = l.b.ins().stack_load(types::I64, types::I64, flag, 0);
+                let set = l.b.ins().icmp_imm_s(IntCC::NotEqual, f, 0);
+                l.b.ins().brif(set, run, &[], body, &[]);
+                l.b.switch_to_block(run);
+                l.stmts(stmts)?;
+                l.b.ins().jump(body, &[]);
+                l.b.switch_to_block(body);
+            }
             match t.body {
                 Body::Block(stmts) => {
                     l.stmts(stmts)?;
@@ -731,6 +778,10 @@ impl Native {
             let no_args = l.b.ins().icmp_imm_s(IntCC::Equal, argsv, 0);
             l.b.ins().brif(no_args, from_frame, &[], from_args, &[]);
             l.b.switch_to_block(from_frame);
+            if let Some(flag) = promo_flag {
+                let zero = l.b.ins().iconst(types::I64, 0);
+                l.b.ins().stack_store(types::I64, zero, flag, 0);
+            }
             let sp = l.b.ins().iconst(types::I64, spec_addr);
             let st = match (l.top_ptrs, top_rcs) {
                 (Some(ptrs), Some(rcs)) => {
@@ -750,13 +801,30 @@ impl Native {
             };
             l.b.ins().jump(bound, &[st.into()]);
             l.b.switch_to_block(from_args);
+            if let Some(flag) = promo_flag {
+                let one = l.b.ins().iconst(types::I64, 1);
+                l.b.ins().stack_store(types::I64, one, flag, 0);
+            }
             let nparams = t.params.len();
             let lay = layout().filter(|_| inline_rc());
-            if inline_bind && (this_slot.is_none() || lay.is_some()) {
-                // Exact arg count: move args into the parameter slots inline.
+            let needs_lay = this_slot.is_some() || class_ty.iter().any(Option::is_some);
+            if inline_bind && (!needs_lay || lay.is_some()) {
+                // Argument count in range: move args into the parameter slots
+                // inline (defaults for the missing ones).
                 let (inline_b, helper_b) = (l.b.create_block(), l.b.create_block());
-                let exact = l.b.ins().icmp_imm_s(IntCC::Equal, nargsv, nparams as i64);
-                l.b.ins().brif(exact, inline_b, &[], helper_b, &[]);
+                if min_inline == nparams {
+                    let exact = l.b.ins().icmp_imm_s(IntCC::Equal, nargsv, nparams as i64);
+                    l.b.ins().brif(exact, inline_b, &[], helper_b, &[]);
+                } else {
+                    let (lo_ok, c1) = (l.b.create_block(), l.b.create_block());
+                    let few = l.b.ins().icmp_imm_s(IntCC::SignedLessThan, nargsv, min_inline as i64);
+                    l.b.ins().brif(few, helper_b, &[], c1, &[]);
+                    l.b.switch_to_block(c1);
+                    let many = l.b.ins().icmp_imm_s(IntCC::SignedGreaterThan, nargsv, nparams as i64);
+                    l.b.ins().brif(many, helper_b, &[], lo_ok, &[]);
+                    l.b.switch_to_block(lo_ok);
+                    l.b.ins().jump(inline_b, &[]);
+                }
                 l.b.switch_to_block(inline_b);
                 let flags = cranelift_codegen::ir::MemFlagsData::trusted();
                 if let (Some(ts), Some(lay)) = (this_slot, lay) {
@@ -775,37 +843,94 @@ impl Native {
                     l.b.ins().store(flags, t, dst, 0);
                     l.b.ins().store(flags, raw, dst, tag::PAYLOAD);
                 }
-                // Type checks first (nothing moved yet when one fails).
+                // Type checks first (nothing moved yet when one fails); an
+                // optional parameter's only when its argument was passed.
                 for (i, q) in quick.iter().enumerate() {
                     let want = match q.0 {
-                        rt::Quick::Int => tag::INT,
-                        rt::Quick::Float => tag::FLOAT,
-                        rt::Quick::Str => tag::STR,
-                        rt::Quick::Bool => tag::BOOL,
-                        rt::Quick::Array => tag::ARRAY,
+                        rt::Quick::Int => Some(tag::INT),
+                        rt::Quick::Float => Some(tag::FLOAT),
+                        rt::Quick::Str => Some(tag::STR),
+                        rt::Quick::Bool => Some(tag::BOOL),
+                        rt::Quick::Array => Some(tag::ARRAY),
+                        _ if class_ty[i].is_some() => None,
                         _ => continue,
                     };
-                    let tg = l.b.ins().load(types::I8, flags, argsv, (i * 16) as i32);
-                    let ok = l.b.ins().icmp_imm_u(IntCC::Equal, tg, want as i64);
-                    let ok = if q.1 {
-                        let null = l.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::NULL as i64);
-                        l.b.ins().bor(ok, null)
-                    } else {
-                        ok
-                    };
                     let next = l.b.create_block();
-                    l.b.ins().brif(ok, next, &[], helper_b, &[]);
+                    if i >= min_inline {
+                        let passed = l.b.create_block();
+                        let has = l.b.ins().icmp_imm_s(IntCC::SignedGreaterThan, nargsv, i as i64);
+                        l.b.ins().brif(has, passed, &[], next, &[]);
+                        l.b.switch_to_block(passed);
+                    }
+                    // Null passes a nullable type, or one defaulting to null.
+                    let null_ok = q.1 || matches!(inline_default.get(i), Some(Some(Value::Null))) || matches!(t.params[i].default.as_ref().map(|d| &d.kind), Some(ast::ExprKind::Null));
+                    let tg = l.b.ins().load(types::I8, flags, argsv, (i * 16) as i32);
+                    match want {
+                        Some(want) => {
+                            let ok = l.b.ins().icmp_imm_u(IntCC::Equal, tg, want as i64);
+                            let ok = if null_ok {
+                                let null = l.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::NULL as i64);
+                                l.b.ins().bor(ok, null)
+                            } else {
+                                ok
+                            };
+                            l.b.ins().brif(ok, next, &[], helper_b, &[]);
+                        }
+                        None => {
+                            let lay = lay.unwrap();
+                            let obj_b = l.b.create_block();
+                            if null_ok {
+                                let not_null = l.b.create_block();
+                                let null = l.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::NULL as i64);
+                                l.b.ins().brif(null, next, &[], not_null, &[]);
+                                l.b.switch_to_block(not_null);
+                            }
+                            let is_obj = l.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::OBJECT as i64);
+                            l.b.ins().brif(is_obj, obj_b, &[], helper_b, &[]);
+                            l.b.switch_to_block(obj_b);
+                            let rc = l.b.ins().load(types::I64, flags, argsv, (i * 16) as i32 + tag::PAYLOAD);
+                            let cls = l.b.ins().load(types::I64, flags, rc, lay.obj_class);
+                            let cells = l.b.ins().iconst(types::I64, spec.fast_class[i].ptr.as_ptr() as i64);
+                            let c0 = l.b.ins().load(types::I64, flags, cells, 0);
+                            let c1 = l.b.ins().load(types::I64, flags, cells, 8);
+                            let e0 = l.b.ins().icmp(IntCC::Equal, cls, c0);
+                            let e1 = l.b.ins().icmp(IntCC::Equal, cls, c1);
+                            let ok = l.b.ins().bor(e0, e1);
+                            l.b.ins().brif(ok, next, &[], helper_b, &[]);
+                        }
+                    }
                     l.b.switch_to_block(next);
                 }
                 let null = l.b.ins().iconst(types::I64, tag::NULL as i64);
                 for i in 0..nparams {
-                    let src = l.b.ins().iadd_imm_s(argsv, (i * 16) as i64);
                     let dst = l.b.ins().stack_addr(types::I64, locals_slot, (i * 16) as i32);
+                    let next = l.b.create_block();
+                    if i >= min_inline {
+                        let (mv, def) = (l.b.create_block(), l.b.create_block());
+                        let has = l.b.ins().icmp_imm_s(IntCC::SignedGreaterThan, nargsv, i as i64);
+                        l.b.ins().brif(has, mv, &[], def, &[]);
+                        l.b.switch_to_block(def);
+                        let (tg, bits) = match &inline_default[i] {
+                            Some(Value::Bool(b)) => (tag::BOOL, *b as i64),
+                            Some(Value::Int(n)) => (tag::INT, *n),
+                            Some(Value::Float(x)) => (tag::FLOAT, x.to_bits() as i64),
+                            _ => (tag::NULL, 0),
+                        };
+                        let tv = l.b.ins().iconst(types::I64, tg as i64);
+                        let pv = l.b.ins().iconst(types::I64, bits);
+                        l.b.ins().store(flags, tv, dst, 0);
+                        l.b.ins().store(flags, pv, dst, 8);
+                        l.b.ins().jump(next, &[]);
+                        l.b.switch_to_block(mv);
+                    }
+                    let src = l.b.ins().iadd_imm_s(argsv, (i * 16) as i64);
                     let a = l.b.ins().load(types::I64, flags, src, 0);
                     let b2 = l.b.ins().load(types::I64, flags, src, 8);
                     l.b.ins().store(flags, a, dst, 0);
                     l.b.ins().store(flags, b2, dst, 8);
                     l.b.ins().store(flags, null, src, 0);
+                    l.b.ins().jump(next, &[]);
+                    l.b.switch_to_block(next);
                 }
                 let zero = l.b.ins().iconst(types::I64, 0);
                 l.b.ins().jump(bound, &[zero.into()]);
@@ -1117,4 +1242,32 @@ impl Interp {
             _ => None,
         }
     }
+}
+
+/// `$this->p = $p;` for each promoted parameter (built once per parameter
+/// list, kept for the compiled code's lifetime).
+fn promoted_stmts(params: &'static [ast::Param]) -> &'static [ast::Stmt] {
+    thread_local! {
+        static MADE: std::cell::RefCell<HashMap<usize, &'static [ast::Stmt]>> = Default::default();
+    }
+    MADE.with(|m| {
+        *m.borrow_mut().entry(params.as_ptr() as usize).or_insert_with(|| {
+            let stmts: Vec<ast::Stmt> = params
+                .iter()
+                .filter(|p| p.promote.is_some())
+                .map(|p| {
+                    use ast::ExprKind as K;
+                    let sp = p.name.span;
+                    let this = ast::Expr::new(K::Var("this".into()), sp);
+                    let target = ast::Expr::new(
+                        K::Prop { object: Box::new(this), name: ast::MemberName::Ident(p.name.clone()), nullsafe: false },
+                        sp,
+                    );
+                    let value = ast::Expr::new(K::Var(p.name.name.clone()), sp);
+                    ast::Stmt { kind: ast::StmtKind::Expr(ast::Expr::new(K::Assign { target: Box::new(target), value: Box::new(value) }, sp)), span: sp }
+                })
+                .collect();
+            &*Box::leak(stmts.into_boxed_slice())
+        })
+    })
 }

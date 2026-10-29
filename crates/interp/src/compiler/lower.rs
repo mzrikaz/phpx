@@ -1554,6 +1554,38 @@ impl<'a> Lower<'a> {
                 }
                 self.join_strings(ops)?
             }
+            // `$x === null` / `$x !== null`: a tag compare (references
+            // take the general path).
+            Binary { op: op @ (BinOp::Identical | BinOp::NotIdentical), left, right }
+                if matches!(left.kind, Null) || matches!(right.kind, Null) =>
+            {
+                let other = if matches!(left.kind, Null) { right } else { left };
+                let v = self.expr(other)?;
+                let Some(a) = self.addr(v) else {
+                    // An int, float or bool is never null.
+                    self.release(v);
+                    return Ok(Op::Bool(self.b.ins().iconst(types::I8, (*op == BinOp::NotIdentical) as i64)));
+                };
+                let tg = self.load_tag(a);
+                let is_ref = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::REF as i64);
+                let (fast, slow, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+                self.b.append_block_param(merge, types::I8);
+                self.b.ins().brif(is_ref, slow, &[], fast, &[]);
+                self.b.switch_to_block(fast);
+                let cc = if *op == BinOp::Identical { IntCC::Equal } else { IntCC::NotEqual };
+                let r = self.b.ins().icmp_imm_u(cc, tg, tag::NULL as i64);
+                self.b.ins().jump(merge, &[r.into()]);
+                self.b.set_cold_block(slow);
+                self.b.switch_to_block(slow);
+                let n = self.const_value(Value::Null);
+                let code = self.iconst(binop_code(*op) as i64);
+                let r = self.call("rt_compare", &[self.cx, code, a, n]).unwrap();
+                let r = self.b.ins().ireduce(types::I8, r);
+                self.b.ins().jump(merge, &[r.into()]);
+                self.b.switch_to_block(merge);
+                self.release(v);
+                Op::Bool(self.b.block_params(merge)[0])
+            }
             Binary { op, left, right } => {
                 let a = self.expr(left)?;
                 let b = self.expr(right)?;
@@ -2645,11 +2677,43 @@ impl<'a> Lower<'a> {
         let same = self.b.ins().icmp(IntCC::Equal, want, have);
         let set = self.b.ins().icmp_imm_u(IntCC::NotEqual, want, 0);
         let fits = self.b.ins().band(same, set);
-        let go = self.b.create_block();
-        self.b.ins().brif(fits, go, &[], slow, &[]);
+        // Null into a nullable type; an object of the accepted class.
+        let nullable = self.b.ins().load(types::I8, flags(), site_v, super::rt::PROPSITE_TNULL);
+        let is_null = self.b.ins().icmp_imm_u(IntCC::Equal, have, tag::NULL as i64);
+        let null_ok = self.b.ins().band(is_null, nullable);
+        let fits = self.b.ins().bor(fits, null_ok);
+        let (go, obj_chk, obj_cls) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(fits, go, &[], obj_chk, &[]);
+        self.b.switch_to_block(obj_chk);
+        let is_obj = self.b.ins().icmp_imm_u(IntCC::Equal, have, tag::OBJECT as i64);
+        self.b.ins().brif(is_obj, obj_cls, &[], slow, &[]);
+        self.b.switch_to_block(obj_cls);
+        let rc = self.b.ins().load(types::I64, flags(), va, tag::PAYLOAD);
+        let cls = self.b.ins().load(types::I64, flags(), rc, lay.obj_class);
+        let accepted = self.b.ins().load(types::I64, flags(), site_v, super::rt::PROPSITE_TCLASSW);
+        let ok = self.b.ins().icmp(IntCC::Equal, cls, accepted);
+        self.b.ins().brif(ok, go, &[], slow, &[]);
         self.b.switch_to_block(go);
         let props = self.prop_guard(lay, oa, site_v, super::rt::PROPSITE_TSHAPE, super::rt::PROPSITE_TSCOPE, slow);
-        let p = self.prop_slot(lay, props, site_v, super::rt::PROPSITE_TSLOT, slow);
+        // (A typed property is uninitialized until its first write, as
+        // in a constructor: then there is no old value.)
+        let data = self.b.ins().load(types::I64, flags(), props, 8);
+        let slot = self.b.ins().load(types::I64, flags(), site_v, super::rt::PROPSITE_TSLOT);
+        let off = self.b.ins().ishl_imm_u(slot, 4);
+        let p = self.b.ins().iadd(data, off);
+        let vt = self.load_tag(p);
+        let is_ref = self.b.ins().icmp_imm_s(IntCC::Equal, vt, tag::REF as i64);
+        let (not_ref, fresh, replace) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        self.b.ins().brif(is_ref, slow, &[], not_ref, &[]);
+        self.b.switch_to_block(not_ref);
+        let empty = self.b.ins().icmp_imm_s(IntCC::Equal, vt, lay.none_tag as i8 as i64);
+        self.b.ins().brif(empty, fresh, &[], replace, &[]);
+        self.b.switch_to_block(fresh);
+        let olda = self.temp_addr(old_t);
+        self.store_tag(olda, tag::NULL);
+        self.store_into(p, Op::Ptr(va, None));
+        self.b.ins().jump(merge, &[]);
+        self.b.switch_to_block(replace);
         let olda = self.temp_addr(old_t);
         self.copy16(olda, p);
         self.store_into(p, Op::Ptr(va, None));

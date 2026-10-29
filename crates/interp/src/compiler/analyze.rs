@@ -147,6 +147,11 @@ pub enum Body {
 }
 
 impl Analysis {
+    /// Statements the compiler adds to the body (promoted parameters).
+    pub fn extra_stmts(&mut self, s: &'static [Stmt]) -> Result<(), Reject> {
+        self.stmts(s)
+    }
+
     fn stmts(&mut self, s: &'static [Stmt]) -> Result<(), Reject> {
         s.iter().try_for_each(|s| self.stmt(s))
     }

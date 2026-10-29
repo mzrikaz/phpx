@@ -1,0 +1,19 @@
+[["Sq",["Sq",2,2,true,-1,"q"],15,[null,3,2,true,-1,"q"],["Sq",1,2.5,false,"u","z"]],["Sq",[null,2,2,true,-1,"q"],15,[null,3,2,true,-1,"q"],["Sq",1,2.5,false,"u","z"]],["Sq",["Sq",2,2,true,-1,"q"],15,[null,3,2,true,-1,"q"],["Sq",1,2.5,false,"u","z"]]]
+[null,7,1,true,-1,"q"]
+kind(): Argument #1 ($s) must be of type Shape, Other given
+opt(): Argument #1 ($s) must be of type ?Shape, Other given
+count_nodes(): Argument #1 ($n) must be of type Node, null given
+opt(): Argument #2 ($n) must be of type int, string given
+float(4)
+float(5)
+Cannot modify readonly property Ci::$r
+float(5)
+["kid",9,"k"]
+bool(true)
+NULL
+NULL
+bool(true)
+string(2) "Ci"
+Cannot assign Other to property Holder::$s of type ?Shape
+Cannot assign null to property Holder::$n of type Node
+[[true,false,true,false],[false,true,false,true],[false,true,false,true],[false,true,false,true],[false,true,false,true],[true,false,true,false]]
