@@ -244,6 +244,15 @@ pub struct Layout {
     pub frame_this: i32,
     /// `Frame::lent` (a site frame in use).
     pub frame_lent: i32,
+    /// `Frame::closure` (raw Rc word or 0); in the closure's allocation,
+    /// its captured values' buffer and count; per captured entry, its
+    /// size and the offsets of the value and the by-reference flag.
+    pub frame_closure: i32,
+    pub cd_capt_ptr: i32,
+    pub cd_capt_len: i32,
+    pub capt_size: i32,
+    pub capt_val: i32,
+    pub capt_ref: i32,
     /// `Frame::static_class` (raw Rc word or 0).
     pub frame_static: i32,
     /// `CallSite::direct` and its `SiteFrame`.
@@ -313,7 +322,29 @@ fn probe_layout() -> Option<Layout> {
         return None;
     }
     let (frame_vars_len, frame_args_len) = crate::interp::Frame::len_offsets()?;
+    // A closure's captured values: where the vector keeps its buffer and
+    // length (probed: std doesn't fix a Vec's layout), and each entry's
+    // value and by-reference flag.
+    type Capture = (&'static str, Value, bool);
+    let (vec_ptr, vec_len) = {
+        let v: Vec<Capture> = Vec::with_capacity(7);
+        let words: [usize; 3] = unsafe { std::mem::transmute_copy(&v) };
+        let len = words.iter().position(|&w| w == 0)?;
+        let cap = words.iter().position(|&w| w == 7)?;
+        let ptr = (0..3).find(|&i| i != len && i != cap && words[i] == v.as_ptr() as usize)?;
+        (ptr * 8, len * 8)
+    };
+    if size_of::<Vec<Capture>>() != 24 || size_of::<Option<std::rc::Rc<crate::interp::ClosureData>>>() != 8 {
+        return None;
+    }
+    let captured = 2 * size_of::<usize>() + offset_of!(crate::interp::ClosureData, captured);
     Some(Layout {
+        frame_closure: offset_of!(crate::interp::Frame, closure) as i32,
+        cd_capt_ptr: (captured + vec_ptr) as i32,
+        cd_capt_len: (captured + vec_len) as i32,
+        capt_size: size_of::<Capture>() as i32,
+        capt_val: offset_of!(Capture, 1) as i32,
+        capt_ref: offset_of!(Capture, 2) as i32,
         obj_props: (2 * size_of::<usize>() + offset_of!(crate::value::Obj, props) + in_cell) as i32,
         none_tag,
         cx_frame: offset_of!(rt::Cx, frame) as i32,
@@ -619,8 +650,7 @@ impl Native {
         // inline default.
         let min_inline = inline_default.iter().rposition(|d| d.is_none()).map_or(0, |i| i + 1).max(required);
         let inline_bind = simple
-            || (t.captured.is_empty()
-                && !a.func_args
+            || (!a.func_args
                 && t.params.iter().enumerate().all(|(i, p)| {
                     !p.by_ref && !p.variadic && (p.promote.is_none() || promo.is_some()) && (!matches!(rt::Quick::of(p.ty.as_ref()).0, rt::Quick::Other) || class_ty[i].is_some())
                 }));
@@ -855,7 +885,7 @@ impl Native {
             }
             let nparams = t.params.len();
             let lay = layout().filter(|_| inline_rc());
-            let needs_lay = this_slot.is_some() || class_ty.iter().any(Option::is_some);
+            let needs_lay = this_slot.is_some() || class_ty.iter().any(Option::is_some) || !t.captured.is_empty();
             if inline_bind && (!needs_lay || lay.is_some()) {
                 // Argument count in range: move args into the parameter slots
                 // inline (defaults for the missing ones).
@@ -949,6 +979,31 @@ impl Native {
                     }
                     l.b.switch_to_block(next);
                 }
+                // Captured values come from the closure the call site put in
+                // the frame: present, with as many values as `use` names, all
+                // by value (checked before anything moves).
+                let capt = match (t.captured.is_empty(), lay) {
+                    (false, Some(lay)) => {
+                        let frame = l.b.ins().load(types::I64, flags, cxv, lay.cx_frame);
+                        let cd = l.b.ins().load(types::I64, flags, frame, lay.frame_closure);
+                        let (c1, c2) = (l.b.create_block(), l.b.create_block());
+                        l.b.ins().brif(cd, c1, &[], helper_b, &[]);
+                        l.b.switch_to_block(c1);
+                        let len = l.b.ins().load(types::I64, flags, cd, lay.cd_capt_len);
+                        let same = l.b.ins().icmp_imm_s(IntCC::Equal, len, t.captured.len() as i64);
+                        l.b.ins().brif(same, c2, &[], helper_b, &[]);
+                        l.b.switch_to_block(c2);
+                        let base = l.b.ins().load(types::I64, flags, cd, lay.cd_capt_ptr);
+                        for j in 0..t.captured.len() {
+                            let by_ref = l.b.ins().load(types::I8, flags, base, j as i32 * lay.capt_size + lay.capt_ref);
+                            let next = l.b.create_block();
+                            l.b.ins().brif(by_ref, helper_b, &[], next, &[]);
+                            l.b.switch_to_block(next);
+                        }
+                        Some((base, lay))
+                    }
+                    _ => None,
+                };
                 let null = l.b.ins().iconst(types::I64, tag::NULL as i64);
                 for i in 0..nparams {
                     let dst = l.b.ins().stack_addr(types::I64, locals_slot, (i * 16) as i32);
@@ -979,6 +1034,28 @@ impl Native {
                     l.b.ins().store(flags, null, src, 0);
                     l.b.ins().jump(next, &[]);
                     l.b.switch_to_block(next);
+                }
+                if let Some((base, lay)) = capt {
+                    // A copy of each (a count bump for counted values).
+                    for (j, name) in t.captured.iter().enumerate() {
+                        let slot = a.locals.index[name] as usize;
+                        let src = l.b.ins().iadd_imm_s(base, (j as i32 * lay.capt_size + lay.capt_val) as i64);
+                        let dst = l.b.ins().stack_addr(types::I64, locals_slot, (slot * 16) as i32);
+                        let w0 = l.b.ins().load(types::I64, flags, src, 0);
+                        let w1 = l.b.ins().load(types::I64, flags, src, 8);
+                        let tg = l.b.ins().ireduce(types::I8, w0);
+                        let counted = l.b.ins().icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, tg, tag::STR as i64);
+                        let (bump, next) = (l.b.create_block(), l.b.create_block());
+                        l.b.ins().brif(counted, bump, &[], next, &[]);
+                        l.b.switch_to_block(bump);
+                        let rc = l.b.ins().load(types::I64, flags, w1, 0);
+                        let rc = l.b.ins().iadd_imm_s(rc, 1);
+                        l.b.ins().store(flags, rc, w1, 0);
+                        l.b.ins().jump(next, &[]);
+                        l.b.switch_to_block(next);
+                        l.b.ins().store(flags, w0, dst, 0);
+                        l.b.ins().store(flags, w1, dst, 8);
+                    }
                 }
                 let zero = l.b.ins().iconst(types::I64, 0);
                 l.b.ins().jump(bound, &[zero.into()]);
