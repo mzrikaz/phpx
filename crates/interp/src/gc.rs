@@ -18,7 +18,6 @@ use std::cell::{Cell, UnsafeCell};
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
 
-use rustc_hash::FxHashMap;
 
 use crate::interp::Callable;
 use crate::value::{destruct_pending, Internal, Obj, Value, DESTRUCT_QUEUE};
@@ -306,43 +305,58 @@ fn visit_obj(o: &Obj, f: &mut dyn FnMut(*const Obj)) -> bool {
 /// Run a collection. Returns the number of objects freed. Must be called at
 /// a safe point (no property or array borrows held by the caller).
 pub fn collect() -> usize {
-    let ptrs: Vec<*const Obj> = ST.with(|st| st.store().iter().filter(|&&e| e != 0 && e & 1 == 0).map(|&e| e as *const Obj).collect());
-    let n = ptrs.len();
+    // Registered objects by handle (the registry index): 0 where none.
+    let ptrs: Vec<*const Obj> = ST.with(|st| st.store().iter().map(|&e| if e != 0 && e & 1 == 0 { e as *const Obj } else { std::ptr::null() }).collect());
     ST.with(|st| st.runs.set(st.runs.get() + 1));
     ST.with(|st| st.since.set(0));
-    if n == 0 {
+    let n = ptrs.len();
+    let scanned = ptrs.iter().filter(|p| !p.is_null()).count();
+    if scanned == 0 {
         return 0;
     }
-    let index: FxHashMap<usize, usize> = ptrs.iter().enumerate().map(|(i, p)| (*p as usize, i)).collect();
-    let mut internal = vec![0usize; n];
-    let mut edges: Vec<Vec<u32>> = vec![vec![]; n];
+    // References from registered objects to registered objects: counted
+    // per target, and kept as edges (one flat list, `start[i]..start[i+1]`
+    // for object i).
+    let mut internal = vec![0u32; n];
+    let mut edges: Vec<u32> = Vec::with_capacity(scanned * 2);
+    let mut start = vec![0u32; n + 1];
     let mut opaque = vec![false; n];
     for (i, &p) in ptrs.iter().enumerate() {
+        start[i] = edges.len() as u32;
+        if p.is_null() {
+            continue;
+        }
         // SAFETY: registry entries are live; nothing is dropped during the scan.
         let o = unsafe { &*p };
         let ok = visit_obj(o, &mut |c| {
-            if let Some(&j) = index.get(&(c as usize)) {
+            // (An object being destroyed has left the registry.)
+            let j = unsafe { (*c).id } as usize;
+            if ptrs.get(j) == Some(&c) {
                 internal[j] += 1;
-                edges[i].push(j as u32);
+                edges.push(j as u32);
             }
         });
         if !ok {
             opaque[i] = true;
         }
     }
+    start[n] = edges.len() as u32;
     // Externally referenced objects are roots; mark what they reach.
     let mut live = vec![false; n];
     let mut stack: Vec<usize> = vec![];
     for (i, &p) in ptrs.iter().enumerate() {
+        if p.is_null() {
+            continue;
+        }
         // SAFETY: as above; ManuallyDrop keeps the count unchanged.
         let rc = ManuallyDrop::new(unsafe { Rc::from_raw(p) });
-        if opaque[i] || Rc::strong_count(&rc) > internal[i] {
+        if opaque[i] || Rc::strong_count(&rc) > internal[i] as usize {
             live[i] = true;
             stack.push(i);
         }
     }
     while let Some(i) = stack.pop() {
-        for &j in &edges[i] {
+        for &j in &edges[start[i] as usize..start[i + 1] as usize] {
             let j = j as usize;
             if !live[j] {
                 live[j] = true;
@@ -351,7 +365,7 @@ pub fn collect() -> usize {
         }
     }
     let garbage: Vec<Rc<Obj>> = (0..n)
-        .filter(|&i| !live[i])
+        .filter(|&i| !ptrs[i].is_null() && !live[i])
         .map(|i| {
             // SAFETY: take a new strong reference to keep it alive while we work.
             unsafe {
@@ -361,7 +375,7 @@ pub fn collect() -> usize {
         })
         .collect();
     if garbage.is_empty() {
-        adapt(n, 0);
+        adapt(scanned, 0);
         return 0;
     }
     // Destructors first (PHP semantics); the cycles are broken next time.
@@ -390,13 +404,21 @@ pub fn collect() -> usize {
     drop(doomed);
     drop(garbage);
     ST.with(|st| st.collected.set(st.collected.get() + count as u64));
-    adapt(n, count);
+    adapt(scanned, count);
     count
 }
 
 /// Next run after max(10k, live objects) new ones: amortized O(1) per
-/// allocation, like PHP's growing root buffer.
+/// allocation, like PHP's growing root buffer. A run that found (almost)
+/// no garbage doubles the wait, up to 4 times the live objects: code
+/// that makes no cycles (most code: trees, lists, value objects) pays
+/// little for scans of the whole heap. (PHP raises its threshold the same
+/// way when a run frees under 100 roots.)
 fn adapt(scanned: usize, freed: usize) {
     let live = scanned - freed;
-    ST.with(|st| st.threshold.set(live.max(MIN_THRESHOLD)));
+    ST.with(|st| {
+        let base = live.max(MIN_THRESHOLD);
+        let next = if freed < 100 { (st.threshold.get() * 2).clamp(base, base * 4) } else { base };
+        st.threshold.set(next);
+    });
 }
