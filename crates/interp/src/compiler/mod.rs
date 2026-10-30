@@ -1363,9 +1363,13 @@ impl Interp {
     /// A function already called a few times whose loops are hot: compile
     /// it on its next call (true), rather than entering its loop natively
     /// now.
-    pub fn promote_native(&self, fn_id: usize) -> bool {
+    pub fn promote_native(&self, fn_id: usize, loop_stmt: &'static ast::Stmt) -> bool {
         let Ok(mut guard) = self.native.try_borrow_mut() else { return false };
         let Some(n) = guard.as_mut() else { return false };
+        // (A loop entry compiled already is used.)
+        if n.osr.contains_key(&(loop_stmt as *const ast::Stmt as usize)) {
+            return false;
+        }
         let threshold = n.threshold;
         match n.hot.get_mut(&fn_id) {
             Some((calls, _)) if *calls >= 10 && *calls < threshold => {
