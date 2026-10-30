@@ -1243,6 +1243,47 @@ unsafe fn keys_of(it: &Interp, keys: *const Value, n: u64, append: u64) -> R<Vec
     Ok(path)
 }
 
+/// `$a[k1][k2]... = v` with integer and string keys through arrays (missing
+/// levels become new arrays, as on the general path): false (nothing
+/// written) for anything else.
+unsafe fn nested_set_fast(root: *mut Value, keys: *const Value, n: usize, val: *mut Value) -> bool {
+    let keys = std::slice::from_raw_parts(keys, n);
+    if !keys.iter().all(|k| matches!(k, Value::Int(_) | Value::Str(_))) || !matches!(&*root, Value::Array(_)) {
+        return false;
+    }
+    let mut cur = root;
+    for (i, k) in keys.iter().enumerate() {
+        let Value::Array(a) = &mut *cur else { return false };
+        let arr = Rc::make_mut(a);
+        let kr = match k {
+            Value::Str(s) => KeyRef::from_bytes(s),
+            Value::Int(n) => KeyRef::Int(*n),
+            _ => unreachable!(),
+        };
+        let key = || match k {
+            Value::Str(s) => Key::from_pstr(s),
+            _ => Key::Int(if let KeyRef::Int(n) = kr { n } else { unreachable!() }),
+        };
+        if i + 1 == n {
+            match arr.get_mut_ref(kr) {
+                Some(Value::Ref(_)) => return false,
+                Some(e) => drop(std::mem::replace(e, take(val))),
+                None => arr.insert_absent(key(), take(val)),
+            }
+            return true;
+        }
+        cur = match arr.get_mut_ref(kr) {
+            Some(e @ Value::Array(_)) => e as *mut Value,
+            Some(_) => return false,
+            None => {
+                arr.insert_absent(key(), Value::array(PhpArray::new()));
+                arr.get_mut_ref(kr).unwrap() as *mut Value
+            }
+        };
+    }
+    false
+}
+
 /// `root[keys...] = val` (or `->name[keys...]` when `name` is set; root is
 /// then the object). `val` is consumed. Writes the assigned value to `dst`
 /// when non-null.
@@ -1259,6 +1300,15 @@ pub unsafe extern "C" fn rt_place_assign(
     dst: *mut Value,
 ) -> u64 {
     let (it, f) = cx(c);
+    if name.is_null() && append == 0 {
+        let copy = (!dst.is_null()).then(|| (*val).clone());
+        if nested_set_fast(root, keys, n as usize, val) {
+            if let Some(v) = copy {
+                put(dst, v);
+            }
+            return 0;
+        }
+    }
     let v = take(val);
     // `$obj->prop[k] = v` / `$obj->prop[] = v` on a visible, writable
     // property holding an array: write the element in place.
