@@ -62,4 +62,7 @@ int(4)
 [1,2,0,1,2]
 [1,2,0,1,2]
 [1,2,0,1,2]
+["one","not two",false,"two","is two",true,"three","not two",true,"4","not two",true,"uno","not two",true]
+["one","not two",false,"two","is two",true,"three","not two",true,"4","not two",true,"uno","not two",true]
+["one","not two",false,"two","is two",true,"three","not two",true,"4","not two",true,"uno","not two",true]
 D gone

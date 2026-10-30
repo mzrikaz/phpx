@@ -2266,16 +2266,27 @@ impl<'a> Lower<'a> {
     #[allow(clippy::too_many_arguments)]
     fn accessor(&mut self, lay: super::Layout, sp: CValue, rc: CValue, cls: CValue, scope: CValue, aa: CValue, nargs: usize, (t, done): (usize, Block), miss: Block) {
         use super::rt::{Accessor, MethodSite, ACC_CONST, ACC_SET, ACC_SET_THIS, ACC_SLOT};
-        let acc = std::mem::offset_of!(MethodSite, acc) as i32;
-        let off = |f: usize| acc + f as i32;
-        let want = self.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, class)));
-        let same = self.b.ins().icmp(IntCC::Equal, cls, want);
-        let want = self.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, scope)));
-        let same2 = self.b.ins().icmp(IntCC::Equal, scope, want);
-        let both = self.b.ins().band(same, same2);
-        let hit = self.b.create_block();
-        self.b.ins().brif(both, hit, &[], miss, &[]);
+        // Either entry of the site's (for this class and calling scope);
+        // `base` then addresses it.
+        let acc = std::mem::offset_of!(MethodSite, acc) as i64;
+        let (hit, try2) = (self.b.create_block(), self.b.create_block());
+        self.b.append_block_param(hit, types::I64);
+        for (i, next) in [(0, try2), (1, miss)] {
+            let base = self.b.ins().iadd_imm_s(sp, acc + (i * std::mem::size_of::<Accessor>()) as i64);
+            let want = self.b.ins().load(types::I64, flags(), base, std::mem::offset_of!(Accessor, class) as i32);
+            let same = self.b.ins().icmp(IntCC::Equal, cls, want);
+            let want = self.b.ins().load(types::I64, flags(), base, std::mem::offset_of!(Accessor, scope) as i32);
+            let same2 = self.b.ins().icmp(IntCC::Equal, scope, want);
+            let both = self.b.ins().band(same, same2);
+            self.b.ins().brif(both, hit, &[base.into()], next, &[]);
+            if i == 0 {
+                self.b.switch_to_block(next);
+            }
+        }
         self.b.switch_to_block(hit);
+        let base = self.b.block_params(hit)[0];
+        let off = |f: usize| f as i32;
+        let sp = base;
         let kind = self.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, kind)));
         // The slot of objects of the cached shape, and its tag.
         let slot_of = |l: &mut Self| {

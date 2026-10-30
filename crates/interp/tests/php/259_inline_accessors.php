@@ -45,3 +45,12 @@ for ($k = 0; $k < 3; $k++) probe([new R, new R, new R]);
 class A { public $a = [1, 2]; function a() { return $this->a; } function setA($a) { $this->a = $a; } }
 function arrays() { $o = new A; for ($i = 0; $i < 3; $i++) { $x = $o->a(); $x[] = $i; $o->setA($x); } return $o->a(); }
 for ($k = 0; $k < 3; $k++) echo json_encode(arrays()), "\n";
+
+// One call site, several classes (an interface's): each answered as its own.
+interface Named { function name(): string; }
+class N1 implements Named { function __construct(private string $n) {} function name(): string { return $this->n; } }
+class N2 implements Named { protected string $label = "two"; function name(): string { return $this->label; } }
+class N3 implements Named { function name(): string { return "three"; } }
+class N4 implements Named { public $v = 4; function name(): string { return $this->v; } }
+function names(array $xs) { $out = []; foreach ($xs as $x) { $out[] = $x->name(); $out[] = $x->name() === 'two' ? 'is two' : 'not two'; $out[] = $x->name() !== 'one'; } return $out; }
+for ($k = 0; $k < 3; $k++) echo json_encode(names([new N1("one"), new N2, new N3, new N4, new N1("uno")])), "\n";

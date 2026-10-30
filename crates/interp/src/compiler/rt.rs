@@ -2406,8 +2406,10 @@ pub struct MethodSite {
     pub poly: std::cell::RefCell<Vec<PolyEntry>>,
     /// A trivial getter found here (`return $this->prop;` or a literal):
     /// answered without calling it.
-    pub getter: std::cell::RefCell<Option<Getter>>,
-    pub acc: Accessor,
+    pub getter: std::cell::RefCell<[Option<Getter>; 2]>,
+    /// The same for generated code: two classes' accessors (code that
+    /// sees two classes, like an interface's).
+    pub acc: [Accessor; 2],
     /// The callable name last called through this site (`$f(...)`,
     /// `call_user_func('name', ...)`) and what it names.
     pub dynamic: DynCache,
@@ -2530,8 +2532,15 @@ fn this_prop(e: &ast::Expr) -> Option<&'static str> {
 }
 
 /// Cache `m` at `site` for this object if it is a trivial getter (no
-/// arguments) or setter (one).
-unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, f: &Frame, m: &Rc<crate::class::Method>, n: u64) {
+/// arguments) or setter (one), beside another class's.
+unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, scope: usize, m: &Rc<crate::class::Method>, n: u64) {
+    let word = *(std::ptr::addr_of!(o.class) as *const usize);
+    // (Each entry is filled once per request: a site that sees more
+    // classes calls the others.)
+    if site.acc.iter().any(|a| a.class.get() == word && a.scope.get() == scope) {
+        return;
+    }
+    let Some(i) = site.acc.iter().position(|a| a.class.get() == 0) else { return };
     let Some(func) = accessor_body(m, n) else { return };
     let Some(body) = func.body.as_deref() else { return };
     let ret = Quick::of(func.ret.as_ref());
@@ -2615,7 +2624,8 @@ unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, f: &Frame
         }
         _ => return,
     };
-    let acc = &site.acc;
+    let acc = &site.acc[i];
+    acc.class.set(0);
     match &kind {
         GetterKind::Slot { shape, slot, mask } | GetterKind::Set { shape, slot, mask } => {
             acc.shape.set(*shape);
@@ -2625,19 +2635,16 @@ unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, f: &Frame
         GetterKind::Const(v) => *acc.value.get() = v.clone(),
     }
     acc.kind.set(code);
-    acc.scope.set(scope_key(f));
-    acc.class.set(*(std::ptr::addr_of!(o.class) as *const usize));
-    *site.getter.borrow_mut() = Some(Getter { class: o.class.clone(), scope: scope_key(f), kind });
+    acc.scope.set(scope);
+    site.getter.borrow_mut()[i] = Some(Getter { class: o.class.clone(), scope, kind });
+    acc.class.set(word);
 }
 
 /// The cached getter's answer for this object, if it applies.
 #[inline]
 unsafe fn getter_value(site: &MethodSite, o: &Obj, f: &Frame) -> Option<Value> {
     let g = site.getter.borrow();
-    let g = g.as_ref()?;
-    if !Rc::ptr_eq(&g.class, &o.class) || g.scope != scope_key(f) {
-        return None;
-    }
+    let g = g.iter().flatten().find(|g| Rc::ptr_eq(&g.class, &o.class) && g.scope == scope_key(f))?;
     match &g.kind {
         GetterKind::Const(v) => Some(v.clone()),
         GetterKind::Slot { shape, slot, mask } => {
@@ -3060,7 +3067,7 @@ pub unsafe extern "C" fn rt_method_call(
             site.direct_class.set(*(std::ptr::addr_of!(o.class) as *const usize));
             site.direct_scope.set(scope_key(f));
             if n <= 1 {
-                remember_getter(it, site, o, f, &m, n);
+                remember_getter(it, site, o, scope_key(f), &m, n);
             }
             Some(mc)
         });
@@ -3087,8 +3094,8 @@ pub unsafe extern "C" fn rt_method_call(
             // Not compiled (yet): the interpreter, without another lookup.
             let known = site.interp.borrow().as_ref().filter(|e| (e.0, e.1) == key).map(|e| e.2.clone());
             if let Some(m) = known.filter(|m| matches!(m.body, crate::class::MethodBody::User(f) if f.body.is_some())) {
-                if n == 0 && site.getter.borrow().is_none() {
-                    remember_getter(it, site, o, f, &m, 0);
+                if n == 0 && site.getter.borrow()[0].is_none() {
+                    remember_getter(it, site, o, scope_key(f), &m, 0);
                     if let Some(v) = getter_value(site, o, f) {
                         put(dst, v);
                         return 0;
@@ -3145,6 +3152,9 @@ unsafe fn poly_call(
         let class_word = *(std::ptr::addr_of!(o.class) as *const usize);
         let direct = !m.is_static && crate::call::method_params(m).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
         let sec = &site.second;
+        if n <= 1 && sec.class.get() != class_word {
+            remember_getter(it, site, o, scope, m, n);
+        }
         if direct && (sec.class.get() != class_word || sec.scope.get() != scope || sec.entry.get() != entry as usize) {
             sec.frame.invalidate();
             sec.entry.set(entry as usize);
@@ -4450,8 +4460,8 @@ impl MethodSite {
         self.cached.set(None);
         *self.interp.borrow_mut() = None;
         self.poly.borrow_mut().clear();
-        *self.getter.borrow_mut() = None;
-        self.acc.clear();
+        *self.getter.borrow_mut() = Default::default();
+        self.acc.iter().for_each(Accessor::clear);
     }
 }
 
