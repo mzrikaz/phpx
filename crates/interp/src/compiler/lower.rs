@@ -120,6 +120,10 @@ pub struct Lower<'a> {
     /// Inside a speculated call statement: the reads made before the call
     /// (by node address) and the call's float result.
     pre: Option<(HashMap<usize, CValue>, CValue)>,
+    /// Inside speculated code: object locals already checked in this run of
+    /// statements, with their shape, slot storage and the calling scope
+    /// (see `spec::ObjFact`).
+    obj_facts: HashMap<u32, spec::ObjFact>,
     /// The interpreter compiling (for looking up functions to inline) and
     /// the namespace context of the code.
     pub interp: *const crate::interp::Interp,
@@ -274,6 +278,7 @@ impl<'a> Lower<'a> {
             stmt_start: u32::MAX,
             spec: None,
             spec_on: false,
+            obj_facts: HashMap::new(),
             spec_entries: HashMap::new(),
             spec_done: Default::default(),
             spec_osr: None,

@@ -34,6 +34,17 @@ enum Ty {
     X,
 }
 
+/// An object local checked once in a run of speculated statements: the
+/// shape of its properties, their slot storage and the calling scope.
+/// Valid until something could change the variable or reallocate the
+/// object's slots: a generic statement, a call, a loop boundary.
+#[derive(Clone, Copy)]
+pub(super) struct ObjFact {
+    shape: CValue,
+    data: CValue,
+    scope: CValue,
+}
+
 /// One speculated loop.
 pub(super) struct Plan {
     /// Candidate local -> (its f64 variable, its "assigned" flag).
@@ -246,7 +257,9 @@ impl<'a> Lower<'a> {
         }
         let saved = std::mem::replace(&mut self.spec, Some(plan));
         self.spec_on = true;
+        self.obj_facts.clear();
         let r = self.spec_loop(s);
+        self.obj_facts.clear();
         self.spec_on = false;
         let plan = std::mem::replace(&mut self.spec, saved).expect("plan");
         r?;
@@ -381,6 +394,7 @@ impl<'a> Lower<'a> {
     }
 
     fn spec_body(&mut self, body: &'static [Stmt], cont: Block, exit: Block) -> L<()> {
+        self.obj_facts.clear();
         self.loops.push((cont, exit, self.handlers.len()));
         self.terminated = false;
         self.boundary_check();
@@ -398,7 +412,11 @@ impl<'a> Lower<'a> {
         self.stmt_start = s.span.start;
         let fb = self.spec.as_ref().expect("plan").entries[&(s as *const Stmt as usize)];
         match &s.kind {
-            StmtKind::For { .. } | StmtKind::While { .. } => return self.spec_loop(s),
+            StmtKind::For { .. } | StmtKind::While { .. } => {
+                let r = self.spec_loop(s);
+                self.obj_facts.clear();
+                return r;
+            }
             StmtKind::Expr(e) => match &e.kind {
                 ExprKind::Assign { target, value } | ExprKind::AssignOp { target, value, .. } => {
                     let op = match &e.kind {
@@ -431,8 +449,7 @@ impl<'a> Lower<'a> {
                                 let fail = self.fail_block(fb);
                                 let r = self.fexpr(value, fail)?;
                                 let oi = self.locals.index[o.as_str()];
-                                let oa = self.local_addr(oi);
-                                self.float_prop_update(oa, &name.name, op, r, fail);
+                                self.float_prop_update(oi, &name.name, op, r, fail);
                                 return Ok(());
                             }
                         }
@@ -454,6 +471,7 @@ impl<'a> Lower<'a> {
             self.spill(&plan);
             self.spec = Some(plan);
         }
+        self.obj_facts.clear();
         self.stmt(s)
     }
 
@@ -469,6 +487,7 @@ impl<'a> Lower<'a> {
         self.prefetch(value, fail, &mut pre)?;
         let call = self.find_call(value).expect("one call");
         let r = self.expr(call)?;
+        self.obj_facts.clear();
         let r = self.materialize(r);
         let ra = self.addr(r).unwrap();
         let tg = self.load_tag(ra);
@@ -842,8 +861,7 @@ impl<'a> Lower<'a> {
             }
             ExprKind::Prop { object, name: MemberName::Ident(name), .. } => {
                 let ExprKind::Var(o) = &object.kind else { unreachable!() };
-                let oa = self.local_addr(self.locals.index[o.as_str()]);
-                self.peek_prop(oa, &name.name, fail, true)?
+                self.peek_prop(self.locals.index[o.as_str()], &name.name, fail, true)?
             }
             ExprKind::Index { base, index: Some(k) } => {
                 let ExprKind::Var(b) = &base.kind else { unreachable!() };
@@ -930,11 +948,58 @@ impl<'a> Lower<'a> {
     /// readonly, visible, untyped or float-typed): the payload replaced in
     /// place. Anything else fills the cache and goes to `fail` (nothing
     /// was written).
-    fn float_prop_update(&mut self, oa: CValue, name: &'static str, op: Option<BinOp>, x: CValue, fail: Block) {
+    /// The checked object in local `oi` (checked now if it isn't yet; not
+    /// an object: `fail`).
+    fn obj_fact(&mut self, oi: u32, fail: Block) -> Option<ObjFact> {
+        if let Some(f) = self.obj_facts.get(&oi) {
+            return Some(*f);
+        }
+        let lay = crate::compiler::layout()?;
+        let oa = self.local_addr(oi);
+        let tg = self.load_tag(oa);
+        let is_obj = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::OBJECT as i64);
+        let ok = self.b.create_block();
+        self.b.ins().brif(is_obj, ok, &[], fail, &[]);
+        self.b.switch_to_block(ok);
+        let rc = self.b.ins().load(types::I64, flags(), oa, tag::PAYLOAD);
+        let props = self.b.ins().iadd_imm_s(rc, lay.obj_props as i64);
+        let shape = self.b.ins().load(types::I64, flags(), props, 0);
+        let data = self.b.ins().load(types::I64, flags(), props, 8);
+        let frame = self.b.ins().load(types::I64, flags(), self.cx, lay.cx_frame);
+        let scope = self.b.ins().load(types::I64, flags(), frame, lay.frame_class);
+        let f = ObjFact { shape, data, scope };
+        self.obj_facts.insert(oi, f);
+        Some(f)
+    }
+
+    /// The slot a property site cached for the checked object `f` (its
+    /// shape and scope), unless empty or a reference; else `miss`.
+    fn fact_slot(&mut self, f: ObjFact, site_v: CValue, offs: (i32, i32, i32), miss: Block) -> CValue {
+        let (shape_off, slot_off, scope_off) = offs;
+        let want = self.b.ins().load(types::I64, flags(), site_v, shape_off);
+        let same = self.b.ins().icmp(IntCC::Equal, f.shape, want);
+        let want = self.b.ins().load(types::I64, flags(), site_v, scope_off);
+        let same2 = self.b.ins().icmp(IntCC::Equal, f.scope, want);
+        let both = self.b.ins().band(same, same2);
+        let hit = self.b.create_block();
+        self.b.ins().brif(both, hit, &[], miss, &[]);
+        self.b.switch_to_block(hit);
+        let slot = self.b.ins().load(types::I64, flags(), site_v, slot_off);
+        let off = self.b.ins().ishl_imm_u(slot, 4);
+        self.b.ins().iadd(f.data, off)
+    }
+
+    /// `$obj->name = x` / `$obj->name op= x` for a float `x`, on a slot
+    /// that holds a float and that the write cache allows writing (not
+    /// readonly, visible, untyped or float-typed): the payload replaced in
+    /// place. Anything else fills the cache and goes to `fail` (nothing
+    /// was written).
+    fn float_prop_update(&mut self, oi: u32, name: &'static str, op: Option<BinOp>, x: CValue, fail: Block) {
+        use crate::compiler::rt::{PROPSITE_WSCOPE, PROPSITE_WSHAPE, PROPSITE_WSLOT};
         let site = Box::new(crate::compiler::rt::PropSite::new(name));
         let sp = &*site as *const crate::compiler::rt::PropSite as i64;
         self.psites.push(site);
-        let Some(lay) = crate::compiler::layout() else {
+        let Some(f) = self.obj_fact(oi, fail) else {
             self.b.ins().jump(fail, &[]);
             let dead = self.b.create_block();
             self.b.switch_to_block(dead);
@@ -943,8 +1008,8 @@ impl<'a> Lower<'a> {
         let miss = self.b.create_block();
         self.b.set_cold_block(miss);
         let site_v = self.iconst(sp);
-        let props = self.prop_guard(lay, oa, site_v, crate::compiler::rt::PROPSITE_WSHAPE, crate::compiler::rt::PROPSITE_WSCOPE, miss);
-        let p = self.prop_slot(lay, props, site_v, crate::compiler::rt::PROPSITE_WSLOT, miss);
+        // (The slot holds a float: never empty or a reference.)
+        let p = self.fact_slot(f, site_v, (PROPSITE_WSHAPE, PROPSITE_WSLOT, PROPSITE_WSCOPE), miss);
         let tg = self.load_tag(p);
         let is_f = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::FLOAT as i64);
         let hit = self.b.create_block();
@@ -962,24 +1027,27 @@ impl<'a> Lower<'a> {
         self.b.ins().jump(cont, &[]);
         self.b.switch_to_block(miss);
         let site_v = self.iconst(sp);
+        let oa = self.local_addr(oi);
         self.call("rt_arith_fill", &[self.cx, oa, site_v]);
         self.b.ins().jump(fail, &[]);
         self.b.switch_to_block(cont);
     }
 
-    fn peek_prop(&mut self, oa: CValue, name: &'static str, fail: Block, float_only: bool) -> L<CValue> {
+    fn peek_prop(&mut self, oi: u32, name: &'static str, fail: Block, float_only: bool) -> L<CValue> {
+        use crate::compiler::rt::{PROPSITE_SCOPE, PROPSITE_SHAPE, PROPSITE_SLOT};
         let site = Box::new(crate::compiler::rt::PropSite::new(name));
         let sp = &*site as *const crate::compiler::rt::PropSite as i64;
         self.psites.push(site);
+        let oa = self.local_addr(oi);
         let (miss, merge) = (self.b.create_block(), self.b.create_block());
         self.b.append_block_param(merge, types::F64);
         self.b.set_cold_block(miss);
-        match crate::compiler::layout() {
-            Some(lay) => {
-                // Hit: the number straight from the property's slot.
+        match self.obj_fact(oi, fail) {
+            Some(f) => {
+                // Hit: the number straight from the property's slot (a
+                // number: neither empty nor a reference).
                 let site_v = self.iconst(sp);
-                let props = self.prop_guard(lay, oa, site_v, crate::compiler::rt::PROPSITE_SHAPE, crate::compiler::rt::PROPSITE_SCOPE, miss);
-                let p = self.prop_slot(lay, props, site_v, crate::compiler::rt::PROPSITE_SLOT, miss);
+                let p = self.fact_slot(f, site_v, (PROPSITE_SHAPE, PROPSITE_SLOT, PROPSITE_SCOPE), miss);
                 let x = self.num_at(p, fail, float_only);
                 self.b.ins().jump(merge, &[x.into()]);
             }
