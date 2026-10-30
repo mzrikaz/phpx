@@ -114,6 +114,23 @@ pub mod tag {
     pub const RESOURCE: u8 = 8;
     /// Payload offset.
     pub const PAYLOAD: i32 = 8;
+
+    /// The tag byte of `v`.
+    #[inline]
+    pub fn of(v: &super::Value) -> u8 {
+        use super::Value as V;
+        match v {
+            V::Null => NULL,
+            V::Bool(_) => BOOL,
+            V::Int(_) => INT,
+            V::Float(_) => FLOAT,
+            V::Str(_) => STR,
+            V::Array(_) => ARRAY,
+            V::Object(_) => OBJECT,
+            V::Ref(_) => REF,
+            V::Resource(_) => RESOURCE,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

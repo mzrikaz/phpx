@@ -2086,7 +2086,7 @@ impl<'a> Lower<'a> {
                     let sp = self.iconst(sp);
                     let meta = self.arg_meta(args);
                     let r = match super::layout().filter(|_| super::inline_rc() && args.iter().all(|a| !a.spread && a.name.is_none())) {
-                        Some(lay) => self.direct_method_call(lay, oa, sp, aa, n_, la, meta),
+                        Some(lay) => self.direct_method_call(lay, oa, sp, aa, n_, la, meta, args.len()),
                         None => self.helper_value("rt_method_call", |l| vec![l.cx, oa, sp, aa, n_, la, meta])?,
                     };
                     self.write_back(la, args.len())?;
@@ -2173,7 +2173,7 @@ impl<'a> Lower<'a> {
             lay.site_frame,
             aa,
             n,
-            |l, slow| {
+            |l, slow, _| {
                 let entry = l.b.ins().load(types::I64, flags(), sp, lay.site_direct);
                 let c1 = l.b.create_block();
                 l.b.ins().brif(entry, c1, &[], slow, &[]);
@@ -2187,14 +2187,15 @@ impl<'a> Lower<'a> {
     /// `$o->m(...)`: like `direct_call`, for an object of the cached class
     /// called from the cached scope; `$this` is lent to the site's frame.
     #[allow(clippy::too_many_arguments)]
-    fn direct_method_call(&mut self, lay: super::Layout, oa: CValue, sp: CValue, aa: CValue, n: CValue, la: CValue, meta: CValue) -> Op {
+    #[allow(clippy::too_many_arguments)]
+    fn direct_method_call(&mut self, lay: super::Layout, oa: CValue, sp: CValue, aa: CValue, n: CValue, la: CValue, meta: CValue, nargs: usize) -> Op {
         self.emit_direct(
             lay,
             sp,
             lay.msite_frame,
             aa,
             n,
-            |l, slow| {
+            |l, slow, out_t| {
                 use super::rt::{MethodSite, SecondEntry};
                 let second = std::mem::offset_of!(MethodSite, second) as i32;
                 let tg = l.load_tag(oa);
@@ -2226,7 +2227,11 @@ impl<'a> Lower<'a> {
                     l.b.switch_to_block(go);
                     l.b.ins().jump(out, &[entry.into(), frames.into()]);
                 };
-                l.b.ins().jump(first, &[]);
+                if nargs <= 1 {
+                    l.accessor(lay, sp, rc, cls, scope, aa, nargs, out_t, first);
+                } else {
+                    l.b.ins().jump(first, &[]);
+                }
                 l.b.switch_to_block(first);
                 entry_for(l, lay.msite_class, lay.msite_scope, lay.msite_direct, lay.msite_frame, try2);
                 l.b.switch_to_block(try2);
@@ -2246,6 +2251,113 @@ impl<'a> Lower<'a> {
         )
     }
 
+    /// A cached trivial getter or setter (`rt::Accessor`) of the object's
+    /// class answered without calling it: the result goes to temp `t` and
+    /// on to `done`; anything else continues at `miss`.
+    #[allow(clippy::too_many_arguments)]
+    fn accessor(&mut self, lay: super::Layout, sp: CValue, rc: CValue, cls: CValue, scope: CValue, aa: CValue, nargs: usize, (t, done): (usize, Block), miss: Block) {
+        use super::rt::{Accessor, MethodSite, ACC_CONST, ACC_SET, ACC_SET_THIS, ACC_SLOT};
+        let acc = std::mem::offset_of!(MethodSite, acc) as i32;
+        let off = |f: usize| acc + f as i32;
+        let want = self.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, class)));
+        let same = self.b.ins().icmp(IntCC::Equal, cls, want);
+        let want = self.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, scope)));
+        let same2 = self.b.ins().icmp(IntCC::Equal, scope, want);
+        let both = self.b.ins().band(same, same2);
+        let hit = self.b.create_block();
+        self.b.ins().brif(both, hit, &[], miss, &[]);
+        self.b.switch_to_block(hit);
+        let kind = self.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, kind)));
+        // The slot of objects of the cached shape, and its tag.
+        let slot_of = |l: &mut Self| {
+            let props = l.b.ins().iadd_imm_s(rc, lay.obj_props as i64);
+            let shape = l.b.ins().load(types::I64, flags(), props, 0);
+            let want = l.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, shape)));
+            let same = l.b.ins().icmp(IntCC::Equal, shape, want);
+            let ok = l.b.create_block();
+            l.b.ins().brif(same, ok, &[], miss, &[]);
+            l.b.switch_to_block(ok);
+            let data = l.b.ins().load(types::I64, flags(), props, 8);
+            let slot = l.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, slot)));
+            let o = l.b.ins().ishl_imm_u(slot, 4);
+            l.b.ins().iadd(data, o)
+        };
+        // Is tag `vt` one the cached mask accepts? (The empty slot's tag
+        // is above every value's, so no bit of the mask.)
+        let accepts = |l: &mut Self, vt: CValue| {
+            let mask = l.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, mask)));
+            let w = l.b.ins().uextend(types::I64, vt);
+            let bits = l.b.ins().ushr(mask, w);
+            l.b.ins().band_imm_u(bits, 1)
+        };
+        if nargs == 0 {
+            let (cnst, other, slotb) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+            let is_const = self.b.ins().icmp_imm_u(IntCC::Equal, kind, ACC_CONST as i64);
+            self.b.ins().brif(is_const, cnst, &[], other, &[]);
+            self.b.switch_to_block(cnst);
+            let va = self.b.ins().iadd_imm_s(sp, off(std::mem::offset_of!(Accessor, value)) as i64);
+            let ta = self.temp_addr(t);
+            self.store_into(ta, Op::Ptr(va, None));
+            self.b.ins().jump(done, &[]);
+            self.b.switch_to_block(other);
+            let is_slot = self.b.ins().icmp_imm_u(IntCC::Equal, kind, ACC_SLOT as i64);
+            self.b.ins().brif(is_slot, slotb, &[], miss, &[]);
+            self.b.switch_to_block(slotb);
+            let p = slot_of(self);
+            let vt = self.load_tag(p);
+            let ok = accepts(self, vt);
+            let read = self.b.create_block();
+            self.b.ins().brif(ok, read, &[], miss, &[]);
+            self.b.switch_to_block(read);
+            let ta = self.temp_addr(t);
+            self.store_into(ta, Op::Ptr(p, None));
+            self.b.ins().jump(done, &[]);
+            return;
+        }
+        let (setb, chk, store) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        let is_set = self.b.ins().icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, kind, ACC_SET as i64);
+        self.b.ins().brif(is_set, setb, &[], miss, &[]);
+        self.b.switch_to_block(setb);
+        let p = slot_of(self);
+        let vt = self.load_tag(p);
+        let is_ref = self.b.ins().icmp_imm_u(IntCC::Equal, vt, tag::REF as i64);
+        self.b.ins().brif(is_ref, miss, &[], chk, &[]);
+        self.b.switch_to_block(chk);
+        let at = self.load_tag(aa);
+        let ok = accepts(self, at);
+        self.b.ins().brif(ok, store, &[], miss, &[]);
+        self.b.switch_to_block(store);
+        // The old value out (none if never initialized), the argument
+        // moved in; the old one is released last (its destructor may run).
+        let old_t = self.alloc_temp();
+        let olda = self.temp_addr(old_t);
+        self.copy16(olda, p);
+        let empty = self.b.ins().icmp_imm_u(IntCC::Equal, vt, lay.none_tag as i64);
+        let null = self.b.ins().iconst(types::I8, tag::NULL as i64);
+        let ot = self.b.ins().select(empty, null, vt);
+        self.b.ins().store(flags(), ot, olda, 0);
+        self.copy16(p, aa);
+        self.store_tag(aa, tag::NULL);
+        let ta = self.temp_addr(t);
+        let (this_b, null_b, fin) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        let ret_this = self.b.ins().icmp_imm_u(IntCC::Equal, kind, ACC_SET_THIS as i64);
+        self.b.ins().brif(ret_this, this_b, &[], null_b, &[]);
+        self.b.switch_to_block(this_b);
+        let cnt = self.b.ins().load(types::I64, flags(), rc, 0);
+        let cnt = self.b.ins().iadd_imm_s(cnt, 1);
+        self.b.ins().store(flags(), cnt, rc, 0);
+        self.store_tag(ta, tag::OBJECT);
+        self.b.ins().store(flags(), rc, ta, tag::PAYLOAD);
+        self.b.ins().jump(fin, &[]);
+        self.b.switch_to_block(null_b);
+        self.store_tag(ta, tag::NULL);
+        self.b.ins().jump(fin, &[]);
+        self.b.switch_to_block(fin);
+        let olda = self.temp_addr(old_t);
+        self.release(Op::Ptr(olda, Some(old_t)));
+        self.b.ins().jump(done, &[]);
+    }
+
     /// `A::m(...)` on a static method: like `direct_call`, for the cached
     /// calling scope and `static` class.
     #[allow(clippy::too_many_arguments)]
@@ -2256,7 +2368,7 @@ impl<'a> Lower<'a> {
             lay.msite_frame,
             aa,
             n,
-            |l, slow| {
+            |l, slow, _| {
                 let caller = l.b.ins().load(types::I64, flags(), l.cx, lay.cx_frame);
                 let scope = l.b.ins().load(types::I64, flags(), caller, lay.frame_class);
                 let want = l.b.ins().load(types::I64, flags(), sp, lay.msite_scope);
@@ -2323,7 +2435,7 @@ impl<'a> Lower<'a> {
             lay.msite_frame,
             aa,
             n,
-            |l, slow| {
+            |l, slow, _| {
                 let entry = l.b.ins().load(types::I64, flags(), sp, lay.msite_direct);
                 let c1 = l.b.create_block();
                 l.b.ins().brif(entry, c1, &[], slow, &[]);
@@ -2369,14 +2481,16 @@ impl<'a> Lower<'a> {
         sf_off: i32,
         aa: CValue,
         n: CValue,
-        guard: impl FnOnce(&mut Self, Block) -> (CValue, Option<CValue>, Option<CValue>),
+        guard: impl FnOnce(&mut Self, Block, (usize, Block)) -> (CValue, Option<CValue>, Option<CValue>),
         slow_call: impl FnOnce(&mut Self, CValue),
     ) -> Op {
         use super::rt::SiteFrame;
         let t = self.alloc_temp();
         let (slow, done) = (self.b.create_block(), self.b.create_block());
-        // (The guard may pick the site's second entry, with its own frames.)
-        let (entry, this, frames) = guard(self, slow);
+        // (The guard may pick the site's second entry, with its own frames,
+        // or answer without a call: then it stores the result in `t` and
+        // jumps to `done`.)
+        let (entry, this, frames) = guard(self, slow, (t, done));
         let (sp, sf_off) = match frames {
             Some(a) => (a, 0),
             None => (sp, sf_off),

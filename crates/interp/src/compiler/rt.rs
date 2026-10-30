@@ -2407,6 +2407,7 @@ pub struct MethodSite {
     /// A trivial getter found here (`return $this->prop;` or a literal):
     /// answered without calling it.
     pub getter: std::cell::RefCell<Option<Getter>>,
+    pub acc: Accessor,
     /// The callable name last called through this site (`$f(...)`,
     /// `call_user_func('name', ...)`) and what it names.
     pub dynamic: DynCache,
@@ -2446,9 +2447,11 @@ impl DynCache {
 const POLY: usize = 4;
 
 /// A method whose whole body is `return $this->prop;` (read from a slot
-/// of objects of one shape) or `return <literal>;`, for objects of
+/// of objects of one shape), `return <literal>;`, or a setter
+/// (`$this->prop = $x;`, optionally then `return $this;`), for objects of
 /// `class` called from scope `scope`. The class is held, so its address
 /// can't be reused while this is cached (sites are reset per request).
+/// Generated code reads the same answer from the site's `Accessor`.
 pub struct Getter {
     class: Rc<crate::class::Class>,
     scope: usize,
@@ -2456,55 +2459,175 @@ pub struct Getter {
 }
 
 enum GetterKind {
-    Slot { shape: usize, slot: usize },
+    Slot { shape: usize, slot: usize, mask: u64 },
     Const(Value),
+    Set { shape: usize, slot: usize, mask: u64 },
 }
 
-/// What `m` returns if it is a trivial getter (see `Getter`).
-fn getter_body(m: &crate::class::Method) -> Option<&'static ast::Expr> {
+/// What generated code reads to answer a cached accessor inline
+/// (`MethodSite::acc`): `class` is the raw Rc word (0: none).
+#[repr(C)]
+#[derive(Default)]
+pub struct Accessor {
+    pub class: std::cell::Cell<usize>,
+    pub scope: std::cell::Cell<usize>,
+    pub shape: std::cell::Cell<usize>,
+    pub slot: std::cell::Cell<usize>,
+    /// Value tags (bits) read or written without a type check.
+    pub mask: std::cell::Cell<u64>,
+    pub kind: std::cell::Cell<u64>,
+    pub value: std::cell::UnsafeCell<Value>,
+}
+
+pub const ACC_SLOT: u64 = 1;
+pub const ACC_CONST: u64 = 2;
+pub const ACC_SET: u64 = 3;
+/// A setter that returns `$this`.
+pub const ACC_SET_THIS: u64 = 4;
+
+impl Accessor {
+    fn clear(&self) {
+        self.class.set(0);
+        self.kind.set(0);
+        // (Generated code reads the value only for ACC_CONST.)
+        unsafe { *self.value.get() = Value::Null };
+    }
+}
+
+/// Value tags a declared type accepts as they are (no coercion); 0 for
+/// types this can't tell (classes, unions).
+fn quick_mask(q: (Quick, bool)) -> u64 {
+    use crate::value::tag;
+    let any = (1u64 << 9) - 1 - (1 << tag::REF);
+    let m = match q.0 {
+        Quick::Untyped | Quick::Mixed => any,
+        Quick::Int => 1 << tag::INT,
+        Quick::Float => 1 << tag::FLOAT,
+        Quick::Str => 1 << tag::STR,
+        Quick::Bool => 1 << tag::BOOL,
+        Quick::Array => 1 << tag::ARRAY,
+        Quick::Other => 0,
+    };
+    if m != 0 && q.1 { m | 1 << tag::NULL } else { m }
+}
+
+/// The trivial body of `m`, if it is an accessor taking `n` arguments.
+fn accessor_body(m: &crate::class::Method, n: u64) -> Option<&'static ast::Function> {
     let crate::class::MethodBody::User(func) = &m.body else { return None };
-    if m.is_static || !func.params.is_empty() || func.by_ref || func.is_generator || func.ret.is_some() {
+    if m.is_static || func.params.len() != n as usize || func.by_ref || func.is_generator {
         return None;
     }
-    match func.body.as_deref()? {
-        [ast::Stmt { kind: ast::StmtKind::Return(Some(e)), .. }] => Some(e),
+    Some(func)
+}
+
+fn this_prop(e: &ast::Expr) -> Option<&'static str> {
+    match &e.kind {
+        ast::ExprKind::Prop { object, name: ast::MemberName::Ident(name), nullsafe: false } if matches!(&object.kind, ast::ExprKind::Var(v) if &**v == "this") => {
+            Some(unsafe { std::mem::transmute::<&str, &'static str>(&name.name) })
+        }
         _ => None,
     }
 }
 
-/// Cache `m` at `site` for this object if it is a trivial getter.
-unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, f: &Frame, m: &Rc<crate::class::Method>) {
-    let Some(e) = getter_body(m) else { return };
-    let kind = match &e.kind {
-        ast::ExprKind::Int(n) => GetterKind::Const(Value::Int(*n)),
-        ast::ExprKind::Float(x) => GetterKind::Const(Value::Float(*x)),
-        ast::ExprKind::Bool(b) => GetterKind::Const(Value::Bool(*b)),
-        ast::ExprKind::Null => GetterKind::Const(Value::Null),
-        ast::ExprKind::Str(s) => GetterKind::Const(Value::str(s)),
-        ast::ExprKind::Prop { object, name: ast::MemberName::Ident(name), nullsafe: false }
-            if matches!(&object.kind, ast::ExprKind::Var(v) if &**v == "this") =>
-        {
-            // Read in the method's own scope, as its body would.
-            let (decl_class, _) = m.declared(&it.classes.borrow());
-            let mut mf = Frame::for_call(m.ctx.clone(), m.name.clone(), 0);
-            mf.class = decl_class;
-            let key = it.prop_key(&mf, o, &name.name);
-            if !it.prop_visible(&mf, o, &key) {
-                return;
-            }
-            let props = o.props.borrow();
-            let Some((slot, _, v)) = props.get_full(&key) else { return };
+/// Cache `m` at `site` for this object if it is a trivial getter (no
+/// arguments) or setter (one).
+unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, f: &Frame, m: &Rc<crate::class::Method>, n: u64) {
+    let Some(func) = accessor_body(m, n) else { return };
+    let Some(body) = func.body.as_deref() else { return };
+    let ret = Quick::of(func.ret.as_ref());
+    // The property `name` as the method's own scope sees it: its slot, if
+    // a declared one of a shared shape.
+    let slot_of = |name: &str, write: bool| -> Option<(usize, usize, Option<&'static ast::Type>)> {
+        let (decl_class, _) = m.declared(&it.classes.borrow());
+        let mut mf = Frame::for_call(m.ctx.clone(), m.name.clone(), 0);
+        mf.class = decl_class;
+        let key = it.prop_key(&mf, o, name);
+        if !it.prop_visible(&mf, o, &key) {
+            return None;
+        }
+        let decl = o.class.find_prop(&key)?;
+        if write && decl.readonly {
+            return None;
+        }
+        let props = o.props.borrow();
+        let slot = props.shape().slot(&key)?;
+        if let Some((_, v)) = props.get_index(slot) {
             if matches!(v, Value::Ref(_)) {
+                return None;
+            }
+        }
+        Some((shape_key(o)?, slot, decl.ty))
+    };
+    let (kind, code) = match (n, body) {
+        (0, [ast::Stmt { kind: ast::StmtKind::Return(Some(e)), .. }]) => match &e.kind {
+            ast::ExprKind::Int(_) | ast::ExprKind::Float(_) | ast::ExprKind::Bool(_) | ast::ExprKind::Null | ast::ExprKind::Str(_) => {
+                let v = match &e.kind {
+                    ast::ExprKind::Int(n) => Value::Int(*n),
+                    ast::ExprKind::Float(x) => Value::Float(*x),
+                    ast::ExprKind::Bool(b) => Value::Bool(*b),
+                    ast::ExprKind::Str(s) => Value::str(s),
+                    _ => Value::Null,
+                };
+                // (A literal returned as declared: no coercion.)
+                if quick_mask(ret) & 1 << crate::value::tag::of(&v) == 0 {
+                    return;
+                }
+                (GetterKind::Const(v), ACC_CONST)
+            }
+            _ => {
+                let Some(name) = this_prop(e) else { return };
+                let Some((shape, slot, ty)) = slot_of(name, false) else { return };
+                // What the return type passes unchanged: everything the
+                // property holds if both declare the same type.
+                let mask = match (func.ret.as_ref(), ty) {
+                    (Some(r), Some(t)) if r == t && !matches!(r, ast::Type::Named(n) if n.eq_ignore_ascii_case("static")) => quick_mask((Quick::Untyped, false)),
+                    _ => quick_mask(ret),
+                };
+                if mask == 0 {
+                    return;
+                }
+                (GetterKind::Slot { shape, slot, mask }, ACC_SLOT)
+            }
+        },
+        (1, [ast::Stmt { kind: ast::StmtKind::Expr(e), .. }, rest @ ..]) => {
+            let ast::ExprKind::Assign { target, value } = &e.kind else { return };
+            let p = &func.params[0];
+            if p.by_ref || p.variadic || !matches!(&value.kind, ast::ExprKind::Var(v) if **v == *p.name.name) {
                 return;
             }
-            let Some(shape) = shape_key(o) else { return };
-            GetterKind::Slot { shape, slot }
+            let kind = match rest {
+                [] if matches!(ret.0, Quick::Untyped) || matches!(func.ret.as_ref(), Some(ast::Type::Named(n)) if n.eq_ignore_ascii_case("void")) => ACC_SET,
+                [ast::Stmt { kind: ast::StmtKind::Return(Some(r)), .. }]
+                    if matches!(&r.kind, ast::ExprKind::Var(v) if &**v == "this")
+                        && (matches!(ret.0, Quick::Untyped) || matches!(func.ret.as_ref(), Some(ast::Type::Named(n)) if n.eq_ignore_ascii_case("static") || n.eq_ignore_ascii_case("self"))) =>
+                {
+                    ACC_SET_THIS
+                }
+                _ => return,
+            };
+            let Some(name) = this_prop(target) else { return };
+            let Some((shape, slot, ty)) = slot_of(name, true) else { return };
+            let mask = quick_mask(Quick::of(p.ty.as_ref())) & quick_mask(Quick::of(ty));
+            if mask == 0 {
+                return;
+            }
+            (GetterKind::Set { shape, slot, mask }, kind)
         }
         _ => return,
     };
+    let acc = &site.acc;
+    match &kind {
+        GetterKind::Slot { shape, slot, mask } | GetterKind::Set { shape, slot, mask } => {
+            acc.shape.set(*shape);
+            acc.slot.set(*slot);
+            acc.mask.set(*mask);
+        }
+        GetterKind::Const(v) => *acc.value.get() = v.clone(),
+    }
+    acc.kind.set(code);
+    acc.scope.set(scope_key(f));
+    acc.class.set(*(std::ptr::addr_of!(o.class) as *const usize));
     *site.getter.borrow_mut() = Some(Getter { class: o.class.clone(), scope: scope_key(f), kind });
-    // Calls come here (not straight to compiled code) to take the shortcut.
-    site.direct.set(0);
 }
 
 /// The cached getter's answer for this object, if it applies.
@@ -2517,15 +2640,16 @@ unsafe fn getter_value(site: &MethodSite, o: &Obj, f: &Frame) -> Option<Value> {
     }
     match &g.kind {
         GetterKind::Const(v) => Some(v.clone()),
-        GetterKind::Slot { shape, slot } => {
+        GetterKind::Slot { shape, slot, mask } => {
             if shape_key(o) != Some(*shape) {
                 return None;
             }
             match o.props.borrow().get_index(*slot) {
-                Some((_, v)) if !matches!(v, Value::Ref(_)) => Some(v.clone()),
+                Some((_, v)) if mask & 1 << crate::value::tag::of(v) != 0 => Some(v.clone()),
                 _ => None,
             }
         }
+        GetterKind::Set { .. } => None,
     }
 }
 
@@ -2555,6 +2679,7 @@ impl MethodSite {
             interp: Default::default(),
             poly: Default::default(),
             getter: Default::default(),
+            acc: Default::default(),
             dynamic: Default::default(),
         }
     }
@@ -2934,8 +3059,8 @@ pub unsafe extern "C" fn rt_method_call(
             // Keyed the way generated code reads them: the raw Rc words.
             site.direct_class.set(*(std::ptr::addr_of!(o.class) as *const usize));
             site.direct_scope.set(scope_key(f));
-            if n == 0 {
-                remember_getter(it, site, o, f, &m);
+            if n <= 1 {
+                remember_getter(it, site, o, f, &m, n);
             }
             Some(mc)
         });
@@ -2963,7 +3088,7 @@ pub unsafe extern "C" fn rt_method_call(
             let known = site.interp.borrow().as_ref().filter(|e| (e.0, e.1) == key).map(|e| e.2.clone());
             if let Some(m) = known.filter(|m| matches!(m.body, crate::class::MethodBody::User(f) if f.body.is_some())) {
                 if n == 0 && site.getter.borrow().is_none() {
-                    remember_getter(it, site, o, f, &m);
+                    remember_getter(it, site, o, f, &m, 0);
                     if let Some(v) = getter_value(site, o, f) {
                         put(dst, v);
                         return 0;
@@ -4326,6 +4451,7 @@ impl MethodSite {
         *self.interp.borrow_mut() = None;
         self.poly.borrow_mut().clear();
         *self.getter.borrow_mut() = None;
+        self.acc.clear();
     }
 }
 
