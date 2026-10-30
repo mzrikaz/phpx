@@ -2178,7 +2178,7 @@ impl<'a> Lower<'a> {
                 let c1 = l.b.create_block();
                 l.b.ins().brif(entry, c1, &[], slow, &[]);
                 l.b.switch_to_block(c1);
-                (entry, None)
+                (entry, None, None)
             },
             |l, ta| l.call_checked("rt_call", &[l.cx, sp, aa, n, la, meta, ta]),
         )
@@ -2195,28 +2195,52 @@ impl<'a> Lower<'a> {
             aa,
             n,
             |l, slow| {
+                use super::rt::{MethodSite, SecondEntry};
+                let second = std::mem::offset_of!(MethodSite, second) as i32;
                 let tg = l.load_tag(oa);
                 let is_obj = l.b.ins().icmp_imm_s(IntCC::Equal, tg, tag::OBJECT as i64);
-                let (c1, c2, c3) = (l.b.create_block(), l.b.create_block(), l.b.create_block());
+                let (c1, first, try2, out) = (l.b.create_block(), l.b.create_block(), l.b.create_block(), l.b.create_block());
+                l.b.append_block_param(out, types::I64);
+                l.b.append_block_param(out, types::I64);
                 l.b.ins().brif(is_obj, c1, &[], slow, &[]);
                 l.b.switch_to_block(c1);
                 let rc = l.b.ins().load(types::I64, flags(), oa, tag::PAYLOAD);
                 let cls = l.b.ins().load(types::I64, flags(), rc, lay.obj_class);
-                let want = l.b.ins().load(types::I64, flags(), sp, lay.msite_class);
-                let same = l.b.ins().icmp(IntCC::Equal, cls, want);
-                l.b.ins().brif(same, c2, &[], slow, &[]);
-                l.b.switch_to_block(c2);
                 let caller = l.b.ins().load(types::I64, flags(), l.cx, lay.cx_frame);
                 let scope = l.b.ins().load(types::I64, flags(), caller, lay.frame_class);
-                let want = l.b.ins().load(types::I64, flags(), sp, lay.msite_scope);
-                let same = l.b.ins().icmp(IntCC::Equal, scope, want);
-                l.b.ins().brif(same, c3, &[], slow, &[]);
-                l.b.switch_to_block(c3);
-                let entry = l.b.ins().load(types::I64, flags(), sp, lay.msite_direct);
-                let c4 = l.b.create_block();
-                l.b.ins().brif(entry, c4, &[], slow, &[]);
-                l.b.switch_to_block(c4);
-                (entry, Some(rc))
+                // The cached (class, scope), or the second one beside it
+                // (code that sees two classes, like an interface's).
+                let entry_for = |l: &mut Self, class_off: i32, scope_off: i32, entry_off: i32, frames_off: i32, miss: Block| {
+                    let want = l.b.ins().load(types::I64, flags(), sp, class_off);
+                    let same = l.b.ins().icmp(IntCC::Equal, cls, want);
+                    let want = l.b.ins().load(types::I64, flags(), sp, scope_off);
+                    let same2 = l.b.ins().icmp(IntCC::Equal, scope, want);
+                    let both = l.b.ins().band(same, same2);
+                    let hit = l.b.create_block();
+                    l.b.ins().brif(both, hit, &[], miss, &[]);
+                    l.b.switch_to_block(hit);
+                    let entry = l.b.ins().load(types::I64, flags(), sp, entry_off);
+                    let frames = l.b.ins().iadd_imm_s(sp, frames_off as i64);
+                    let go = l.b.create_block();
+                    l.b.ins().brif(entry, go, &[], miss, &[]);
+                    l.b.switch_to_block(go);
+                    l.b.ins().jump(out, &[entry.into(), frames.into()]);
+                };
+                l.b.ins().jump(first, &[]);
+                l.b.switch_to_block(first);
+                entry_for(l, lay.msite_class, lay.msite_scope, lay.msite_direct, lay.msite_frame, try2);
+                l.b.switch_to_block(try2);
+                entry_for(
+                    l,
+                    second + std::mem::offset_of!(SecondEntry, class) as i32,
+                    second + std::mem::offset_of!(SecondEntry, scope) as i32,
+                    second + std::mem::offset_of!(SecondEntry, entry) as i32,
+                    second + std::mem::offset_of!(SecondEntry, frame) as i32,
+                    slow,
+                );
+                l.b.switch_to_block(out);
+                let (entry, frames) = (l.b.block_params(out)[0], l.b.block_params(out)[1]);
+                (entry, Some(rc), Some(frames))
             },
             |l, ta| l.call_checked("rt_method_call", &[l.cx, oa, sp, aa, n, la, meta, ta]),
         )
@@ -2264,7 +2288,7 @@ impl<'a> Lower<'a> {
                 l.b.ins().brif(same, out, &[th.into()], slow, &[]);
                 l.b.switch_to_block(out);
                 let this = l.b.block_params(out)[0];
-                (entry, Some(this))
+                (entry, Some(this), None)
             },
             |l, ta| l.call_checked("rt_static_call", &[l.cx, cr, sp, aa, n, la, meta, ta]),
         )
@@ -2305,7 +2329,7 @@ impl<'a> Lower<'a> {
                 l.b.ins().brif(entry, c1, &[], slow, &[]);
                 l.b.switch_to_block(c1);
                 let rc = l.b.ins().load(types::I64, flags(), ta, tag::PAYLOAD);
-                (entry, Some(rc))
+                (entry, Some(rc), None)
             },
             |l, out| l.call_checked("rt_new_ctor", &[l.cx, ta, sp, aa, n, la, meta, out]),
         );
@@ -2345,13 +2369,18 @@ impl<'a> Lower<'a> {
         sf_off: i32,
         aa: CValue,
         n: CValue,
-        guard: impl FnOnce(&mut Self, Block) -> (CValue, Option<CValue>),
+        guard: impl FnOnce(&mut Self, Block) -> (CValue, Option<CValue>, Option<CValue>),
         slow_call: impl FnOnce(&mut Self, CValue),
     ) -> Op {
         use super::rt::SiteFrame;
         let t = self.alloc_temp();
         let (slow, done) = (self.b.create_block(), self.b.create_block());
-        let (entry, this) = guard(self, slow);
+        // (The guard may pick the site's second entry, with its own frames.)
+        let (entry, this, frames) = guard(self, slow);
+        let (sp, sf_off) = match frames {
+            Some(a) => (a, 0),
+            None => (sp, sf_off),
+        };
         let (c2, fast, chk) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
         let depth_off = sf_off + SiteFrame::DEPTH as i32;
         let d = self.b.ins().load(types::I32, flags(), sp, depth_off);

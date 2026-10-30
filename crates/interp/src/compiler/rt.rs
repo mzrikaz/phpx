@@ -2355,6 +2355,26 @@ impl SiteFrame {
     }
 }
 
+/// A method call site's second direct entry: (entry, class, scope) as
+/// for the first, with its own frames.
+#[derive(Default)]
+#[repr(C)]
+pub struct SecondEntry {
+    pub entry: std::cell::Cell<usize>,
+    pub class: std::cell::Cell<usize>,
+    pub scope: std::cell::Cell<usize>,
+    pub frame: SiteFrame,
+}
+
+impl SecondEntry {
+    fn clear(&self) {
+        self.entry.set(0);
+        self.class.set(0);
+        self.scope.set(0);
+        self.frame.invalidate();
+    }
+}
+
 /// A `$obj->m(...)` call site with a monomorphic inline cache (also used
 /// by static calls, `new` and `$f(...)`). `#[repr(C)]`: generated code
 /// reads the `direct*` fields and the frame for direct method calls.
@@ -2370,6 +2390,9 @@ pub struct MethodSite {
     /// the caller's `$this` (raw Rc word; 0: a static method).
     pub direct_this: std::cell::Cell<usize>,
     pub frame: SiteFrame,
+    /// A second class's compiled method (`$o->m()` on code that sees two
+    /// classes): read by generated code when the first doesn't match.
+    pub second: SecondEntry,
     pub name: &'static str,
     pub lname: &'static str,
     pub cached: std::cell::Cell<Option<MethodCache>>,
@@ -2524,6 +2547,7 @@ impl MethodSite {
             direct_class: Default::default(),
             direct_scope: Default::default(),
             direct_this: Default::default(),
+            second: Default::default(),
             frame: Default::default(),
             name,
             lname,
@@ -2856,7 +2880,7 @@ pub unsafe extern "C" fn rt_method_call(
                     site.poly.borrow_mut().retain(|e| !(Rc::ptr_eq(&e.class, &o.class) && e.scope.as_ref().map_or(ptr::null(), Rc::as_ptr) == scope));
                     *site.interp.borrow_mut() = None;
                 } else {
-                    return poly_call(it, o, &m, entry, decl, args, n, locals, dst);
+                    return poly_call(it, site, scope_key(f), o, &m, entry, decl, args, n, locals, dst);
                 }
             }
         }
@@ -2972,6 +2996,8 @@ fn remember_poly(site: &MethodSite, o: &Obj, f: &Frame, m: &Rc<crate::class::Met
 #[allow(clippy::too_many_arguments)]
 unsafe fn poly_call(
     it: &Interp,
+    site: &MethodSite,
+    scope: usize,
     o: &Rc<Obj>,
     m: &Rc<crate::class::Method>,
     entry: Option<crate::compiler::Entry>,
@@ -2983,13 +3009,36 @@ unsafe fn poly_call(
 ) -> u64 {
     if let Some(entry) = entry {
         let crate::class::MethodBody::User(func) = &m.body else { unreachable!() };
-        let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
-        frame.static_class = Some(o.class.clone());
-        frame.class = decl_class;
-        if !m.is_static {
-            frame.this = Some(o.clone());
+        let make = || {
+            let mut frame = Frame::for_call(m.ctx.clone(), m.name.clone(), *func as *const ast::Function as usize);
+            frame.static_class = Some(o.class.clone());
+            frame.class = decl_class.clone();
+            frame
+        };
+        // The site's second direct entry serves this class from now on
+        // (instance methods whose binding won't always decline).
+        let class_word = *(std::ptr::addr_of!(o.class) as *const usize);
+        let direct = !m.is_static && crate::call::method_params(m).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
+        let sec = &site.second;
+        if direct && (sec.class.get() != class_word || sec.scope.get() != scope || sec.entry.get() != entry as usize) {
+            sec.frame.invalidate();
+            sec.entry.set(entry as usize);
+            sec.class.set(class_word);
+            sec.scope.set(scope);
         }
-        if let Some(st) = enter(it, entry, &mut frame, args, n, dst) {
+        let r = if direct {
+            sec.frame.with(make, |frame| {
+                frame.this = Some(o.clone());
+                enter(it, entry, frame, args, n, dst)
+            })
+        } else {
+            let mut frame = make();
+            if !m.is_static {
+                frame.this = Some(o.clone());
+            }
+            enter(it, entry, &mut frame, args, n, dst)
+        };
+        if let Some(st) = r {
             return st;
         }
     }
@@ -4271,6 +4320,7 @@ impl MethodSite {
         self.direct_class.set(0);
         self.direct_scope.set(0);
         self.direct_this.set(0);
+        self.second.clear();
         self.frame.invalidate();
         self.cached.set(None);
         *self.interp.borrow_mut() = None;
