@@ -162,16 +162,28 @@ impl PStr {
 
 /// Decimal digits of `n` written into `buf` (fast path for int-to-string).
 pub fn fmt_int(n: i64, buf: &mut [u8; 20]) -> &[u8] {
+    // Two digits at a time from a table (one division per pair).
+    const PAIRS: &[u8; 200] = b"0001020304050607080910111213141516171819\
+2021222324252627282930313233343536373839\
+4041424344454647484950515253545556575859\
+6061626364656667686970717273747576777879\
+8081828384858687888990919293949596979899";
     let mut i = buf.len();
     let neg = n < 0;
     let mut u = n.unsigned_abs();
-    loop {
+    while u >= 100 {
+        let d = (u % 100) as usize * 2;
+        u /= 100;
+        i -= 2;
+        buf[i..i + 2].copy_from_slice(&PAIRS[d..d + 2]);
+    }
+    if u >= 10 {
+        let d = u as usize * 2;
+        i -= 2;
+        buf[i..i + 2].copy_from_slice(&PAIRS[d..d + 2]);
+    } else {
         i -= 1;
-        buf[i] = b'0' + (u % 10) as u8;
-        u /= 10;
-        if u == 0 {
-            break;
-        }
+        buf[i] = b'0' + u as u8;
     }
     if neg {
         i -= 1;
