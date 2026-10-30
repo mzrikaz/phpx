@@ -2930,11 +2930,45 @@ impl<'a> Lower<'a> {
         let ok = self.b.ins().icmp(IntCC::Equal, cls, accepted);
         self.b.ins().brif(ok, go, &[], slow, &[]);
         self.b.switch_to_block(go);
-        let props = self.prop_guard(lay, oa, site_v, super::rt::PROPSITE_TSHAPE, super::rt::PROPSITE_TSCOPE, slow);
+        // The object's shape and the calling scope: the first entry's, or
+        // the second's (same type).
+        let tg = self.load_tag(oa);
+        let is_obj = self.b.ins().icmp_imm_s(IntCC::Equal, tg, tag::OBJECT as i64);
+        let (c1, second, found) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        self.b.append_block_param(found, types::I64);
+        self.b.ins().brif(is_obj, c1, &[], slow, &[]);
+        self.b.switch_to_block(c1);
+        let rc = self.b.ins().load(types::I64, flags(), oa, tag::PAYLOAD);
+        let props = self.b.ins().iadd_imm_s(rc, lay.obj_props as i64);
+        let shape = self.b.ins().load(types::I64, flags(), props, 0);
+        let frame = self.b.ins().load(types::I64, flags(), self.cx, lay.cx_frame);
+        let scope = self.b.ins().load(types::I64, flags(), frame, lay.frame_class);
+        for (i, (shape_off, scope_off, slot_off, next)) in [
+            (super::rt::PROPSITE_TSHAPE, super::rt::PROPSITE_TSCOPE, super::rt::PROPSITE_TSLOT, second),
+            (super::rt::PROPSITE_TSHAPE2, super::rt::PROPSITE_TSCOPE2, super::rt::PROPSITE_TSLOT2, slow),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let want = self.b.ins().load(types::I64, flags(), site_v, shape_off);
+            let same = self.b.ins().icmp(IntCC::Equal, shape, want);
+            let want = self.b.ins().load(types::I64, flags(), site_v, scope_off);
+            let same2 = self.b.ins().icmp(IntCC::Equal, scope, want);
+            let both = self.b.ins().band(same, same2);
+            let hit = self.b.create_block();
+            self.b.ins().brif(both, hit, &[], next, &[]);
+            self.b.switch_to_block(hit);
+            let slot = self.b.ins().load(types::I64, flags(), site_v, slot_off);
+            self.b.ins().jump(found, &[slot.into()]);
+            if i == 0 {
+                self.b.switch_to_block(second);
+            }
+        }
+        self.b.switch_to_block(found);
+        let slot = self.b.block_params(found)[0];
         // (A typed property is uninitialized until its first write, as
         // in a constructor: then there is no old value.)
         let data = self.b.ins().load(types::I64, flags(), props, 8);
-        let slot = self.b.ins().load(types::I64, flags(), site_v, super::rt::PROPSITE_TSLOT);
         let off = self.b.ins().ishl_imm_u(slot, 4);
         let p = self.b.ins().iadd(data, off);
         let vt = self.load_tag(p);

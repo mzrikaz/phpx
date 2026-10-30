@@ -1553,6 +1553,12 @@ pub struct PropSite {
     /// and null are stored inline too.
     pub tclassw: std::cell::Cell<usize>,
     pub tnull: std::cell::Cell<u64>,
+    /// A second (shape, slot, scope) for the same scalar type (a base
+    /// class's constructor writing for two subclasses), checked by
+    /// generated code after the first.
+    pub tshape2: std::cell::Cell<usize>,
+    pub tslot2: std::cell::Cell<usize>,
+    pub tscope2: std::cell::Cell<usize>,
     /// Element-write cache (`$o->name[k] = v`): shape, slot and scope of a
     /// visible, writable property (checked here, not by generated code).
     pub eshape: std::cell::Cell<usize>,
@@ -1618,6 +1624,9 @@ impl PropSite {
             tclass: Default::default(),
             tclassw: Default::default(),
             tnull: Default::default(),
+            tshape2: Default::default(),
+            tslot2: Default::default(),
+            tscope2: Default::default(),
             rpoly: Default::default(),
             wpoly: Default::default(),
             tpoly: Default::default(),
@@ -1631,6 +1640,9 @@ impl PropSite {
 pub const PROPSITE_TSHAPE: i32 = std::mem::offset_of!(PropSite, tshape) as i32;
 pub const PROPSITE_TSLOT: i32 = std::mem::offset_of!(PropSite, tslot) as i32;
 pub const PROPSITE_TSCOPE: i32 = std::mem::offset_of!(PropSite, tscope) as i32;
+pub const PROPSITE_TSHAPE2: i32 = std::mem::offset_of!(PropSite, tshape2) as i32;
+pub const PROPSITE_TSLOT2: i32 = std::mem::offset_of!(PropSite, tslot2) as i32;
+pub const PROPSITE_TSCOPE2: i32 = std::mem::offset_of!(PropSite, tscope2) as i32;
 pub const PROPSITE_TTAG: i32 = std::mem::offset_of!(PropSite, ttag) as i32;
 pub const PROPSITE_TCLASSW: i32 = std::mem::offset_of!(PropSite, tclassw) as i32;
 pub const PROPSITE_TNULL: i32 = std::mem::offset_of!(PropSite, tnull) as i32;
@@ -1920,6 +1932,15 @@ pub unsafe extern "C" fn rt_prop_write(c: *mut Cx, obj: *const Value, site: *con
                     // (A null into the same slot keeps the class accepted.)
                     let same = site.tshape.get() == k && site.tslot.get() == i && site.tscope.get() == scope_key(f);
                     let keep = same && v.is_null() && q.1 && q.0 == Quick::Other;
+                    // Another shape for the same scalar type: the one it
+                    // replaces stays as the second entry.
+                    if q.0 != Quick::Other && site.tquick.get() == q && site.tshape.get() != 0 && !same {
+                        site.tshape2.set(site.tshape.get());
+                        site.tslot2.set(site.tslot.get());
+                        site.tscope2.set(site.tscope.get());
+                    } else if site.tquick.get() != q || q.0 == Quick::Other {
+                        site.tshape2.set(0);
+                    }
                     site.tshape.set(k);
                     site.tslot.set(i);
                     site.tscope.set(scope_key(f));
@@ -4585,7 +4606,7 @@ impl MethodSite {
 
 impl PropSite {
     pub fn reset(&self) {
-        for c in [&self.shape, &self.slot, &self.scope, &self.wshape, &self.wslot, &self.wscope, &self.tshape, &self.tslot, &self.tscope, &self.eshape, &self.eslot, &self.escope] {
+        for c in [&self.shape, &self.slot, &self.scope, &self.wshape, &self.wslot, &self.wscope, &self.tshape, &self.tslot, &self.tscope, &self.tshape2, &self.tslot2, &self.tscope2, &self.eshape, &self.eslot, &self.escope] {
             c.set(0);
         }
         *self.tclass.borrow_mut() = None;
