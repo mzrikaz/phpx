@@ -171,12 +171,12 @@ ratios:
 | Benchmark | phpx/PHP before | phpx/PHP now | phpx/Node now |
 |---|---|---|---|
 | assoc | 1.42 | 1.60 | 1.5 |
-| binary-trees | 2.59 | 1.13 | 10 |
+| binary-trees | 2.59 | 1.1–1.3 | 10 |
 | closures | 2.29 | 1.11 | 3.9 |
 | fannkuch-redux | 0.59 | 0.59 | 3.9 |
 | json | 1.64 | 1.54 | 1.7 |
 | n-body | 1.83 | 0.58 | 15 |
-| oop | 2.22 | 1.79 | 8.3 |
+| oop | 2.22 | 1.45 | 4.8 |
 | spectral-norm | 1.68 | 0.18 | 2.7 |
 | strings | 1.27 | 1.15 | 1.4 |
 
@@ -199,3 +199,14 @@ What changed for calls and objects:
   the whole heap; for binary-trees it was 42% of the time) and indexes
   objects by handle instead of a hash map.
 - Callbacks from built-ins set their frame up once per callable.
+- `parent::m()`/`self::m()` on instance methods call directly (the
+  caller's `$this` lent), and method sites keep a second direct entry for
+  a second class (interface-typed code).
+- `static` and `void` return types check inline; `<=>` on ints and
+  `=== null` are inline.
+
+Per-construct cost now (instructions, compiled code, vs PHP 8.4 with
+opcache): a method call is PHP's plus 45–65, a property read 69 vs 52,
+`new` of a 3-property class 667 vs 423. Timings on this machine vary
+by up to 30% between runs; instruction counts (callgrind) are the
+reliable measure.
