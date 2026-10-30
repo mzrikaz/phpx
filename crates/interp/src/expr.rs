@@ -2036,14 +2036,16 @@ impl Interp {
                 if !visible {
                     return Err(self.error("Error", &format!("Cannot access {} property {}::${name}", vis_word(o, name), o.class.name)));
                 }
+                // (Errors name the class that declares the property.)
+                let decl = crate::class::display_name(&d.declaring);
                 if d.readonly {
                     if o.props.borrow().contains_key(name) {
-                        return Err(self.error("Error", &format!("Cannot modify readonly property {}::${name}", o.class.name)));
+                        return Err(self.error("Error", &format!("Cannot modify readonly property {decl}::${name}")));
                     }
                     let in_scope = f.class.as_ref().is_some_and(|c| c.php_name().eq_ignore_ascii_case(&d.declaring));
                     if !in_scope {
                         let scope = f.class.as_ref().map(|c| format!("scope {}", c.name)).unwrap_or_else(|| "global scope".into());
-                        return Err(self.error("Error", &format!("Cannot initialize readonly property {}::${name} from {scope}", o.class.name)));
+                        return Err(self.error("Error", &format!("Cannot initialize readonly property {decl}::${name} from {scope}")));
                     }
                 }
                 let v = match d.ty {
@@ -2055,9 +2057,8 @@ impl Interp {
                                 return Err(self.error(
                                     "TypeError",
                                     &format!(
-                                        "Cannot assign {} to property {}::${name} of type {}",
+                                        "Cannot assign {} to property {decl}::${name} of type {}",
                                         v.debug_type(),
-                                        o.class.name,
                                         self.type_str_in(ty, &d.ctx, Some(&crate::class::display_name(&d.declaring)))
                                     ),
                                 ))
