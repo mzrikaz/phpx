@@ -2062,7 +2062,16 @@ impl<'a> Lower<'a> {
                     MemberName::Dynamic(d) => d.span.start,
                 };
                 let o = self.chain_expr(object, chain)?;
-                let o = self.own(o);
+                // A local receiver is read in place when the arguments run
+                // no PHP code that could change it (compiled locals hold no
+                // references, and the call itself holds the object as
+                // `$this`).
+                let keep = matches!(o, Op::Local(_))
+                    && args.iter().all(|a| match (&a.value.kind, &object.kind) {
+                        (ExprKind::Var(x), ExprKind::Var(y)) => x != y,
+                        (k, _) => !matches!(k, ExprKind::Prop { .. } | ExprKind::Index { .. } | ExprKind::StaticProp { .. }) && pure_operand(&a.value),
+                    });
+                let o = if keep { o } else { self.own(o) };
                 let o = self.materialize(o);
                 let oa = self.addr(o).unwrap();
                 // Method lookup is by lowercase name: precompute it.
