@@ -3916,9 +3916,16 @@ impl<'a> Lower<'a> {
                 let am = self.materialize(a);
                 let bm = self.materialize(b);
                 let (aa, ba) = (self.addr(am).unwrap(), self.addr(bm).unwrap());
-                let code = self.iconst(binop_code(op) as i64);
-                let r = self.call("rt_compare", &[self.cx, code, aa, ba]).unwrap();
-                let r = self.b.ins().ireduce(types::I8, r);
+                let r = if matches!(op, Identical | NotIdentical) {
+                    // (Never fails or runs PHP code: no interpreter needed.)
+                    let r = self.call("rt_identical", &[aa, ba]).unwrap();
+                    let r = self.b.ins().ireduce(types::I8, r);
+                    if op == NotIdentical { self.b.ins().bxor_imm_u(r, 1) } else { r }
+                } else {
+                    let code = self.iconst(binop_code(op) as i64);
+                    let r = self.call("rt_compare", &[self.cx, code, aa, ba]).unwrap();
+                    self.b.ins().ireduce(types::I8, r)
+                };
                 // Release only temps created by materializing scalars here;
                 // owned operands are released after the merge.
                 if matches!(a, Op::Int(_) | Op::Float(_) | Op::Bool(_)) {
