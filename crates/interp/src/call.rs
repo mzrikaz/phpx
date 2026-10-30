@@ -290,6 +290,16 @@ impl Interp {
         })
     }
 
+    /// A return type as PHP's errors name it: `static` is the called class.
+    fn ret_type_str(&self, t: &Type, ctx: &NsCtx, class: Option<&Rc<Class>>, static_class: Option<&Rc<Class>>) -> String {
+        let is_static = |t: &Type| matches!(t, Type::Named(n) if n.eq_ignore_ascii_case("static"));
+        match (t, static_class) {
+            (t, Some(sc)) if is_static(t) => sc.name.to_string(),
+            (Type::Nullable(t), Some(sc)) if is_static(t) => format!("?{}", sc.name),
+            _ => self.type_str_in(t, ctx, class.map(|c| &*c.name)),
+        }
+    }
+
     pub fn resolve_class_name(&self, ctx: &NsCtx, name: &str) -> String {
         if let Some(rest) = name.strip_prefix('\\') {
             return rest.to_string();
@@ -1691,7 +1701,7 @@ impl Interp {
                 Some(v) => Ok(v),
                 None => Err(self.error(
                     "TypeError",
-                    &format!("{display}(): Return value must be of type {}, {} returned", self.type_str_in(ty, ctx, class.map(|c| &*c.name)), result.debug_type()),
+                    &format!("{display}(): Return value must be of type {}, {} returned", self.ret_type_str(ty, ctx, class, static_class), result.debug_type()),
                 )),
             },
         }
