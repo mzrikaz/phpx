@@ -2870,7 +2870,8 @@ impl<'a> Lower<'a> {
     /// `$obj->name = value` with an inline cache (plain properties only).
     fn prop_write(&mut self, object: &'static Expr, name: &'static str, value: &'static Expr) -> L<Op> {
         let o = self.expr(object)?;
-        let o = self.own(o);
+        // (`$this` never changes: read in place.)
+        let o = if matches!(&object.kind, ExprKind::Var(n) if n == "this") { o } else { self.own(o) };
         let o = self.materialize(o);
         let oa = self.addr(o).unwrap();
         let v = self.expr(value)?;
@@ -3957,7 +3958,8 @@ impl<'a> Lower<'a> {
         let sp = &*site as *const super::rt::PropSite as i64;
         self.psites.push(site);
         let o = self.expr(object)?;
-        let o = self.own(o);
+        // (`$this` never changes: read in place.)
+        let o = if matches!(&object.kind, ExprKind::Var(n) if n == "this") { o } else { self.own(o) };
         let o = self.materialize(o);
         let t = self.alloc_temp();
         let (general, merge) = (self.b.create_block(), self.b.create_block());
