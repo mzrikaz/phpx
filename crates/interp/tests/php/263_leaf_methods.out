@@ -1,0 +1,24 @@
+14.14159
+2
+Typed property Tri::$h must not be accessed before initialization
+6
+[8,0.375,2,true,true,false,true,false,true,5,-5,-5,false,3,0.5,10,1.8446744073709552e+19,"TypeError: N::over(): Return value must be of type int, float returned","Division by zero @13 div","Modulo by zero",0,"N::inc(): Argument #1 ($by) must be of type int, string given",12,6,0.75,-5,2]
+[1,0.375,-2,false,true,true,false,false,false,-2,2,2,true,3,0.5,-4,1.8446744073709552e+19,"TypeError: N::over(): Return value must be of type int, float returned","Division by zero @13 div","Modulo by zero",0,"N::inc(): Argument #1 ($by) must be of type int, string given",5,-1,0.75,2,2]
+[-9223372036854775807,-1.8446744073709552e+19]
+N::neg(): Return value must be of type int, float returned neg
+14.14159
+2
+Typed property Tri::$h must not be accessed before initialization
+6
+[8,0.375,2,true,true,false,true,false,true,5,-5,-5,false,3,0.5,10,1.8446744073709552e+19,"TypeError: N::over(): Return value must be of type int, float returned","Division by zero @13 div","Modulo by zero",0,"N::inc(): Argument #1 ($by) must be of type int, string given",12,6,0.75,-5,2]
+[1,0.375,-2,false,true,true,false,false,false,-2,2,2,true,3,0.5,-4,1.8446744073709552e+19,"TypeError: N::over(): Return value must be of type int, float returned","Division by zero @13 div","Modulo by zero",0,"N::inc(): Argument #1 ($by) must be of type int, string given",5,-1,0.75,2,2]
+[-9223372036854775807,-1.8446744073709552e+19]
+N::neg(): Return value must be of type int, float returned neg
+14.14159
+2
+Typed property Tri::$h must not be accessed before initialization
+6
+[8,0.375,2,true,true,false,true,false,true,5,-5,-5,false,3,0.5,10,1.8446744073709552e+19,"TypeError: N::over(): Return value must be of type int, float returned","Division by zero @13 div","Modulo by zero",0,"N::inc(): Argument #1 ($by) must be of type int, string given",12,6,0.75,-5,2]
+[1,0.375,-2,false,true,true,false,false,false,-2,2,2,true,3,0.5,-4,1.8446744073709552e+19,"TypeError: N::over(): Return value must be of type int, float returned","Division by zero @13 div","Modulo by zero",0,"N::inc(): Argument #1 ($by) must be of type int, string given",5,-1,0.75,2,2]
+[-9223372036854775807,-1.8446744073709552e+19]
+N::neg(): Return value must be of type int, float returned neg

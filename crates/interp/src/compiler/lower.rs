@@ -2236,7 +2236,7 @@ impl<'a> Lower<'a> {
                     l.b.switch_to_block(go);
                     l.b.ins().jump(out, &[entry.into(), frames.into()]);
                 };
-                if nargs <= 1 {
+                if nargs <= 3 {
                     l.accessor(lay, sp, rc, cls, scope, aa, nargs, out_t, first);
                 } else {
                     l.b.ins().jump(first, &[]);
@@ -2265,7 +2265,7 @@ impl<'a> Lower<'a> {
     /// on to `done`; anything else continues at `miss`.
     #[allow(clippy::too_many_arguments)]
     fn accessor(&mut self, lay: super::Layout, sp: CValue, rc: CValue, cls: CValue, scope: CValue, aa: CValue, nargs: usize, (t, done): (usize, Block), miss: Block) {
-        use super::rt::{Accessor, MethodSite, ACC_CONST, ACC_SET, ACC_SET_THIS, ACC_SLOT};
+        use super::rt::{Accessor, MethodSite, ACC_CONST, ACC_LEAF, ACC_SET, ACC_SET_THIS, ACC_SLOT};
         // Either entry of the site's (for this class and calling scope);
         // `base` then addresses it.
         let acc = std::mem::offset_of!(MethodSite, acc) as i64;
@@ -2288,6 +2288,29 @@ impl<'a> Lower<'a> {
         let off = |f: usize| f as i32;
         let sp = base;
         let kind = self.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, kind)));
+        // A leaf method: called without a frame; it may decline (then the
+        // real call). Its arguments are scalars: nothing to release.
+        let (leaf, not_leaf) = (self.b.create_block(), self.b.create_block());
+        let is_leaf = self.b.ins().icmp_imm_u(IntCC::Equal, kind, ACC_LEAF as i64);
+        self.b.ins().brif(is_leaf, leaf, &[], not_leaf, &[]);
+        self.b.switch_to_block(leaf);
+        let f = self.b.ins().load(types::I64, flags(), sp, off(std::mem::offset_of!(Accessor, leaf)));
+        let slots = self.b.ins().iadd_imm_s(sp, off(std::mem::offset_of!(Accessor, slots)) as i64);
+        let mut sig = self.module.make_signature();
+        for _ in 0..4 {
+            sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I64));
+        }
+        sig.returns.push(cranelift_codegen::ir::AbiParam::new(types::I64));
+        let sigref = self.b.import_signature(sig);
+        let ta = self.temp_addr(t);
+        let call = self.b.ins().call_indirect(sigref, f, &[rc, aa, ta, slots]);
+        let declined = self.b.inst_results(call)[0];
+        self.b.ins().brif(declined, miss, &[], done, &[]);
+        self.b.switch_to_block(not_leaf);
+        if nargs > 1 {
+            self.b.ins().jump(miss, &[]);
+            return;
+        }
         // The slot of objects of the cached shape, and its tag.
         let slot_of = |l: &mut Self| {
             let props = l.b.ins().iadd_imm_s(rc, lay.obj_props as i64);

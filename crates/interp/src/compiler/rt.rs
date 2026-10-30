@@ -2530,6 +2530,7 @@ enum GetterKind {
     Slot { shape: usize, slot: usize, mask: u64 },
     Const(Value),
     Set { shape: usize, slot: usize, mask: u64 },
+    Leaf { f: usize, slots: [usize; 1 + crate::compiler::leaf::MAX_PROPS] },
 }
 
 /// What generated code reads to answer a cached accessor inline
@@ -2545,6 +2546,9 @@ pub struct Accessor {
     pub mask: std::cell::Cell<u64>,
     pub kind: std::cell::Cell<u64>,
     pub value: std::cell::UnsafeCell<Value>,
+    /// ACC_LEAF: the leaf function, and its class data (shape, slots).
+    pub leaf: std::cell::Cell<usize>,
+    pub slots: [std::cell::Cell<usize>; 1 + crate::compiler::leaf::MAX_PROPS],
 }
 
 pub const ACC_SLOT: u64 = 1;
@@ -2552,6 +2556,8 @@ pub const ACC_CONST: u64 = 2;
 pub const ACC_SET: u64 = 3;
 /// A setter that returns `$this`.
 pub const ACC_SET_THIS: u64 = 4;
+/// A leaf method (`compiler::leaf`).
+pub const ACC_LEAF: u64 = 5;
 
 impl Accessor {
     fn clear(&self) {
@@ -2633,7 +2639,8 @@ unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, scope: us
         }
         Some((shape_key(o)?, slot, decl.ty))
     };
-    let (kind, code) = match (n, body) {
+    let found = 'acc: {
+        Some(match (n, body) {
         (0, [ast::Stmt { kind: ast::StmtKind::Return(Some(e)), .. }]) => match &e.kind {
             ast::ExprKind::Int(_) | ast::ExprKind::Float(_) | ast::ExprKind::Bool(_) | ast::ExprKind::Null | ast::ExprKind::Str(_) => {
                 let v = match &e.kind {
@@ -2645,13 +2652,13 @@ unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, scope: us
                 };
                 // (A literal returned as declared: no coercion.)
                 if quick_mask(ret) & 1 << crate::value::tag::of(&v) == 0 {
-                    return;
+                    break 'acc None;
                 }
                 (GetterKind::Const(v), ACC_CONST)
             }
             _ => {
-                let Some(name) = this_prop(e) else { return };
-                let Some((shape, slot, ty)) = slot_of(name, false) else { return };
+                let Some(name) = this_prop(e) else { break 'acc None };
+                let Some((shape, slot, ty)) = slot_of(name, false) else { break 'acc None };
                 // What the return type passes unchanged: everything the
                 // property holds if both declare the same type.
                 let mask = match (func.ret.as_ref(), ty) {
@@ -2659,16 +2666,16 @@ unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, scope: us
                     _ => quick_mask(ret),
                 };
                 if mask == 0 {
-                    return;
+                    break 'acc None;
                 }
                 (GetterKind::Slot { shape, slot, mask }, ACC_SLOT)
             }
         },
         (1, [ast::Stmt { kind: ast::StmtKind::Expr(e), .. }, rest @ ..]) => {
-            let ast::ExprKind::Assign { target, value } = &e.kind else { return };
+            let ast::ExprKind::Assign { target, value } = &e.kind else { break 'acc None };
             let p = &func.params[0];
             if p.by_ref || p.variadic || !matches!(&value.kind, ast::ExprKind::Var(v) if **v == *p.name.name) {
-                return;
+                break 'acc None;
             }
             let kind = match rest {
                 [] if matches!(ret.0, Quick::Untyped) || matches!(func.ret.as_ref(), Some(ast::Type::Named(n)) if n.eq_ignore_ascii_case("void")) => ACC_SET,
@@ -2678,18 +2685,42 @@ unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, scope: us
                 {
                     ACC_SET_THIS
                 }
-                _ => return,
+                _ => break 'acc None,
             };
-            let Some(name) = this_prop(target) else { return };
-            let Some((shape, slot, ty)) = slot_of(name, true) else { return };
+            let Some(name) = this_prop(target) else { break 'acc None };
+            let Some((shape, slot, ty)) = slot_of(name, true) else { break 'acc None };
             let mask = quick_mask(Quick::of(p.ty.as_ref())) & quick_mask(Quick::of(ty));
             if mask == 0 {
-                return;
+                break 'acc None;
             }
             (GetterKind::Set { shape, slot, mask }, kind)
         }
-        _ => return,
+        _ => break 'acc None,
+        })
     };
+    // Otherwise a leaf (see `compiler::leaf`): its function, and the
+    // object's shape and the slots of the properties it reads.
+    let found = found.or_else(|| {
+        let crate::class::MethodBody::User(func) = &m.body else { return None };
+        let (decl_class, _) = m.declared(&it.classes.borrow());
+        let mut mf = Frame::for_call(m.ctx.clone(), m.name.clone(), 0);
+        mf.class = decl_class;
+        let plan = crate::compiler::leaf::plan(func, |name| {
+            let key = it.prop_key(&mf, o, name);
+            let d = o.class.find_prop(&key)?;
+            it.prop_visible(&mf, o, &key).then_some(d.ty?)
+        })?;
+        let mut slots = [0usize; 1 + crate::compiler::leaf::MAX_PROPS];
+        for (j, name) in plan.props.iter().enumerate() {
+            slots[1 + j] = slot_of(name, false)?.1;
+        }
+        if !plan.props.is_empty() {
+            slots[0] = shape_key(o)?;
+        }
+        let f = it.native.try_borrow_mut().ok()?.as_mut()?.leaf(func, &plan)?;
+        Some((GetterKind::Leaf { f: f as usize, slots }, ACC_LEAF))
+    });
+    let Some((kind, code)) = found else { return };
     let acc = &site.acc[i];
     acc.class.set(0);
     match &kind {
@@ -2699,6 +2730,12 @@ unsafe fn remember_getter(it: &Interp, site: &MethodSite, o: &Rc<Obj>, scope: us
             acc.mask.set(*mask);
         }
         GetterKind::Const(v) => *acc.value.get() = v.clone(),
+        GetterKind::Leaf { f, slots } => {
+            acc.leaf.set(*f);
+            for (c, v) in acc.slots.iter().zip(slots) {
+                c.set(*v);
+            }
+        }
     }
     acc.kind.set(code);
     acc.scope.set(scope);
@@ -2722,7 +2759,7 @@ unsafe fn getter_value(site: &MethodSite, o: &Obj, f: &Frame) -> Option<Value> {
                 _ => None,
             }
         }
-        GetterKind::Set { .. } => None,
+        GetterKind::Set { .. } | GetterKind::Leaf { .. } => None,
     }
 }
 
@@ -3132,7 +3169,7 @@ pub unsafe extern "C" fn rt_method_call(
             // Keyed the way generated code reads them: the raw Rc words.
             site.direct_class.set(*(std::ptr::addr_of!(o.class) as *const usize));
             site.direct_scope.set(scope_key(f));
-            if n <= 1 {
+            if n <= 3 {
                 remember_getter(it, site, o, scope_key(f), &m, n);
             }
             Some(mc)
@@ -3218,7 +3255,7 @@ unsafe fn poly_call(
         let class_word = *(std::ptr::addr_of!(o.class) as *const usize);
         let direct = !m.is_static && crate::call::method_params(m).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
         let sec = &site.second;
-        if n <= 1 && sec.class.get() != class_word {
+        if n <= 3 && sec.class.get() != class_word {
             remember_getter(it, site, o, scope, m, n);
         }
         if direct && (sec.class.get() != class_word || sec.scope.get() != scope || sec.entry.get() != entry as usize) {

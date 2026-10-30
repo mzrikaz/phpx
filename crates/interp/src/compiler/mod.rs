@@ -11,6 +11,7 @@
 
 pub(crate) mod analyze;
 pub mod fastbi;
+pub mod leaf;
 mod lower;
 pub mod rt;
 
@@ -81,6 +82,8 @@ pub struct Native {
     psites: Vec<Box<rt::PropSite>>,
     csites: Vec<Box<rt::ClassSite>>,
     specs: Vec<Box<LocalsSpec>>,
+    /// Leaf versions of method bodies (see `leaf`), by body.
+    leaves: rustc_hash::FxHashMap<usize, Option<leaf::LeafFn>>,
     log: bool,
     /// Debugging aids for bisecting miscompiles: compile at most this many
     /// functions (PHPX_NATIVE_MAX), and never ones whose name contains any
@@ -467,6 +470,7 @@ impl Native {
             psites: vec![],
             csites: vec![],
             specs: vec![],
+            leaves: Default::default(),
             log: std::env::var("PHPX_NATIVE_LOG").is_ok(),
             max: std::env::var("PHPX_NATIVE_MAX").ok().and_then(|v| v.parse().ok()),
             skip: std::env::var("PHPX_NATIVE_SKIP").map(|v| v.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect()).unwrap_or_default(),
