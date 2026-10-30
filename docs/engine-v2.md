@@ -251,3 +251,39 @@ Still open: `new` (two allocations per object, registry bookkeeping:
 ~430 instructions vs PHP's ~300 for a 3-property class), ~165
 instructions of generated code per non-accessor method call, inlining
 of non-trivial small methods.
+
+### Later on 2026-10-30
+
+Suite (this machine ran about half as fast as in the morning; ratios):
+
+| Benchmark | phpx/PHP | phpx/Node |
+|---|---|---|
+| assoc | 1.2–1.4 | 1.0 |
+| binary-trees | 1.07 | 8.9 |
+| closures | 1.06 | 2.8 |
+| fannkuch-redux | 0.59 | 3.9 |
+| json | 0.87 | 1.0 |
+| n-body | 0.29 | 4.8 |
+| oop | 0.72–0.93 | 2.8–4.8 |
+| spectral-norm | 0.20 | 1.9 |
+| strings | 1.1–1.2 | 1.2 |
+
+- Leaf methods (`compiler/leaf.rs`): a method whose body is `return
+  <expr>;` over int/float/bool parameters, typed properties of `$this`
+  and literals is compiled a second time as a frameless function; call
+  sites cache it per class (with that class's slots) beside accessors
+  and call it directly. It declines (the real call follows) on anything
+  it can't compute exactly. `area()` in a loop: 88 instructions per
+  iteration instead of 365.
+- `$obj->p op= v` on int/float properties updates the slot in place
+  (write cache), and `$this` is no longer copied for property writes.
+- Typed property write sites keep a second shape (base-class
+  constructors run for two subclasses).
+- Speculated loops: float property updates in place, and each object
+  local is checked once per run of speculated statements (shape, slot
+  storage, scope), so a property access costs ~13 instructions.
+- A function whose short loop is hot across many calls compiles once on
+  its next call instead of first compiling a loop entry.
+
+Known difference left: PHP sets a typed property to 0 when `op=` on it
+throws (`$o->f /= 0`); phpx leaves the old value.
