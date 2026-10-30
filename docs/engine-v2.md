@@ -210,3 +210,44 @@ opcache): a method call is PHP's plus 45–65, a property read 69 vs 52,
 `new` of a 3-property class 667 vs 423. Timings on this machine vary
 by up to 30% between runs; instruction counts (callgrind) are the
 reliable measure.
+
+## Progress (2026-10-30)
+
+Same suite, one run (ms timings are noisy; ratios matter):
+
+| Benchmark | phpx/PHP 10-29 | phpx/PHP now | phpx/Node now |
+|---|---|---|---|
+| assoc | 1.60 | 1.20 | 1.4 |
+| binary-trees | 1.1–1.3 | 1.17 | 10 |
+| closures | 1.11 | 1.14 | 4.0 |
+| fannkuch-redux | 0.59 | 0.58 | 4.3 |
+| json | 1.54 | 0.92 | 1.1 |
+| n-body | 0.58 | 0.58 | 15 |
+| oop | 1.45 | 1.36 | 6.5 |
+| spectral-norm | 0.18 | 0.19 | 2.4 |
+| strings | 1.15 | 1.05 | 1.2 |
+
+What changed:
+
+- Trivial getters and setters (`return $this->p;`, a literal,
+  `$this->p = $x;` optionally followed by `return $this;`) are answered at
+  the call site: the site caches, for up to two classes, the slot, shape
+  and the value tags that pass the method's types unchanged, and
+  generated code reads or writes the slot instead of calling. A getter
+  call costs 75 instructions per loop iteration instead of 228.
+- A local method receiver is read in place when the arguments run no PHP
+  code (no temporary copy and release per call).
+- `===` falls back to the plain identity check, not the general
+  comparison.
+- `$a[k1][k2] = v` walks the levels in place.
+- Integer-only arrays sort with a direct comparison.
+- json_encode/json_decode work without intermediate copies (decode builds
+  values while parsing). json_decode's depth limit and object creation
+  order now match PHP.
+- String interpolation of strings and integers allocates once at the
+  exact size; integers format two digits at a time.
+
+Still open: `new` (two allocations per object, registry bookkeeping:
+~430 instructions vs PHP's ~300 for a 3-property class), ~165
+instructions of generated code per non-accessor method call, inlining
+of non-trivial small methods.
