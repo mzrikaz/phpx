@@ -771,6 +771,8 @@ impl Native {
                         rt::Quick::Str => Some(tag::STR),
                         rt::Quick::Bool => Some(tag::BOOL),
                         rt::Quick::Array => Some(tag::ARRAY),
+                        // `void`: the return value is null.
+                        _ if matches!(t.ret, Some(ast::Type::Named(n)) if n.eq_ignore_ascii_case("void")) => Some(tag::NULL),
                         _ => None,
                     };
                     let lay = layout().filter(|_| inline_rc());
