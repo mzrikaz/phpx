@@ -900,7 +900,9 @@ impl Obj {
     /// stack and copying it in costs more than the allocation itself).
     pub fn from_template(class: &Rc<Class>, template: &[Option<Value>]) -> Rc<Obj> {
         crate::gc::track(|id| {
-            let mut rc = Rc::<Obj>::new_uninit();
+            // (`Rc::new` of an uninitialized value: a fixed layout, where
+            // `Rc::new_uninit` computes it in a call.)
+            let mut rc = Rc::new(std::mem::MaybeUninit::<Obj>::uninit());
             let p = Rc::get_mut(&mut rc).unwrap().as_mut_ptr();
             // SAFETY: every field is written before assume_init.
             unsafe {
