@@ -79,9 +79,16 @@ fn sort_generic(it: &Interp, f: &Frame, a: &mut [Value], by: SortBy, reverse: bo
     } else {
         let flags = if has(a, 1) { it.to_int(&a[1])? } else { 0 };
         let cmp = sort_cmp(it, flags);
-        match by {
-            SortBy::Value => crate::zsort::sort(&mut entries, |x, y| flip(cmp(&x.1, &y.1))),
-            SortBy::Key => crate::zsort::sort(&mut entries, |x, y| flip(cmp(&x.0.to_value(), &y.0.to_value()))),
+        // All integers (counts, ids): compared directly.
+        let ints = |e: &(Key, Value)| matches!(e.1, Value::Int(_));
+        if matches!(by, SortBy::Value) && matches!(flags & !8, 0 | 1) && entries.iter().all(ints) {
+            let int = |e: &(Key, Value)| if let Value::Int(n) = e.1 { n } else { 0 };
+            crate::zsort::sort(&mut entries, |x, y| flip(int(x).cmp(&int(y))));
+        } else {
+            match by {
+                SortBy::Value => crate::zsort::sort(&mut entries, |x, y| flip(cmp(&x.1, &y.1))),
+                SortBy::Key => crate::zsort::sort(&mut entries, |x, y| flip(cmp(&x.0.to_value(), &y.0.to_value()))),
+            }
         }
     }
     if let Some(e) = err.into_inner() {
