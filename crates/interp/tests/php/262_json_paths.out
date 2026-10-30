@@ -1,0 +1,347 @@
+{"list":[1,2.5,-0,1.0e+25,0.1,true,false,null],"strs":["plain","q\"uote","back\\slash","sl\/ash","<tag>&'amp'","tab\there\nnl\r\b\f","\u0001\u001f ctl","\u00e9 \u00fc \u6f22\u5b57 \ud83d\ude00","","0","123"],"7":"int key","":"empty key","nested":{"a":{"b":{"c":[]}}},"obj":{"a":1,"d":{"x":null}},"ser":{"wrapped":[1,"two"]},"enum":"hearts","empty":{}}
+{
+    "list": [
+        1,
+        2.5,
+        -0,
+        1.0e+25,
+        0.1,
+        true,
+        false,
+        null
+    ],
+    "strs": [
+        "plain",
+        "q\"uote",
+        "back\\slash",
+        "sl\/ash",
+        "<tag>&'amp'",
+        "tab\there\nnl\r\b\f",
+        "\u0001\u001f ctl",
+        "\u00e9 \u00fc \u6f22\u5b57 \ud83d\ude00",
+        "",
+        "0",
+        "123"
+    ],
+    "7": "int key",
+    "": "empty key",
+    "nested": {
+        "a": {
+            "b": {
+                "c": []
+            }
+        }
+    },
+    "obj": {
+        "a": 1,
+        "d": {
+            "x": null
+        }
+    },
+    "ser": {
+        "wrapped": [
+            1,
+            "two"
+        ]
+    },
+    "enum": "hearts",
+    "empty": {}
+}
+{"list":[1,2.5,-0,1.0e+25,0.1,true,false,null],"strs":["plain","q\"uote","back\\slash","sl/ash","<tag>&'amp'","tab\there\nnl\r\b\f","\u0001\u001f ctl","é ü 漢字 😀","","0","123"],"7":"int key","":"empty key","nested":{"a":{"b":{"c":[]}}},"obj":{"a":1,"d":{"x":null}},"ser":{"wrapped":[1,"two"]},"enum":"hearts","empty":{}}
+{"list":[1,2.5,-0,1.0e+25,0.1,true,false,null],"strs":["plain","q\u0022uote","back\\slash","sl\/ash","\u003Ctag\u003E\u0026\u0027amp\u0027","tab\there\nnl\r\b\f","\u0001\u001f ctl","\u00e9 \u00fc \u6f22\u5b57 \ud83d\ude00","","0","123"],"7":"int key","":"empty key","nested":{"a":{"b":{"c":[]}}},"obj":{"a":1,"d":{"x":null}},"ser":{"wrapped":[1,"two"]},"enum":"hearts","empty":{}}
+{"list":{"0":1,"1":2.5,"2":-0,"3":1.0e+25,"4":0.1,"5":true,"6":false,"7":null},"strs":{"0":"plain","1":"q\"uote","2":"back\\slash","3":"sl\/ash","4":"<tag>&'amp'","5":"tab\there\nnl\r\b\f","6":"\u0001\u001f ctl","7":"\u00e9 \u00fc \u6f22\u5b57 \ud83d\ude00","8":"","9":"0","10":"123"},"7":"int key","":"empty key","nested":{"a":{"b":{"c":{}}}},"obj":{"a":1,"d":{"x":null}},"ser":{"wrapped":{"0":1,"1":"two"}},"enum":"hearts","empty":{}}
+{"list":[1,2.5,-0.0,1.0e+25,0.1,true,false,null],"strs":["plain","q\"uote","back\\slash","sl\/ash","<tag>&'amp'","tab\there\nnl\r\b\f","\u0001\u001f ctl","\u00e9 \u00fc \u6f22\u5b57 \ud83d\ude00","","0","123"],"7":"int key","":"empty key","nested":{"a":{"b":{"c":[]}}},"obj":{"a":1,"d":{"x":null}},"ser":{"wrapped":[1,"two"]},"enum":"hearts","empty":{}}
+{
+    "list": {
+        "0": 1,
+        "1": 2.5,
+        "2": -0,
+        "3": 1.0e+25,
+        "4": 0.1,
+        "5": true,
+        "6": false,
+        "7": null
+    },
+    "strs": {
+        "0": "plain",
+        "1": "q\"uote",
+        "2": "back\\slash",
+        "3": "sl\/ash",
+        "4": "<tag>&'amp'",
+        "5": "tab\there\nnl\r\b\f",
+        "6": "\u0001\u001f ctl",
+        "7": "\u00e9 \u00fc \u6f22\u5b57 \ud83d\ude00",
+        "8": "",
+        "9": "0",
+        "10": "123"
+    },
+    "7": "int key",
+    "": "empty key",
+    "nested": {
+        "a": {
+            "b": {
+                "c": {}
+            }
+        }
+    },
+    "obj": {
+        "a": 1,
+        "d": {
+            "x": null
+        }
+    },
+    "ser": {
+        "wrapped": {
+            "0": 1,
+            "1": "two"
+        }
+    },
+    "enum": "hearts",
+    "empty": {}
+}
+"plain"{"plain":"plain"}
+"q\"uote"{"q\"uote":"q\"uote"}
+"back\\slash"{"back\\slash":"back\\slash"}
+"sl\/ash"{"sl\/ash":"sl\/ash"}
+"<tag>&'amp'"{"<tag>&'amp'":"<tag>&'amp'"}
+"tab\there\nnl\r\b\f"{"tab\there\nnl\r\b\f":"tab\there\nnl\r\b\f"}
+"\u0001\u001f ctl"{"\u0001\u001f ctl":"\u0001\u001f ctl"}
+"\u00e9 \u00fc \u6f22\u5b57 \ud83d\ude00"{"é ü 漢字 😀":"é ü 漢字 😀"}
+""{"":""}
+"0"["0"]
+"123"{"123":"123"}
+bool(false)
+int(5)
+string(56) "Malformed UTF-8 characters, possibly incorrectly encoded"
+bool(false)
+string(34) "Inf and NaN cannot be JSON encoded"
+bool(false)
+string(18) "Recursion detected"
+bool(false)
+string(28) "Maximum stack depth exceeded"
+object(stdClass)#5 (6) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    object(stdClass)#6 (1) {
+      ["c"]=>
+      NULL
+    }
+  }
+  ["d"]=>
+  string(8) "xé😀
+"
+  ["e"]=>
+  float(1500)
+  ["f"]=>
+  int(0)
+  ["g"]=>
+  float(1.2345678901234567E+19)
+}
+int(0)
+array(6) {
+  ["a"]=>
+  int(1)
+  ["b"]=>
+  array(3) {
+    [0]=>
+    int(1)
+    [1]=>
+    int(2)
+    [2]=>
+    array(1) {
+      ["c"]=>
+      NULL
+    }
+  }
+  ["d"]=>
+  string(8) "xé😀
+"
+  ["e"]=>
+  float(1500)
+  ["f"]=>
+  int(0)
+  ["g"]=>
+  float(1.2345678901234567E+19)
+}
+string(8) "No error"
+array(0) {
+}
+int(0)
+array(0) {
+}
+string(8) "No error"
+object(stdClass)#5 (0) {
+}
+int(0)
+array(0) {
+}
+string(8) "No error"
+object(stdClass)#5 (2) {
+  [""]=>
+  int(1)
+  ["_empty_"]=>
+  int(2)
+}
+int(0)
+array(2) {
+  [""]=>
+  int(1)
+  ["_empty_"]=>
+  int(2)
+}
+string(8) "No error"
+object(stdClass)#5 (1) {
+  ["a"]=>
+  int(2)
+}
+int(0)
+array(1) {
+  ["a"]=>
+  int(2)
+}
+string(8) "No error"
+object(stdClass)#5 (2) {
+  ["7"]=>
+  string(5) "seven"
+  ["07"]=>
+  string(8) "oh-seven"
+}
+int(0)
+array(2) {
+  [7]=>
+  string(5) "seven"
+  ["07"]=>
+  string(8) "oh-seven"
+}
+string(8) "No error"
+string(2) "A/"
+int(0)
+string(2) "A/"
+string(8) "No error"
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+int(0)
+array(2) {
+  [0]=>
+  int(1)
+  [1]=>
+  int(2)
+}
+string(8) "No error"
+bool(true)
+int(0)
+bool(true)
+string(8) "No error"
+int(-12)
+int(0)
+int(-12)
+string(8) "No error"
+float(0.5)
+int(0)
+float(0.5)
+string(8) "No error"
+NULL
+int(4)
+NULL
+string(12) "Syntax error"
+NULL
+int(4)
+NULL
+string(12) "Syntax error"
+NULL
+int(4)
+NULL
+string(12) "Syntax error"
+NULL
+int(3)
+NULL
+string(53) "Control character error, possibly incorrectly encoded"
+NULL
+int(3)
+NULL
+string(53) "Control character error, possibly incorrectly encoded"
+NULL
+int(4)
+NULL
+string(12) "Syntax error"
+NULL
+int(4)
+NULL
+string(12) "Syntax error"
+NULL
+int(4)
+NULL
+string(12) "Syntax error"
+NULL
+int(10)
+NULL
+string(50) "Single unpaired UTF-16 surrogate in unicode escape"
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    array(1) {
+      [0]=>
+      array(1) {
+        [0]=>
+        int(1)
+      }
+    }
+  }
+}
+int(0)
+array(1) {
+  [0]=>
+  array(1) {
+    [0]=>
+    array(1) {
+      [0]=>
+      array(1) {
+        [0]=>
+        int(1)
+      }
+    }
+  }
+}
+string(8) "No error"
+NULL
+int(4)
+NULL
+string(12) "Syntax error"
+NULL
+int(4)
+NULL
+string(12) "Syntax error"
+NULL
+string(28) "Maximum stack depth exceeded"
+NULL
+object(stdClass)#6 (1) {
+  ["a"]=>
+  object(stdClass)#5 (1) {
+    ["b"]=>
+    int(1)
+  }
+}
+bool(true)
+bool(false)
+array(1) {
+  ["x"]=>
+  int(1)
+}
+JsonException 4 Syntax error
+int(1)
+bool(false)
+27219e3af5814a7c20646f272b21c53e
+27219e3af5814a7c20646f272b21c53e
+27219e3af5814a7c20646f272b21c53e

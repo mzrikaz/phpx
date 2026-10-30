@@ -387,8 +387,10 @@ impl<'a> Parser<'a> {
     }
 
     fn enter(&mut self) -> PR<()> {
+        // (As in PHP, values inside the innermost array count as a level:
+        // `[1]` needs a depth of 2.)
         self.depth += 1;
-        if self.depth > self.max_depth {
+        if self.depth >= self.max_depth {
             return Err((1, "Maximum stack depth exceeded"));
         }
         self.i += 1;
@@ -441,11 +443,13 @@ impl<'a> Parser<'a> {
             Some(b'{') => {
                 self.enter()?;
                 let mut arr = self.assoc.then(PhpArray::new);
+                // (PHP creates the object once its first member is parsed,
+                // after any objects inside that member.)
+                let mut obj = None;
                 let new_obj = |p: &mut Self| {
                     let cls = p.std.get_or_insert_with(|| p.it.classes.borrow().get("stdclass").cloned().unwrap()).clone();
                     Obj::new(cls, crate::value::Internal::None)
                 };
-                let mut obj = if arr.is_none() { Some(new_obj(self)) } else { None };
                 if self.b.get(self.i) == Some(&b'}') {
                     self.i += 1;
                     self.depth -= 1;
