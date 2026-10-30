@@ -51,6 +51,22 @@ impl PStr {
         s
     }
 
+    /// The pieces joined, in one allocation of exactly their size.
+    pub fn concat(parts: &[&[u8]]) -> PStr {
+        let len = parts.iter().map(|p| p.len()).sum();
+        let mut s = PStr::with_capacity(len);
+        // SAFETY: the parts fill the capacity reserved above exactly.
+        unsafe {
+            let mut d = s.data_mut();
+            for p in parts {
+                copy_small(p.as_ptr(), d, p.len());
+                d = d.add(p.len());
+            }
+            (*s.ptr.as_ptr()).len = len;
+        }
+        s
+    }
+
     #[inline]
     fn hdr(&self) -> &Header {
         // SAFETY: valid while self lives.
@@ -311,5 +327,35 @@ pub fn lossy(b: &[u8]) -> std::borrow::Cow<'_, str> {
     match std::str::from_utf8(b) {
         Ok(s) => std::borrow::Cow::Borrowed(s),
         Err(_) => String::from_utf8_lossy(b),
+    }
+}
+
+/// `copy_nonoverlapping`, without a `memcpy` call for the short pieces
+/// strings are mostly built from.
+///
+/// # Safety
+/// As for `copy_nonoverlapping`.
+#[inline(always)]
+unsafe fn copy_small(src: *const u8, dst: *mut u8, n: usize) {
+    unsafe {
+        match n {
+            0 => {}
+            1..=3 => {
+                *dst = *src;
+                *dst.add(n / 2) = *src.add(n / 2);
+                *dst.add(n - 1) = *src.add(n - 1);
+            }
+            4..=7 => {
+                let (a, b) = ((src as *const u32).read_unaligned(), (src.add(n - 4) as *const u32).read_unaligned());
+                (dst as *mut u32).write_unaligned(a);
+                (dst.add(n - 4) as *mut u32).write_unaligned(b);
+            }
+            8..=16 => {
+                let (a, b) = ((src as *const u64).read_unaligned(), (src.add(n - 8) as *const u64).read_unaligned());
+                (dst as *mut u64).write_unaligned(a);
+                (dst.add(n - 8) as *mut u64).write_unaligned(b);
+            }
+            _ => std::ptr::copy_nonoverlapping(src, dst, n),
+        }
     }
 }

@@ -828,6 +828,22 @@ fn append_str(it: &Interp, buf: &mut crate::value::PStr, v: &Value) -> R<()> {
 pub unsafe extern "C" fn rt_interp(c: *mut Cx, parts: *const *const Value, n: u64, dst: *mut Value) -> u64 {
     let (it, _) = cx(c);
     let parts = std::slice::from_raw_parts(parts, n as usize);
+    // Strings and integers (most interpolations): measured, then copied
+    // into one allocation of the exact size.
+    const MAX: usize = 8;
+    if parts.len() <= MAX && parts.iter().all(|p| matches!(&**p, Value::Str(_) | Value::Int(_))) {
+        let mut digits = [[0u8; 20]; MAX];
+        let mut pieces: [&[u8]; MAX] = [&[]; MAX];
+        for ((p, d), piece) in parts.iter().zip(digits.iter_mut()).zip(pieces.iter_mut()) {
+            *piece = match &**p {
+                Value::Str(s) => s,
+                Value::Int(n) => crate::pstr::fmt_int(*n, d),
+                _ => unreachable!(),
+            };
+        }
+        put(dst, Value::Str(crate::value::PStr::concat(&pieces[..parts.len()])));
+        return 0;
+    }
     let cap: usize = parts.iter().map(|p| if let Value::Str(s) = &**p { s.len() } else { 20 }).sum();
     let mut buf = crate::value::PStr::with_capacity(cap);
     for p in parts {
