@@ -268,6 +268,7 @@ pub struct Layout {
     pub msite_direct: i32,
     pub msite_class: i32,
     pub msite_scope: i32,
+    pub msite_this: i32,
     pub msite_frame: i32,
 }
 
@@ -360,6 +361,7 @@ fn probe_layout() -> Option<Layout> {
         msite_direct: offset_of!(rt::MethodSite, direct) as i32,
         msite_class: offset_of!(rt::MethodSite, direct_class) as i32,
         msite_scope: offset_of!(rt::MethodSite, direct_scope) as i32,
+        msite_this: offset_of!(rt::MethodSite, direct_this) as i32,
         msite_frame: offset_of!(rt::MethodSite, frame) as i32,
     })
 }
@@ -773,6 +775,9 @@ impl Native {
                     };
                     let lay = layout().filter(|_| inline_rc());
                     let class = rt::plain_class_type(t.ret).filter(|_| lay.is_some());
+                    // `static`: an object of exactly the called class passes.
+                    let is_static = matches!(t.ret, Some(ast::Type::Named(n)) if n.eq_ignore_ascii_case("static")) && lay.is_some();
+                    let class = class.or(is_static.then_some(false));
                     if want.is_some() || class.is_some() {
                         let tg = l.b.ins().load(types::I8, fl, outv, 0);
                         let null_ok = spec.ret_quick.1 || class == Some(true);
@@ -796,12 +801,18 @@ impl Native {
                                 l.b.switch_to_block(cls_chk);
                                 let rc = l.b.ins().load(types::I64, fl, outv, tag::PAYLOAD);
                                 let cls = l.b.ins().load(types::I64, fl, rc, lay.obj_class);
-                                let cells = l.b.ins().iconst(types::I64, spec.ret_fast.ptr.as_ptr() as i64);
-                                let c0 = l.b.ins().load(types::I64, fl, cells, 0);
-                                let c1 = l.b.ins().load(types::I64, fl, cells, 8);
-                                let e0 = l.b.ins().icmp(IntCC::Equal, cls, c0);
-                                let e1 = l.b.ins().icmp(IntCC::Equal, cls, c1);
-                                let hit = l.b.ins().bor(e0, e1);
+                                let hit = if is_static {
+                                    let frame = l.b.ins().load(types::I64, fl, cxv, lay.cx_frame);
+                                    let st = l.b.ins().load(types::I64, fl, frame, lay.frame_static);
+                                    l.b.ins().icmp(IntCC::Equal, cls, st)
+                                } else {
+                                    let cells = l.b.ins().iconst(types::I64, spec.ret_fast.ptr.as_ptr() as i64);
+                                    let c0 = l.b.ins().load(types::I64, fl, cells, 0);
+                                    let c1 = l.b.ins().load(types::I64, fl, cells, 8);
+                                    let e0 = l.b.ins().icmp(IntCC::Equal, cls, c0);
+                                    let e1 = l.b.ins().icmp(IntCC::Equal, cls, c1);
+                                    l.b.ins().bor(e0, e1)
+                                };
                                 l.b.ins().brif(hit, ok, &[], check, &[]);
                             }
                             _ => {

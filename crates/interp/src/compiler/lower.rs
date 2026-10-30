@@ -2248,7 +2248,23 @@ impl<'a> Lower<'a> {
                 let entry = l.b.ins().load(types::I64, flags(), sp, lay.msite_direct);
                 l.b.ins().brif(entry, c3, &[], slow, &[]);
                 l.b.switch_to_block(c3);
-                (entry, None)
+                // An instance method (`parent::m()`): the caller's `$this`,
+                // of the class cached, is lent to it.
+                let want = l.b.ins().load(types::I64, flags(), sp, lay.msite_this);
+                let (inst, has_this, out) = (l.b.create_block(), l.b.create_block(), l.b.create_block());
+                l.b.append_block_param(out, types::I64);
+                let none = l.b.ins().iconst(types::I64, 0);
+                l.b.ins().brif(want, inst, &[], out, &[none.into()]);
+                l.b.switch_to_block(inst);
+                let th = l.b.ins().load(types::I64, flags(), caller, lay.frame_this);
+                l.b.ins().brif(th, has_this, &[], slow, &[]);
+                l.b.switch_to_block(has_this);
+                let cls = l.b.ins().load(types::I64, flags(), th, lay.obj_class);
+                let same = l.b.ins().icmp(IntCC::Equal, cls, want);
+                l.b.ins().brif(same, out, &[th.into()], slow, &[]);
+                l.b.switch_to_block(out);
+                let this = l.b.block_params(out)[0];
+                (entry, Some(this))
             },
             |l, ta| l.call_checked("rt_static_call", &[l.cx, cr, sp, aa, n, la, meta, ta]),
         )
@@ -2369,11 +2385,17 @@ impl<'a> Lower<'a> {
         let d1 = self.b.ins().iadd_imm_s(d, 1);
         self.b.ins().store(flags(), d1, sp, depth_off);
         if let Some(rc) = this {
-            // Lend `$this` to the frame (one more reference).
+            // Lend `$this` to the frame (one more reference); 0: none (a
+            // static method through `A::m()`).
+            let (lend, lent_b) = (self.b.create_block(), self.b.create_block());
+            self.b.ins().brif(rc, lend, &[], lent_b, &[]);
+            self.b.switch_to_block(lend);
             let cnt = self.b.ins().load(types::I64, flags(), rc, 0);
             let cnt = self.b.ins().iadd_imm_s(cnt, 1);
             self.b.ins().store(flags(), cnt, rc, 0);
             self.b.ins().store(flags(), rc, frame, lay.frame_this);
+            self.b.ins().jump(lent_b, &[]);
+            self.b.switch_to_block(lent_b);
         }
         // The callee's Cx: same interpreter, the site's frame.
         let it = self.b.ins().load(types::I64, flags(), self.cx, 0);
@@ -2398,6 +2420,9 @@ impl<'a> Lower<'a> {
         self.b.ins().store(flags(), d, sp, depth_off);
         if let Some(rc) = this {
             // Take `$this` back and drop the frame's reference.
+            let (back, back_done) = (self.b.create_block(), self.b.create_block());
+            self.b.ins().brif(rc, back, &[], back_done, &[]);
+            self.b.switch_to_block(back);
             let null = self.iconst(0);
             self.b.ins().store(flags(), null, frame, lay.frame_this);
             let tt = self.alloc_temp();
@@ -2406,6 +2431,8 @@ impl<'a> Lower<'a> {
             self.b.ins().store(flags(), rc, tta, tag::PAYLOAD);
             self.clear(tta);
             self.free.push(tt);
+            self.b.ins().jump(back_done, &[]);
+            self.b.switch_to_block(back_done);
         }
         // Plain functions leave the frame untouched unless they ran
         // something that needed interpreter variables.

@@ -2366,6 +2366,9 @@ pub struct MethodSite {
     pub direct: std::cell::Cell<usize>,
     pub direct_class: std::cell::Cell<usize>,
     pub direct_scope: std::cell::Cell<usize>,
+    /// Static calls to an instance method (`parent::m()`): the class of
+    /// the caller's `$this` (raw Rc word; 0: a static method).
+    pub direct_this: std::cell::Cell<usize>,
     pub frame: SiteFrame,
     pub name: &'static str,
     pub lname: &'static str,
@@ -2520,6 +2523,7 @@ impl MethodSite {
             direct: Default::default(),
             direct_class: Default::default(),
             direct_scope: Default::default(),
+            direct_this: Default::default(),
             frame: Default::default(),
             name,
             lname,
@@ -3594,10 +3598,15 @@ unsafe fn static_lookup(
     };
     site.cached.set(Some(mc));
     site.frame.invalidate();
-    // Direct calls from compiled code (static methods only: no `$this` to
-    // lend), keyed by the caller's raw scope and `static` class words.
-    let direct = m.is_static && crate::call::method_params(&m).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
+    // Direct calls from compiled code, keyed by the caller's raw scope and
+    // `static` class words, and for an instance method the class of the
+    // `$this` it gets lent.
+    let direct = crate::call::method_params(&m).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
     site.direct.set(if direct { entry as usize } else { 0 });
+    site.direct_this.set(match (&f.this, m.is_static) {
+        (Some(o), false) => *(std::ptr::addr_of!(o.class) as *const usize),
+        _ => 0,
+    });
     site.direct_class.set(*(std::ptr::addr_of!(f.static_class) as *const usize));
     site.direct_scope.set(scope_key(f));
     Some(mc)
@@ -4261,6 +4270,7 @@ impl MethodSite {
         self.direct.set(0);
         self.direct_class.set(0);
         self.direct_scope.set(0);
+        self.direct_this.set(0);
         self.frame.invalidate();
         self.cached.set(None);
         *self.interp.borrow_mut() = None;

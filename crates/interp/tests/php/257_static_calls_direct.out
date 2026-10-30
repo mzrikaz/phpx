@@ -1,0 +1,51 @@
+[
+    [
+        "A>A:a0|static:A|static:Base",
+        "A",
+        "A>A:a1|static:A|static:Base"
+    ],
+    "Base::wrong(): Return value must be of type A, Base returned",
+    [
+        "B>B:b|static:B",
+        "B",
+        "B>B:b|static:B"
+    ],
+    "Base::wrong(): Return value must be of type B, Base returned",
+    [
+        "C>B>C:b|static:C",
+        "C",
+        "C>B>C:b|static:C"
+    ],
+    "Base::wrong(): Return value must be of type C, Base returned",
+    [
+        "C>B>C:b|static:C",
+        "C",
+        "C>B>C:b|static:C"
+    ],
+    [
+        "A>A:a501|static:A|static:Base",
+        "A",
+        "A>A:a502|static:A|static:Base"
+    ],
+    [
+        "B>B:b|static:B",
+        "B",
+        "B>B:b|static:B"
+    ],
+    [
+        "B>B:b|static:B",
+        "B",
+        "B>B:b|static:B"
+    ],
+    [
+        "C>B>C:b|static:C",
+        "C",
+        "C>B>C:b|static:C"
+    ],
+    [
+        "A>A:a1002|static:A|static:Base",
+        "A",
+        "A>A:a1003|static:A|static:Base"
+    ]
+]
+static:Base static:A
