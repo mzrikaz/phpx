@@ -429,16 +429,10 @@ impl<'a> Lower<'a> {
                             let cands = self.cand_names();
                             if self.locals.index.contains_key(o.as_str()) && !cands.contains(o.as_str()) && self.ty(value, &cands) == Ty::F {
                                 let fail = self.fail_block(fb);
-                                let mut r = self.fexpr(value, fail)?;
+                                let r = self.fexpr(value, fail)?;
                                 let oi = self.locals.index[o.as_str()];
-                                if let Some(op) = op {
-                                    let oa = self.local_addr(oi);
-                                    let cur = self.peek_prop(oa, &name.name, fail, true)?;
-                                    r = self.fbin(op, cur, r, fail);
-                                }
                                 let oa = self.local_addr(oi);
-                                let res = self.prop_store(oa, &name.name, Op::Float(r))?;
-                                self.release(res);
+                                self.float_prop_update(oa, &name.name, op, r, fail);
                                 return Ok(());
                             }
                         }
@@ -931,6 +925,48 @@ impl<'a> Lower<'a> {
 
     /// `$obj->name` read without side effects: the inline cache, else the
     /// peek helper; neither found (or not a number) means `fail`.
+    /// `$obj->name = x` / `$obj->name op= x` for a float `x`, on a slot
+    /// that holds a float and that the write cache allows writing (not
+    /// readonly, visible, untyped or float-typed): the payload replaced in
+    /// place. Anything else fills the cache and goes to `fail` (nothing
+    /// was written).
+    fn float_prop_update(&mut self, oa: CValue, name: &'static str, op: Option<BinOp>, x: CValue, fail: Block) {
+        let site = Box::new(crate::compiler::rt::PropSite::new(name));
+        let sp = &*site as *const crate::compiler::rt::PropSite as i64;
+        self.psites.push(site);
+        let Some(lay) = crate::compiler::layout() else {
+            self.b.ins().jump(fail, &[]);
+            let dead = self.b.create_block();
+            self.b.switch_to_block(dead);
+            return;
+        };
+        let miss = self.b.create_block();
+        self.b.set_cold_block(miss);
+        let site_v = self.iconst(sp);
+        let props = self.prop_guard(lay, oa, site_v, crate::compiler::rt::PROPSITE_WSHAPE, crate::compiler::rt::PROPSITE_WSCOPE, miss);
+        let p = self.prop_slot(lay, props, site_v, crate::compiler::rt::PROPSITE_WSLOT, miss);
+        let tg = self.load_tag(p);
+        let is_f = self.b.ins().icmp_imm_u(IntCC::Equal, tg, tag::FLOAT as i64);
+        let hit = self.b.create_block();
+        self.b.ins().brif(is_f, hit, &[], miss, &[]);
+        self.b.switch_to_block(hit);
+        let r = match op {
+            Some(op) => {
+                let cur = self.b.ins().load(types::F64, flags(), p, tag::PAYLOAD);
+                self.fbin(op, cur, x, fail)
+            }
+            None => x,
+        };
+        self.b.ins().store(flags(), r, p, tag::PAYLOAD);
+        let cont = self.b.create_block();
+        self.b.ins().jump(cont, &[]);
+        self.b.switch_to_block(miss);
+        let site_v = self.iconst(sp);
+        self.call("rt_arith_fill", &[self.cx, oa, site_v]);
+        self.b.ins().jump(fail, &[]);
+        self.b.switch_to_block(cont);
+    }
+
     fn peek_prop(&mut self, oa: CValue, name: &'static str, fail: Block, float_only: bool) -> L<CValue> {
         let site = Box::new(crate::compiler::rt::PropSite::new(name));
         let sp = &*site as *const crate::compiler::rt::PropSite as i64;
