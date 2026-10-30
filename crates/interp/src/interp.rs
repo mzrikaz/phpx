@@ -1280,6 +1280,13 @@ impl Interp {
         if f.fn_id == 0 || LOOP_COUNTS.with(|c| c.borrow().get(&(s as *const Stmt as usize)).copied()).unwrap_or(0) < crate::compiler::OSR_ITERATIONS {
             return None;
         }
+        // A short loop in a function called over and over: the function
+        // compiles on its next call instead (one compilation, not a loop
+        // entry first and the whole function soon after).
+        if self.promote_native(f.fn_id) {
+            LOOP_COUNTS.with(|c| c.borrow_mut().remove(&(s as *const Stmt as usize)));
+            return None;
+        }
         self.try_osr(f, s)
     }
 

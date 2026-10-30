@@ -1360,6 +1360,22 @@ impl Interp {
 
     /// Whether a function has been compiled, without counting a call:
     /// None while undecided, Some(None) when it doesn't compile.
+    /// A function already called a few times whose loops are hot: compile
+    /// it on its next call (true), rather than entering its loop natively
+    /// now.
+    pub fn promote_native(&self, fn_id: usize) -> bool {
+        let Ok(mut guard) = self.native.try_borrow_mut() else { return false };
+        let Some(n) = guard.as_mut() else { return false };
+        let threshold = n.threshold;
+        match n.hot.get_mut(&fn_id) {
+            Some((calls, _)) if *calls >= 10 && *calls < threshold => {
+                *calls = threshold - 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn compiled_entry(&self, fn_id: usize) -> Option<Option<Entry>> {
         let guard = self.native.try_borrow().ok()?;
         guard.as_ref()?.compiled.get(&fn_id).copied()
