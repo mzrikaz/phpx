@@ -1804,12 +1804,27 @@ pub unsafe extern "C" fn rt_prop_read(c: *mut Cx, obj: *const Value, site: *cons
 /// in place (visible, not readonly, present, not a reference, untyped or
 /// typed to hold an int).
 pub unsafe extern "C" fn rt_incdec_fill(c: *mut Cx, obj: *const Value, site: *const PropSite) -> u64 {
+    arith_fill(c, obj, site, false)
+}
+
+/// `rt_incdec_fill` for `$obj->p op= v`: float properties too (generated
+/// code keeps an int an int and a float a float, which every one of these
+/// types accepts as it is).
+pub unsafe extern "C" fn rt_arith_fill(c: *mut Cx, obj: *const Value, site: *const PropSite) -> u64 {
+    arith_fill(c, obj, site, true)
+}
+
+unsafe fn arith_fill(c: *mut Cx, obj: *const Value, site: *const PropSite, float: bool) -> u64 {
     let (it, f) = cx(c);
     let site = &*site;
     let Value::Object(o) = &*obj else { return 0 };
     let key = it.prop_key(f, o, site.name);
     let ok = match o.class.find_prop(&key) {
-        Some(d) => !d.readonly && it.member_visible(f.class.as_deref(), d.vis, &d.declaring) && matches!(Quick::of(d.ty).0, Quick::Untyped | Quick::Int | Quick::Mixed),
+        Some(d) => {
+            !d.readonly
+                && it.member_visible(f.class.as_deref(), d.vis, &d.declaring)
+                && (matches!(Quick::of(d.ty).0, Quick::Untyped | Quick::Int | Quick::Mixed) || float && Quick::of(d.ty).0 == Quick::Float)
+        }
         None => it.prop_visible(f, o, &key),
     };
     if !ok {

@@ -1,0 +1,19 @@
+Cannot modify readonly property C::$ro
+TypeError: Unsupported operand types: int + string
+Cannot assign float to property C::$i of type int
+[1,11.625,3,2,10,"4",11.625]
+Cannot access private property C::$priv
+[12.625,2,0,3]
+Cannot modify readonly property C::$ro
+TypeError: Unsupported operand types: int + string
+Cannot assign float to property C::$i of type int
+[1,11.625,3,2,11,"4",11.625]
+Cannot access private property C::$priv
+[12.625,2,0,3]
+Cannot modify readonly property C::$ro
+TypeError: Unsupported operand types: int + string
+Cannot assign float to property C::$i of type int
+[1,11.625,3,2,12,"4",11.625]
+Cannot access private property C::$priv
+[12.625,2,0,3]
+Attempt to assign property "x" on null

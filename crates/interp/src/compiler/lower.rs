@@ -3674,6 +3674,12 @@ impl<'a> Lower<'a> {
         // property caches, the arithmetic inline. PHP's order: the object,
         // then the value, then the property is read.
         if let ExprKind::Prop { object, name: MemberName::Ident(name), nullsafe: false } = &target.kind {
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div)
+                && matches!(&object.kind, ExprKind::Var(n) if self.locals.index.contains_key(n.as_str()))
+                && super::layout().is_some()
+            {
+                return self.prop_arith(op, target, object, &name.name, value);
+            }
             if !matches!(op, BinOp::Coalesce) && matches!(&object.kind, ExprKind::Var(n) if self.locals.index.contains_key(n.as_str())) {
                 let o = self.expr(object)?;
                 let o = self.own(o);
@@ -3715,6 +3721,143 @@ impl<'a> Lower<'a> {
             }
         }
         self.place_update(target, binop_code(op) as i64, Some(value))
+    }
+
+    /// `$local->name op= v` (`+ - * /`) on an int or float property: the
+    /// slot found through the write cache and updated in place, an int
+    /// staying an int (no overflow) and a float a float; anything else
+    /// takes the general path, which fills the cache.
+    fn prop_arith(&mut self, op: BinOp, target: &'static Expr, object: &'static Expr, name: &'static str, value: &'static Expr) -> L<Op> {
+        let lay = super::layout().unwrap();
+        let site = Box::new(super::rt::PropSite::new(name));
+        let sp = &*site as *const super::rt::PropSite as i64;
+        self.psites.push(site);
+        // (`$this` never changes; another local is read first, as PHP
+        // does, unless the value can't change it.)
+        let o = self.expr(object)?;
+        let keep = matches!(&object.kind, ExprKind::Var(n) if n == "this") || pure_operand(value);
+        let o = if keep { o } else { self.own(o) };
+        let o = self.materialize(o);
+        let v = self.expr(value)?;
+        let v = self.own(v);
+        let t = self.alloc_temp();
+        let (general, merge) = (self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(general);
+        let oa = self.addr(o).unwrap();
+        let site_v = self.iconst(sp);
+        let props = self.prop_guard(lay, oa, site_v, super::rt::PROPSITE_WSHAPE, super::rt::PROPSITE_WSCOPE, general);
+        let p = self.prop_slot(lay, props, site_v, super::rt::PROPSITE_WSLOT, general);
+        let ct = self.load_tag(p);
+        // The value's tag (known for a register operand).
+        let vt = match v {
+            Op::Int(_) => self.b.ins().iconst(types::I8, tag::INT as i64),
+            Op::Float(_) => self.b.ins().iconst(types::I8, tag::FLOAT as i64),
+            Op::Bool(_) => self.b.ins().iconst(types::I8, tag::BOOL as i64),
+            _ => {
+                let va = self.addr(v).unwrap();
+                self.load_tag(va)
+            }
+        };
+        let payload = |l: &mut Self, ty| match v {
+            Op::Int(x) | Op::Float(x) => x,
+            _ => {
+                let va = l.addr(v).unwrap();
+                l.b.ins().load(ty, flags(), va, tag::PAYLOAD)
+            }
+        };
+        let (int_b, flt_chk, flt_b) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+        let ct_int = self.b.ins().icmp_imm_u(IntCC::Equal, ct, tag::INT as i64);
+        let vt_int = self.b.ins().icmp_imm_u(IntCC::Equal, vt, tag::INT as i64);
+        let both = self.b.ins().band(ct_int, vt_int);
+        if op == BinOp::Div {
+            self.b.ins().jump(flt_chk, &[]);
+        } else {
+            self.b.ins().brif(both, int_b, &[], flt_chk, &[]);
+        }
+        // int op int: an int unless it overflows.
+        self.b.switch_to_block(int_b);
+        if op != BinOp::Div {
+            let x = self.b.ins().load(types::I64, flags(), p, tag::PAYLOAD);
+            let y = if matches!(v, Op::Float(_)) { self.iconst(0) } else { payload(self, types::I64) };
+            let (r, of) = match op {
+                BinOp::Add => self.b.ins().sadd_overflow(x, y),
+                BinOp::Sub => self.b.ins().ssub_overflow(x, y),
+                _ => self.b.ins().smul_overflow(x, y),
+            };
+            let ok = self.b.create_block();
+            self.b.ins().brif(of, general, &[], ok, &[]);
+            self.b.switch_to_block(ok);
+            self.b.ins().store(flags(), r, p, tag::PAYLOAD);
+            let ta = self.temp_addr(t);
+            self.store_into(ta, Op::Int(r));
+            self.b.ins().jump(merge, &[]);
+        } else {
+            self.b.ins().jump(general, &[]);
+        }
+        // float op (float or int): a float.
+        self.b.switch_to_block(flt_chk);
+        let ct_flt = self.b.ins().icmp_imm_u(IntCC::Equal, ct, tag::FLOAT as i64);
+        let vt_flt = self.b.ins().icmp_imm_u(IntCC::Equal, vt, tag::FLOAT as i64);
+        let num = self.b.ins().bor(vt_flt, vt_int);
+        let go = self.b.ins().band(ct_flt, num);
+        self.b.ins().brif(go, flt_b, &[], general, &[]);
+        self.b.switch_to_block(flt_b);
+        let x = self.b.ins().load(types::F64, flags(), p, tag::PAYLOAD);
+        let y = match v {
+            Op::Float(y) => y,
+            Op::Int(n) => self.b.ins().fcvt_from_sint(types::F64, n),
+            _ => {
+                let (fb, ib, j) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
+                self.b.append_block_param(j, types::F64);
+                self.b.ins().brif(vt_flt, fb, &[], ib, &[]);
+                self.b.switch_to_block(fb);
+                let y = payload(self, types::F64);
+                self.b.ins().jump(j, &[y.into()]);
+                self.b.switch_to_block(ib);
+                let n = payload(self, types::I64);
+                let y = self.b.ins().fcvt_from_sint(types::F64, n);
+                self.b.ins().jump(j, &[y.into()]);
+                self.b.switch_to_block(j);
+                self.b.block_params(j)[0]
+            }
+        };
+        let r = match op {
+            BinOp::Add => self.b.ins().fadd(x, y),
+            BinOp::Sub => self.b.ins().fsub(x, y),
+            BinOp::Mul => self.b.ins().fmul(x, y),
+            _ => {
+                let zero = self.b.ins().f64const(0.0);
+                let z = self.b.ins().fcmp(FloatCC::Equal, y, zero);
+                let ok = self.b.create_block();
+                self.b.ins().brif(z, general, &[], ok, &[]);
+                self.b.switch_to_block(ok);
+                self.b.ins().fdiv(x, y)
+            }
+        };
+        self.b.ins().store(flags(), r, p, tag::PAYLOAD);
+        let ta = self.temp_addr(t);
+        self.store_into(ta, Op::Float(r));
+        self.b.ins().jump(merge, &[]);
+        // The general path (its errors, warnings and coercions), then the
+        // cache for next time.
+        self.b.switch_to_block(general);
+        let vm = self.materialize(v);
+        let va = self.addr(vm).unwrap();
+        let r = self.place_update_ra(target, binop_code(op) as i64, va)?;
+        let ta = self.temp_addr(t);
+        self.store_into(ta, r);
+        let oa = self.addr(o).unwrap();
+        let site_v = self.iconst(sp);
+        self.call("rt_arith_fill", &[self.cx, oa, site_v]);
+        if !matches!(v, Op::Ptr(..)) {
+            self.release(vm);
+        }
+        self.b.ins().jump(merge, &[]);
+        self.b.switch_to_block(merge);
+        self.release(v);
+        self.release(o);
+        let ta = self.temp_addr(t);
+        Ok(Op::Ptr(ta, Some(t)))
     }
 
     fn place_update(&mut self, target: &'static Expr, mode: i64, value: Option<&'static Expr>) -> L<Op> {
