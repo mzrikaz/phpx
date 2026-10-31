@@ -307,7 +307,8 @@ impl Analysis {
         match c {
             ClassRef::Name(_) => Ok(()),
             ClassRef::Dynamic(e) => self.expr(e),
-            ClassRef::Anonymous(_) => Err("anonymous class"),
+            // (`new class {...}`: declared by the helper.)
+            ClassRef::Anonymous(_) => Ok(()),
         }
     }
 

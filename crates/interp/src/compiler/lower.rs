@@ -3743,7 +3743,8 @@ impl<'a> Lower<'a> {
     /// the interned reference of the class `$x` names (evaluated now).
     fn class_ref_ptr(&mut self, class: &'static ClassRef) -> L<CValue> {
         match class {
-            ClassRef::Name(_) => Ok(self.iconst(class as *const ClassRef as i64)),
+            // (An anonymous class is declared by the helper resolving it.)
+            ClassRef::Name(_) | ClassRef::Anonymous(_) => Ok(self.iconst(class as *const ClassRef as i64)),
             ClassRef::Dynamic(e) => {
                 let v = self.expr(e)?;
                 let v = self.materialize(v);
@@ -3756,7 +3757,6 @@ impl<'a> Lower<'a> {
                 self.b.switch_to_block(cont);
                 Ok(r)
             }
-            ClassRef::Anonymous(_) => Err("anonymous class"),
         }
     }
 
