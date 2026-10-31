@@ -592,6 +592,14 @@ unsafe fn scope_reattach(it: &Interp, f: &mut Frame, ptrs: *mut *mut Value, rcs:
     }
 }
 
+/// What the interpreter running on a frame can change about its
+/// variables' cells: it binds a new variable (the count grows), or
+/// unbinds or rebinds one (the epoch moves). Unchanged: the cells
+/// compiled file code holds are still the variables.
+fn scope_mark(f: &Frame) -> (u64, usize) {
+    (unsafe { *crate::interp::scope_epoch_addr() }, f.vars.len())
+}
+
 /// File code: variables changed binding since `*seen` (see SCOPE_EPOCH).
 pub unsafe extern "C" fn rt_scope_refresh(c: *mut Cx, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, def: *mut u8, spec: *const LocalsSpec, seen: *mut u64) {
     let (it, f) = cx(c);
@@ -644,8 +652,13 @@ pub unsafe extern "C" fn rt_unset_local(c: *mut Cx, ptrs: *mut *mut Value, rcs: 
 pub unsafe extern "C" fn rt_eval_ast(c: *mut Cx, e: *const ast::Expr, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, def: *mut u8, spec: *const LocalsSpec, dst: *mut Value) -> u64 {
     let (it, f) = cx(c);
     scope_attach(it, f, rcs, def, &*spec);
+    let before = scope_mark(f);
     let r = it.eval(f, &*e);
-    scope_reattach(it, f, ptrs, rcs, def, &*spec);
+    // (The global scope drops unassigned locals in `scope_attach` and
+    // binds them again here.)
+    if scope_mark(f) != before || std::ptr::eq(it.globals.get(), f) {
+        scope_reattach(it, f, ptrs, rcs, def, &*spec);
+    }
     status(it, r, |v| put(dst, v))
 }
 
@@ -655,8 +668,13 @@ pub unsafe extern "C" fn rt_eval_ast(c: *mut Cx, e: *const ast::Expr, ptrs: *mut
 pub unsafe extern "C" fn rt_exec_ast(c: *mut Cx, s: *const ast::Stmt, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, def: *mut u8, spec: *const LocalsSpec, out: *mut Value) -> u64 {
     let (it, f) = cx(c);
     scope_attach(it, f, rcs, def, &*spec);
+    let before = scope_mark(f);
     let r = it.exec_block(f, std::slice::from_ref(&*s));
-    scope_reattach(it, f, ptrs, rcs, def, &*spec);
+    // (The global scope drops unassigned locals in `scope_attach` and
+    // binds them again here.)
+    if scope_mark(f) != before || std::ptr::eq(it.globals.get(), f) {
+        scope_reattach(it, f, ptrs, rcs, def, &*spec);
+    }
     match crate::errors::check(r) {
         Ok(crate::interp::Flow::Return(v)) => {
             put(out, v);

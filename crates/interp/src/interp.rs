@@ -279,6 +279,11 @@ pub fn scope_epoch_addr() -> *const u64 {
 }
 
 impl Vars {
+    /// Number of variables bound.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
     fn pos(&self, name: &str) -> Option<usize> {
         match &self.index {
             Some(ix) => ix.get(name).copied(),
