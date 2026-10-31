@@ -119,7 +119,11 @@ pub(crate) fn reset_classes() {
                 held.push(Box::new(sp.value.borrow_mut().take()));
             }
         }
-        held.push(Box::new(cls.prop_template.borrow_mut().take()));
+        // (Defaults that are expressions may mean something else in the
+        // next request; literal ones are kept.)
+        if cls.props.iter().any(|p| matches!(p.default, crate::class::PropDefault::Expr(_))) {
+            held.push(Box::new(cls.prop_template.borrow_mut().take()));
+        }
     }
     drop(held);
     drop(crate::value::DESTRUCT_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut())));

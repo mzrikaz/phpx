@@ -137,3 +137,20 @@ echo $ok ? 'ok' : 'BROKEN';
         assert_eq!(out, "ok");
     }
 }
+
+#[test]
+fn property_defaults_follow_each_request() {
+    let src = r#"<?php
+define('LIMIT', file_get_contents('MODE_FILE') === 'x' ? 10 : 20);
+class Cfg { public $list = [1, 2]; public $limit = LIMIT; public $n = 0; }
+$c = new Cfg;
+$c->list[] = 3;
+$c->n++;
+$d = new Cfg;
+echo count($d->list), " ", $d->limit, " ", $d->n;
+"#;
+    let modes = "xyxyyx";
+    for (m, out) in modes.chars().zip(serve("defaults", src, modes)) {
+        assert_eq!(out, if m == 'x' { "2 10 0" } else { "2 20 0" }, "mode {m}");
+    }
+}
