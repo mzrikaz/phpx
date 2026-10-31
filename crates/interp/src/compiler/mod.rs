@@ -1130,7 +1130,9 @@ impl Native {
             return Err("function too large");
         }
         // PHPX_NATIVE_DUMP=name: print the IR and machine code of the
-        // functions whose display name contains `name`.
+        // functions whose display name contains `name` (and with
+        // PHPX_NATIVE_DUMP_DIR, write their bytes there as <address>.bin,
+        // for objdump and per-instruction profiles).
         let dump = std::env::var("PHPX_NATIVE_DUMP").is_ok_and(|d| !d.is_empty() && t.display.contains(d.as_str()));
         if dump {
             eprintln!("[native] IR of {}:\n{}", t.display, ctx.func.display());
@@ -1152,6 +1154,13 @@ impl Native {
         self.module.finalize_definitions().map_err(|_| "finalize failed")?;
         let ptr = self.module.get_finalized_function(id);
         perf_map(ptr, size, &t.display);
+        if dump {
+            if let Ok(dir) = std::env::var("PHPX_NATIVE_DUMP_DIR") {
+                // SAFETY: the finalized function's code, `size` bytes.
+                let code = unsafe { std::slice::from_raw_parts(ptr, size as usize) };
+                let _ = std::fs::write(format!("{dir}/{:x}.bin", ptr as usize), code);
+            }
+        }
         self.consts.extend(consts);
         self.sites.extend(sites);
         self.specs.push(spec);
