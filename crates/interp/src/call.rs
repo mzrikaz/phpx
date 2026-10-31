@@ -27,7 +27,7 @@ thread_local! {
     /// the path as written) -> the file it led to, and when that was
     /// checked on disk; and its file id and syntax tree as of parse
     /// generation `gen` (see `crate::interp::parse_gen`).
-    static RESOLVED: std::cell::RefCell<HashMap<(usize, String), Resolved>> = Default::default();
+    static RESOLVED: std::cell::RefCell<rustc_hash::FxHashMap<(usize, String), Resolved>> = Default::default();
 }
 
 struct Resolved {
@@ -344,9 +344,10 @@ impl Interp {
         if let Some(c) = self.classes.borrow().get(&*l) {
             return Ok(Some(c.clone()));
         }
-        if !self.autoloading.borrow_mut().insert(l.to_string()) {
+        if self.autoloading.borrow().iter().any(|a| **a == *l) {
             return Ok(None);
         }
+        self.autoloading.borrow_mut().push(l.clone());
         let loaders = self.autoloaders.borrow().clone();
         // Loading runs other files; errors and traces stay at the use site.
         let at = self.pos.get();
@@ -361,7 +362,12 @@ impl Interp {
                 break;
             }
         }
-        self.autoloading.borrow_mut().remove(&*l);
+        {
+            let mut a = self.autoloading.borrow_mut();
+            if let Some(i) = a.iter().rposition(|a| Rc::ptr_eq(a, &l)) {
+                a.remove(i);
+            }
+        }
         self.pos.set(at);
         result
     }

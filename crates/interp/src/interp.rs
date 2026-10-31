@@ -574,7 +574,8 @@ pub struct Interp {
     pub composer: RefCell<Option<crate::composer::Composer>>,
     pub generators: RefCell<Vec<std::rc::Weak<crate::generator::GenShared>>>,
     /// Classes being autoloaded right now (stops autoload recursion).
-    pub autoloading: RefCell<HashSet<String>>,
+    /// Lowercase names being autoloaded (innermost last).
+    pub autoloading: RefCell<Vec<Rc<str>>>,
     /// Call site (AST address) -> resolved user function.
     pub call_cache: RefCell<FxHashMap<usize, Callable>>,
     /// `$obj->name()` call sites (by the name's AST address): the method
@@ -589,7 +590,7 @@ pub struct Interp {
     /// returned; including one hands back that value instead of running it.
     pub preloaded: RefCell<HashMap<PathBuf, Value>>,
     /// Declared classes per AST node, so hoisted declarations aren't redone.
-    pub declared: RefCell<HashSet<usize>>,
+    pub declared: RefCell<rustc_hash::FxHashSet<usize>>,
     /// (file, byte offset) of the statement running now, for error lines.
     pub pos: Cell<Pos>,
     /// The main script's frame (the global scope), for `global`,
@@ -682,12 +683,12 @@ impl Interp {
             autoloaders: RefCell::new(vec![]),
             composer: RefCell::new(None),
             generators: RefCell::new(vec![]),
-            autoloading: RefCell::new(HashSet::new()),
+            autoloading: RefCell::new(vec![]),
             place_verb: Cell::new("assign"),
             seq: INTERP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             included: RefCell::new(indexmap::IndexSet::default()),
             preloaded: RefCell::new(HashMap::default()),
-            declared: RefCell::new(HashSet::new()),
+            declared: RefCell::new(Default::default()),
             pos: Cell::new(Pos { file: 0, off: 0 }),
             globals: Cell::new(std::ptr::null_mut()),
             silence: Cell::new(0),
@@ -786,7 +787,7 @@ struct PreludeState {
     classes: FxHashMap<Rc<str>, Rc<Class>>,
     functions: FxHashMap<Rc<str>, Rc<UserFn>>,
     decl_ctx: FxHashMap<usize, Rc<NsCtx>>,
-    declared: HashSet<usize>,
+    declared: rustc_hash::FxHashSet<usize>,
     consts: Vec<(String, Value)>,
     shadows_builtin: bool,
 }
@@ -1178,12 +1179,25 @@ impl Interp {
     /// takes for parents to appear (PHP's early binding).
     fn hoist(&self, stmts: &'static [Stmt], ctx: &Rc<NsCtx>) -> R<()> {
         let mut pending = vec![];
+        let mut first = None;
         for s in stmts {
             match &s.kind {
                 StmtKind::Function(f) => self.declare_function(f, ctx),
+                StmtKind::Class(c) if first.is_none() => first = Some(&**c),
                 StmtKind::Class(c) => pending.push(&**c),
                 _ => {}
             }
+        }
+        // (The usual file: one class.)
+        match first {
+            None => return Ok(()),
+            Some(c) if pending.is_empty() => {
+                if self.deps_ready(c, ctx) {
+                    let _ = self.declare_class(c, ctx);
+                }
+                return Ok(());
+            }
+            Some(c) => pending.insert(0, c),
         }
         loop {
             let before = pending.len();
