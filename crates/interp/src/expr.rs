@@ -260,7 +260,7 @@ impl Interp {
                 Value::bytes(buf)
             }
             Var(n) => self.read_var(f, n)?,
-            Name(n) => self.constant(f, n)?,
+            Name(n) => self.source_constant(f, n)?,
             MagicConst(m) => self.magic_const(f, m, e),
             Array(items) => match self.const_array_cached(f, e, items) {
                 Some(v) => v,

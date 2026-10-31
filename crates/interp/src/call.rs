@@ -485,6 +485,22 @@ impl Interp {
         lookup(name)
     }
 
+    /// `constant` for a name written in the source: what it found the
+    /// first time (as PHP's run-time cache: a namespaced name that fell
+    /// back to the global constant keeps it), unless deprecated (which
+    /// warns on every use).
+    pub fn source_constant(&self, f: &Frame, name: &'static str) -> R<Value> {
+        let key = (name.as_ptr() as usize, Rc::as_ptr(&f.ctx) as usize);
+        if let Some(v) = self.const_cache.borrow().get(&key) {
+            return Ok(v.clone());
+        }
+        let v = self.constant(f, name)?;
+        if crate::consts::deprecation(name.rsplit('\\').next().unwrap_or(name)).is_none() {
+            self.const_cache.borrow_mut().insert(key, v.clone());
+        }
+        Ok(v)
+    }
+
     pub fn constant(&self, f: &Frame, name: &str) -> R<Value> {
         let consts = self.constants.borrow();
         let found = if let Some(rest) = name.strip_prefix('\\') {
@@ -505,7 +521,15 @@ impl Interp {
                 .cloned()
         };
         drop(consts);
-        let v = found.ok_or_else(|| self.error("Error", &format!("Undefined constant \"{}\"", name.trim_start_matches('\\'))))?;
+        let v = found.ok_or_else(|| {
+            // (An unqualified name in a namespace is reported qualified.)
+            let shown = if name.starts_with('\\') || name.contains('\\') || f.ctx.ns.is_empty() {
+                name.trim_start_matches('\\').to_string()
+            } else {
+                qualify(&f.ctx.ns, name)
+            };
+            self.error("Error", &format!("Undefined constant \"{shown}\""))
+        })?;
         if let Some(msg) = crate::consts::deprecation(name.rsplit('\\').next().unwrap_or(name)) {
             self.deprecated(msg);
         }

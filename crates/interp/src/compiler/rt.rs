@@ -1082,7 +1082,7 @@ unsafe fn quiet_prop_in(c: *mut Cx, obj: *const Value, name: &str, site: Option<
 
 pub unsafe extern "C" fn rt_const(c: *mut Cx, name: *const String, dst: *mut Value) -> u64 {
     let (it, f) = cx(c);
-    status(it, it.constant(f, &*name), |v| put(dst, v))
+    status(it, it.source_constant(f, &*name), |v| put(dst, v))
 }
 
 pub unsafe extern "C" fn rt_magic(c: *mut Cx, e: *const ast::Expr, dst: *mut Value) -> u64 {

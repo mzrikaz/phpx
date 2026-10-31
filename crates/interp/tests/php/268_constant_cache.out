@@ -1,0 +1,9 @@
+[true,"local","global foo","local","local"]
+[true,"local","global foo","local","local"]
+[true,"local","global foo","local","local"]
+E8192: Constant DATE_RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT
+D, d M Y H:i:s \G\M\T
+E8192: Constant DATE_RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT
+D, d M Y H:i:s \G\M\T
+Undefined constant "App\NOPE"
+1

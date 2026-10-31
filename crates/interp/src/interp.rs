@@ -535,6 +535,9 @@ pub struct Interp {
     pub natives: &'static FxHashMap<(&'static str, &'static str), NativeMethod>,
     pub classes: RefCell<FxHashMap<Rc<str>, Rc<Class>>>,
     pub constants: RefCell<crate::consts::Constants>,
+    /// Constants a name in the source resolved to (by the name's address
+    /// and its namespace context's): a constant never changes once defined.
+    pub const_cache: RefCell<FxHashMap<(usize, usize), Value>>,
     /// Function `static $x` slots, keyed by declaration address + class.
     pub statics: RefCell<HashMap<(usize, Rc<str>), HashMap<Rc<str>, Slot>>>,
     /// Output buffer stack; index 0 is flushed to `writer`.
@@ -644,6 +647,7 @@ impl Interp {
             natives: native_table(),
             classes: RefCell::new(FxHashMap::default()),
             constants: RefCell::new(crate::consts::Constants::new()),
+            const_cache: RefCell::new(FxHashMap::default()),
             statics: RefCell::new(HashMap::default()),
             out: RefCell::new(vec![vec![]]),
             writer: RefCell::new(writer),
