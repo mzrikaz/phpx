@@ -65,8 +65,20 @@ fn closure_of(o: Option<&Rc<Obj>>) -> Callable {
 }
 
 fn closure_from_callable(it: &Interp, _: Option<&Rc<Obj>>, _: &Rc<Class>, args: Vec<Value>) -> R<Value> {
-    let f = crate::interp::Frame::new(it.file_ctx(it.pos.get().file as usize), 0);
-    let c = it.to_callable(&f, &arg(&args, 0))?;
+    // Resolved from the calling function's scope (a private method of
+    // the caller's class is callable).
+    let mut f = crate::interp::Frame::new(it.file_ctx(it.pos.get().file as usize), 0);
+    // SAFETY: the innermost call record's frame lives while it runs.
+    if let Some(caller) = unsafe { crate::trace::top().as_ref().and_then(|r| r.frame.as_ref()) } {
+        f.class = caller.class.clone();
+        f.static_class = caller.static_class.clone();
+        f.this = caller.this.clone();
+    }
+    let v = arg(&args, 0);
+    if let Some(why) = it.callable_error(&f, &v)? {
+        return Err(it.error("TypeError", &format!("Failed to create closure from callable: {why}")));
+    }
+    let c = it.to_callable(&f, &v)?;
     Ok(it.closure_object(c))
 }
 
