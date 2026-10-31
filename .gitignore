@@ -14,4 +14,6 @@ AGENTS.md
 CLAUDE.md
 GEMINI.md
 .kiro
-.claude
+.claude/target-lto
+/target-pgo
+/target-pgo1

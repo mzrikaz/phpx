@@ -6,3 +6,11 @@ members = ["crates/*"]
 edition = "2021"
 version = "0.1.0"
 license = "MIT"
+
+# Distribution builds: whole-program optimization (slow to build; `release`
+# stays quick for development). tools/pgo/build.sh adds profile-guided
+# optimization on top.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
