@@ -94,14 +94,28 @@ impl<T: 'static> FastLocal<T> {
 
     #[inline(always)]
     pub fn with<R>(&'static self, f: impl FnOnce(&T) -> R) -> R {
-        if is_main() {
-            return f(&self.main);
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        {
+            if is_main() {
+                return f(&self.main);
+            }
+            self.tls_with(f)
         }
-        self.tls_with(f)
+        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+        {
+            // Thread-locals are cheap here: inline, taking only the address
+            // inside `with` so it inlines to one thread-pointer-relative
+            // load (with the work inside, `with` stays an out-of-line call
+            // through the accessor).
+            let p: *const T = self.key.with(|v| v as *const T);
+            // SAFETY: the thread's value lives as long as the thread.
+            f(unsafe { &*p })
+        }
     }
 
     /// Out of line: inlined, the compiler may hoist the thread-local lookup
     /// (a call on macOS) above the main-thread check.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[cold]
     #[inline(never)]
     fn tls_with<R>(&'static self, f: impl FnOnce(&T) -> R) -> R {
