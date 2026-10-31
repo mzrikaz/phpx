@@ -1867,7 +1867,12 @@ impl Interp {
         let forwarding = is_forwarding(cref);
         let mut buf = [0; 64];
         let lname = crate::class::lower_name(name, &mut buf);
-        match cls.find_method(&lname).cloned() {
+        // (A method the caller can't access counts as missing when the class
+        // has a magic method for it, as in PHP.)
+        let found = cls.find_method(&lname).cloned().filter(|m| {
+            self.member_visible(f.class.as_deref(), m.vis, &m.declaring) || (cls.find_method("__callstatic").is_none() && cls.find_method("__call").is_none())
+        });
+        match found {
             Some(m) => {
                 self.check_method_visible(f, &cls, &m)?;
                 self.static_invoke(f, cref, cls, &m, pos, named)

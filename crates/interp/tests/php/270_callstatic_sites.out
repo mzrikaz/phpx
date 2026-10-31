@@ -1,0 +1,4 @@
+["Route::get(\/a,0)","Cache::remember(k,60)","real","Route::get()","Facade::any(1,2)",["__call missing","__call missing","__call missing"],"__callStatic missing","no boom 14","magic hidden","hidden","Route::with(xxx,Array,)"]
+["Route::get(\/a,1)","Cache::remember(k,60)","real","Route::get()","Facade::any(1,2)",["__call missing","__call missing","__call missing"],"__callStatic missing","no boom 14","magic hidden","hidden","Route::with(xxx,Array,)"]
+["Route::get(\/a,2)","Cache::remember(k,60)","real","Route::get()","Facade::any(1,2)",["__call missing","__call missing","__call missing"],"__callStatic missing","no boom 14","magic hidden","hidden","Route::with(xxx,Array,)"]
+["Route::get(\/a,3)","Cache::remember(k,60)","real","Route::get()","Facade::any(1,2)",["__call missing","__call missing","__call missing"],"__callStatic missing","no boom 14","magic hidden","hidden","Route::with(xxx,Array,)"]
