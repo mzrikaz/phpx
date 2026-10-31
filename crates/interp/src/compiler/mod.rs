@@ -1276,6 +1276,8 @@ impl Interp {
                 Some(e) => (*e)?,
                 None => {
                     if n.threshold > 1 && !has_loop(body) {
+                        // (Remembered: a file's code runs on every include.)
+                        n.compiled.insert(key, None);
                         return None;
                     }
                     let t = Target {
