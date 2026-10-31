@@ -314,3 +314,34 @@ about 3.2x -> 2.75x (CPU timings on this machine are noisy).
 Suite after this (phpx/PHP, phpx/Node): assoc 1.19/0.9, bintrees
 0.98/8.4, closures 1.12/3.4, fannkuch 0.73/4.1, json 0.89/1.1, nbody
 0.29/7.0, oop 1.00/4.6, spectral 0.19/2.7, strings 1.04/1.3.
+
+### 2026-10-31 (later): compiling what the JIT used to refuse
+
+iDriver `GET /api/sms/status`, server steady state: phpx 379M -> 339M
+instructions per request (PHP 8.4: 162M; 2.34x -> 2.09x). Response
+byte-identical to PHP's.
+
+- Functions the compiler rejects as a whole (by-reference parameters,
+  `$a = &$b`, include, `static` variables, closures capturing by
+  reference, foreach targets other than locals, dynamic member names)
+  compile *on their frame* once hot: like file code, their variables
+  are the interpreter frame's cells and the statements the compiler
+  can't do go to the interpreter one by one. Interpreted calls per
+  request fell from ~4900 to ~70 (Arr::forget/set, Symfony's
+  Route::extractInlineDefaultsAndRequirements, ...). By-reference
+  arguments from such code pass the variable's cell itself (marked
+  pointer), not a copy written back after the call. A body the
+  interpreter would run whole (Composer's `include $file` closure) is
+  left interpreted.
+- `new class {...}` compiles (Laravel's `str()`), declared by `rt_new`.
+- Place arguments (`f($o->p)`) get their write-back temp only on the
+  general call path; compiled callees called directly never bind by
+  reference.
+- Conditions and `=== null` read a variable's property in place.
+- Per-request class loading (an autoload-heavy synthetic, 1500 classes:
+  PHP 10.2M instructions per request, phpx 24.0M -> 19.9M): the
+  autoload guard, declared-class set and include resolution map no
+  longer allocate or SipHash per class; a file's loop-free top level is
+  checked once; property templates of literal defaults survive
+  requests; dynamic class references (`new $class`) are interned per
+  thread (they leaked one per class per request).
