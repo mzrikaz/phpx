@@ -343,6 +343,27 @@ impl Analysis {
         args.iter().try_for_each(|a| self.expr(&a.value))
     }
 
+    /// On the frame, a property or element passed where the callee may take
+    /// it by reference goes to the interpreter with its call: it binds the
+    /// place itself (no read of a missing key, dynamic names too), where
+    /// compiled code passes a copy written back. `refs`: the by-reference
+    /// positions of a known built-in (None: unknown callee).
+    fn ref_places(&self, args: &'static [ast::Arg], refs: Option<&[usize]>) -> Result<(), Reject> {
+        if !self.frame_fn {
+            // (Compiled code writes a property back by its name.)
+            let dynamic = |e: &Expr| matches!(&e.kind, ExprKind::Prop { name: ast::MemberName::Dynamic(_), .. });
+            if args.iter().enumerate().any(|(i, a)| dynamic(&a.value) && refs.is_none_or(|r| r.contains(&i))) {
+                return Err("dynamic property passed by reference");
+            }
+            return Ok(());
+        }
+        let place = |e: &Expr| matches!(e.kind, ExprKind::Index { .. } | ExprKind::Prop { .. } | ExprKind::StaticProp { .. });
+        match args.iter().enumerate().any(|(i, a)| place(&a.value) && refs.is_none_or(|r| r.contains(&i))) {
+            true => Err("place passed by reference"),
+            false => Ok(()),
+        }
+    }
+
     fn expr(&mut self, e: &'static Expr) -> Result<(), Reject> {
         match self.expr_inner(e) {
             Err(why) if self.top_level && escapable(why) => {
@@ -470,8 +491,14 @@ impl Analysis {
                         if l == "array_walk" && args.first().is_some_and(|a| !matches!(a.value.kind, Var(_))) {
                             return Err("array_walk on a property or element");
                         }
+                        let refs = crate::call::by_ref_params(&l);
+                        let known = !refs.is_empty() || crate::arginfo::spec(&l).is_some();
+                        self.ref_places(args, known.then_some(refs))?;
                     }
-                    _ => self.expr(callee)?,
+                    _ => {
+                        self.expr(callee)?;
+                        self.ref_places(args, None)?;
+                    }
                 }
                 self.args(args)
             }
@@ -490,11 +517,13 @@ impl Analysis {
                 } else {
                     self.member(name)?;
                 }
+                self.ref_places(args, None)?;
                 self.args(args)
             }
             StaticCall { class, name, args } => {
                 self.class_ref(class)?;
                 self.literal_member(name)?;
+                self.ref_places(args, None)?;
                 self.args(args)
             }
             Prop { object, name, nullsafe } => {
@@ -516,6 +545,7 @@ impl Analysis {
             }
             New { class, args } => {
                 self.class_ref(class)?;
+                self.ref_places(args, None)?;
                 self.args(args)
             }
             Closure(c) => {

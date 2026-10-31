@@ -3260,7 +3260,16 @@ impl<'a> Lower<'a> {
                 (None, None) => self.iconst(0),
             };
             self.b.ins().stack_store(types::I64, la, lslot, (i * 8) as i32);
-            let v = self.expr(&a.value)?;
+            let v = if wb.is_some() && matches!(a.value.kind, ExprKind::Index { .. }) {
+                // An element the callee may bind by reference: read quietly
+                // (binding a missing key creates it, without a warning;
+                // property reads keep their visibility errors).
+                let t = self.alloc_temp();
+                self.quiet(&a.value, t)?;
+                Op::Ptr(self.temp_addr(t), Some(t))
+            } else {
+                self.expr(&a.value)?
+            };
             let dst = self.b.ins().stack_addr(types::I64, slot, (i * 16) as i32);
             self.store_into(dst, v);
             if let Some(t) = wb {
