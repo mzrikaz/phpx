@@ -11,6 +11,8 @@
 
 pub(crate) mod analyze;
 pub mod fastbi;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod jitmem;
 pub mod leaf;
 mod lower;
 pub mod rt;
@@ -513,6 +515,9 @@ impl Native {
         for (name, ptr, _, _) in HELPERS {
             jb.symbol(*name, *ptr);
         }
+        // Functions packed together (see `jitmem`).
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        jb.memory_provider(Box::new(jitmem::PackedCode::new()));
         let mut module = JITModule::new(jb);
         let mut helpers = HashMap::new();
         for (name, _, n, ret) in HELPERS {
