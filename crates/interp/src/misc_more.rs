@@ -657,7 +657,7 @@ pub fn register(t: &mut HashMap<&'static str, BuiltinFn>) {
         Ok(Value::Object(o))
     });
     t.insert("getlastmod", |it, _, _| {
-        let main = it.included.borrow().first().cloned();
+        let main = it.included.borrow().first().map(|p| p.0.clone());
         Ok(match main.and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok()) {
             Some(t) => Value::Int(t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)),
             None => Value::Bool(false),

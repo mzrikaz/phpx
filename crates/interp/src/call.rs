@@ -2785,10 +2785,10 @@ impl Interp {
                     return Ok(Value::Bool(false));
                 }
             };
-            if matches!(kind, IncludeOnce | RequireOnce) && self.included.borrow().contains(&url) {
+            if matches!(kind, IncludeOnce | RequireOnce) && self.included.borrow().contains(crate::interp::path_bytes(&url)) {
                 return Ok(Value::Bool(true));
             }
-            self.included.borrow_mut().insert(url.clone());
+            self.included.borrow_mut().insert(crate::interp::PathKey(url.clone()));
             return match self.parse_file(&url, crate::pstr::lossy(&src).into_owned()) {
                 Ok((id, file)) => {
                     self.run_file_in(f, file, id)
@@ -2832,7 +2832,7 @@ impl Interp {
                     if let Some(v) = self.take_preloaded(&canon) {
                         return Ok(v);
                     }
-                    if !self.included.borrow_mut().insert(canon) && matches!(kind, IncludeOnce | RequireOnce) {
+                    if !self.included.borrow_mut().insert(crate::interp::PathKey(canon)) && matches!(kind, IncludeOnce | RequireOnce) {
                         return Ok(Value::Bool(true));
                     }
                     return self.run_file_in(f, file, id);
@@ -2858,10 +2858,10 @@ impl Interp {
         if let Some(v) = self.take_preloaded(&canon) {
             return Ok(v);
         }
-        if matches!(kind, IncludeOnce | RequireOnce) && self.included.borrow().contains(&canon) {
+        if matches!(kind, IncludeOnce | RequireOnce) && self.included.borrow().contains(crate::interp::path_bytes(&canon)) {
             return Ok(Value::Bool(true));
         }
-        self.included.borrow_mut().insert(canon.clone());
+        self.included.borrow_mut().insert(crate::interp::PathKey(canon.clone()));
         // Composer's own autoloader runs by default (apps use its ClassLoader:
         // `$loader = require 'vendor/autoload.php'`, getRegisteredLoaders());
         // PHPX_NATIVE_COMPOSER=1 swaps in the built-in one.
@@ -2892,7 +2892,7 @@ impl Interp {
             return None;
         }
         let v = self.preloaded.borrow_mut().remove(canon)?;
-        self.included.borrow_mut().insert(canon.to_path_buf());
+        self.included.borrow_mut().insert(crate::interp::PathKey(canon.to_path_buf()));
         Some(v)
     }
 

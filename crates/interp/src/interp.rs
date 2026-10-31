@@ -137,14 +137,14 @@ thread_local! {
     /// Every file this thread's interpreters ran, by id: ids stay the same
     /// from one request's interpreter to the next, so code compiled for
     /// one still points at the right file in the next.
-    static FILE_REG: RefCell<(Vec<Rc<FileInfo>>, HashMap<PathBuf, usize>)> = RefCell::new((vec![], HashMap::default()));
+    static FILE_REG: RefCell<(Vec<Rc<FileInfo>>, HashMap<PathKey, usize>)> = RefCell::new((vec![], HashMap::default()));
     static PRELUDE: std::cell::OnceCell<(&'static str, &'static ast::File)> = const { std::cell::OnceCell::new() };
     static EMPTY_NAME: Rc<str> = Rc::from("");
     /// Parsed files by path (syntax trees are immutable, so they outlive
     /// any one interpreter on this thread).
     /// The stamp (see `file_stamp`) is what an include last saw on disk.
     /// (Also when a server worker last checked the file on disk.)
-    static PARSED: RefCell<HashMap<PathBuf, (Option<FileStamp>, &'static str, &'static ast::File, Option<std::time::Instant>)>> = RefCell::new(HashMap::default());
+    static PARSED: RefCell<HashMap<PathKey, (Option<FileStamp>, &'static str, &'static ast::File, Option<std::time::Instant>)>> = RefCell::new(HashMap::default());
     /// Bumped whenever PARSED gets a new syntax tree: what an include
     /// remembered of a file is still current while this is unchanged.
     static PARSE_GEN: Cell<u64> = const { Cell::new(0) };
@@ -163,13 +163,37 @@ fn native_table() -> &'static FxHashMap<(&'static str, &'static str), NativeMeth
 }
 
 /// See PARSE_GEN.
+/// A path as a map key, hashed as its bytes (`Path`'s own hash walks
+/// its components, a large part of a cached include); looked up by
+/// `path_bytes`.
+#[derive(PartialEq, Eq, Clone)]
+pub struct PathKey(pub PathBuf);
+
+impl std::hash::Hash for PathKey {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        path_bytes(&self.0).hash(h)
+    }
+}
+
+impl std::borrow::Borrow<[u8]> for PathKey {
+    fn borrow(&self) -> &[u8] {
+        path_bytes(&self.0)
+    }
+}
+
+#[inline]
+pub fn path_bytes(p: &Path) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt;
+    p.as_os_str().as_bytes()
+}
+
 pub(crate) fn parse_gen() -> u64 {
     PARSE_GEN.with(|g| g.get())
 }
 
 /// Paths of the files in this thread's parse cache.
 pub(crate) fn parsed_paths() -> Vec<PathBuf> {
-    PARSED.with(|p| p.borrow().keys().cloned().collect())
+    PARSED.with(|p| p.borrow().keys().map(|k| k.0.clone()).collect())
 }
 
 /// A file's modification time, size and inode: unchanged means the same
@@ -560,7 +584,7 @@ pub struct Interp {
     /// What a property write on a non-object is reported as ("assign", or
     /// "increment/decrement" while ++/-- resolves its target).
     pub place_verb: Cell<&'static str>,
-    pub included: RefCell<indexmap::IndexSet<PathBuf, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>>,
+    pub included: RefCell<indexmap::IndexSet<PathKey, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>>,
     /// Snapshot mode: files a template already ran, with what they
     /// returned; including one hands back that value instead of running it.
     pub preloaded: RefCell<HashMap<PathBuf, Value>>,
@@ -800,7 +824,7 @@ impl Interp {
         FILE_REG.with(|r| {
             let mut r = r.borrow_mut();
             r.0.push(info.clone());
-            r.1.insert(path, files.len());
+            r.1.insert(PathKey(path), files.len());
         });
         files.push(info);
         files.len() - 1
@@ -954,7 +978,7 @@ impl Interp {
     pub fn parse_file(&self, path: &Path, src: String) -> Result<(usize, &'static ast::File), String> {
         // Same file, same content: reuse its syntax tree (across includes,
         // and across the requests a server worker thread runs).
-        let cached = PARSED.with(|p| p.borrow().get(path).filter(|(_, s, _, _)| **s == *src).map(|e| (e.1, e.2)));
+        let cached = PARSED.with(|p| p.borrow().get(path_bytes(path)).filter(|(_, s, _, _)| **s == *src).map(|e| (e.1, e.2)));
         if let Some((s, file)) = cached {
             return Ok((self.file_id(path, s), file));
         }
@@ -979,7 +1003,7 @@ impl Interp {
             return Err(errors.concat());
         }
         let file: &'static ast::File = Box::leak(Box::new(file));
-        PARSED.with(|p| p.borrow_mut().insert(path.to_path_buf(), (None, src, file, None)));
+        PARSED.with(|p| p.borrow_mut().insert(PathKey(path.to_path_buf()), (None, src, file, None)));
         PARSE_GEN.with(|g| g.set(g.get() + 1));
         Ok((id, file))
     }
@@ -995,7 +1019,7 @@ impl Interp {
         let now = server.then(std::time::Instant::now);
         if let Some(now) = now {
             let fresh = PARSED.with(|p| {
-                p.borrow().get(canon).filter(|e| e.0.is_some() && e.3.is_some_and(|t| now.duration_since(t) < REVALIDATE)).map(|e| (e.1, e.2))
+                p.borrow().get(path_bytes(canon)).filter(|e| e.0.is_some() && e.3.is_some_and(|t| now.duration_since(t) < REVALIDATE)).map(|e| (e.1, e.2))
             });
             if let Some((src, file)) = fresh {
                 return Ok(Ok((self.file_id(canon, src), file)));
@@ -1004,7 +1028,7 @@ impl Interp {
         let stamp = file_stamp(&std::fs::metadata(read)?);
         let hit = PARSED.with(|p| {
             let mut p = p.borrow_mut();
-            let e = p.get_mut(canon).filter(|e| e.0 == Some(stamp))?;
+            let e = p.get_mut(path_bytes(canon)).filter(|e| e.0 == Some(stamp))?;
             e.3 = now;
             Some((e.1, e.2))
         });
@@ -1015,7 +1039,7 @@ impl Interp {
         let r = self.parse_file(canon, crate::pstr::lossy(&bytes).into_owned());
         if r.is_ok() {
             PARSED.with(|p| {
-                if let Some(e) = p.borrow_mut().get_mut(canon) {
+                if let Some(e) = p.borrow_mut().get_mut(path_bytes(canon)) {
                     e.0 = Some(stamp);
                     e.3 = now;
                 }
@@ -1027,7 +1051,7 @@ impl Interp {
     /// The syntax tree already parsed from file `canon` (as last read from
     /// disk), without checking the file.
     pub fn parsed_file(&self, canon: &Path) -> Option<(usize, &'static ast::File)> {
-        let (src, file) = PARSED.with(|p| p.borrow().get(canon).filter(|e| e.0.is_some()).map(|e| (e.1, e.2)))?;
+        let (src, file) = PARSED.with(|p| p.borrow().get(path_bytes(canon)).filter(|e| e.0.is_some()).map(|e| (e.1, e.2)))?;
         Some((self.file_id(canon, src), file))
     }
 
@@ -1043,7 +1067,7 @@ impl Interp {
     fn file_id(&self, path: &Path, src: &'static str) -> usize {
         let known = FILE_REG.with(|r| {
             let r = r.borrow();
-            r.1.get(path).copied().filter(|&id| std::ptr::eq(r.0[id].src, src))
+            r.1.get(path_bytes(path)).copied().filter(|&id| std::ptr::eq(r.0[id].src, src))
         });
         if let Some(id) = known {
             self.sync_files();

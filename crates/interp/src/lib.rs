@@ -209,7 +209,7 @@ pub(crate) fn run_main(path: &Path, src: String, out: Box<dyn Write>, setup: Set
         }
     };
     it.register_strict(id, file);
-    it.included.borrow_mut().insert(path.to_path_buf());
+    it.included.borrow_mut().insert(crate::interp::PathKey(path.to_path_buf()));
     let main_it = it.clone();
     phpprof::start();
     let code = phpx_runtime::block_on(move || {
