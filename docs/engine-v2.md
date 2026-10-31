@@ -345,3 +345,30 @@ byte-identical to PHP's.
   checked once; property templates of literal defaults survive
   requests; dynamic class references (`new $class`) are interned per
   thread (they leaked one per class per request).
+
+### 2026-10-31 (evening): Wit-ERP back, correctness fixes, code size
+
+Wit-ERP (Filament) restored (`composer install`, storage dirs, fresh
+session cookie via `~/pxbench/mkcookie.php`); `~/pxbench/wcmp.sh ROUNDS`
+compares 14 tenant pages, phpx (after ROUNDS warm rounds) vs php8.4.
+All pages match after 40 warm rounds, except random UUIDs and the order
+of trait vs inherited properties, where phpx follows PHP 8.5 (traits are
+bound before inheritance; checked against php-src and `php` 8.5).
+
+Fixed on the way:
+- `Closure::fromCallable([$this, 'privateMethod'])` resolved from global
+  scope (Sentry's Options: every Filament page 500ed).
+- Elements passed to by-reference parameters were read loudly ("Undefined
+  array key") and dynamic properties went by value; Laravel's recursive
+  `data_set($target[$segment], ...)` compiled on its frame broke table
+  filters on the second request.
+
+Accounts page (debugbar on), instructions per request: PHP 8.4 3.49G,
+phpx 5.04G -> 4.98G (1.43x). CPU time is still ~2.7x: phpx retires ~3.4G
+instructions/s against PHP's ~6.3G/s. Callgrind's cache simulation puts
+most I1 misses inside compiled Eloquent accessor chains (~166k attribute
+reads per request, ~18 calls each) and shows many indirect-branch
+mispredicts; hardware counters (perf) are needed to confirm the cause.
+Code-size work so far: functions packed into shared pages, one cleanup
+block per function, `$this` lent instead of counted (a trivial getter
+1183 -> 937 bytes).
