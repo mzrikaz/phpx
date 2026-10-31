@@ -143,7 +143,8 @@ thread_local! {
     /// Parsed files by path (syntax trees are immutable, so they outlive
     /// any one interpreter on this thread).
     /// The stamp (see `file_stamp`) is what an include last saw on disk.
-    static PARSED: RefCell<HashMap<PathBuf, (Option<FileStamp>, &'static str, &'static ast::File)>> = RefCell::new(HashMap::default());
+    /// (Also when a server worker last checked the file on disk.)
+    static PARSED: RefCell<HashMap<PathBuf, (Option<FileStamp>, &'static str, &'static ast::File, Option<std::time::Instant>)>> = RefCell::new(HashMap::default());
     /// Bumped whenever PARSED gets a new syntax tree: what an include
     /// remembered of a file is still current while this is unchanged.
     static PARSE_GEN: Cell<u64> = const { Cell::new(0) };
@@ -953,7 +954,7 @@ impl Interp {
     pub fn parse_file(&self, path: &Path, src: String) -> Result<(usize, &'static ast::File), String> {
         // Same file, same content: reuse its syntax tree (across includes,
         // and across the requests a server worker thread runs).
-        let cached = PARSED.with(|p| p.borrow().get(path).filter(|(_, s, _)| **s == *src).map(|e| (e.1, e.2)));
+        let cached = PARSED.with(|p| p.borrow().get(path).filter(|(_, s, _, _)| **s == *src).map(|e| (e.1, e.2)));
         if let Some((s, file)) = cached {
             return Ok((self.file_id(path, s), file));
         }
@@ -978,7 +979,7 @@ impl Interp {
             return Err(errors.concat());
         }
         let file: &'static ast::File = Box::leak(Box::new(file));
-        PARSED.with(|p| p.borrow_mut().insert(path.to_path_buf(), (None, src, file)));
+        PARSED.with(|p| p.borrow_mut().insert(path.to_path_buf(), (None, src, file, None)));
         PARSE_GEN.with(|g| g.set(g.get() + 1));
         Ok((id, file))
     }
@@ -987,8 +988,26 @@ impl Interp {
     /// its syntax tree is reused without reading while the file is
     /// unchanged on disk.
     pub fn load_file(&self, read: &Path, canon: &Path) -> std::io::Result<Result<(usize, &'static ast::File), String>> {
+        // A server worker trusts a file it checked in the last two seconds
+        // without asking the disk again (PHP's opcache.revalidate_freq).
+        const REVALIDATE: std::time::Duration = std::time::Duration::from_secs(2);
+        let server = crate::server::sapi() == "cli-server";
+        let now = server.then(std::time::Instant::now);
+        if let Some(now) = now {
+            let fresh = PARSED.with(|p| {
+                p.borrow().get(canon).filter(|e| e.0.is_some() && e.3.is_some_and(|t| now.duration_since(t) < REVALIDATE)).map(|e| (e.1, e.2))
+            });
+            if let Some((src, file)) = fresh {
+                return Ok(Ok((self.file_id(canon, src), file)));
+            }
+        }
         let stamp = file_stamp(&std::fs::metadata(read)?);
-        let hit = PARSED.with(|p| p.borrow().get(canon).filter(|e| e.0 == Some(stamp)).map(|e| (e.1, e.2)));
+        let hit = PARSED.with(|p| {
+            let mut p = p.borrow_mut();
+            let e = p.get_mut(canon).filter(|e| e.0 == Some(stamp))?;
+            e.3 = now;
+            Some((e.1, e.2))
+        });
         if let Some((src, file)) = hit {
             return Ok(Ok((self.file_id(canon, src), file)));
         }
@@ -998,6 +1017,7 @@ impl Interp {
             PARSED.with(|p| {
                 if let Some(e) = p.borrow_mut().get_mut(canon) {
                     e.0 = Some(stamp);
+                    e.3 = now;
                 }
             });
         }
