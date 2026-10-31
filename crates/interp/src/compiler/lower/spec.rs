@@ -889,10 +889,10 @@ impl<'a> Lower<'a> {
             ExprKind::Call { .. } if !is_sqrt_call(e) => self.inline_call(e, fail)?,
             ExprKind::Call { args, .. } => {
                 // sqrt(), unless a namespaced function shadows the built-in.
-                let flag = self.iconst(crate::value::builtin_shadowed() as *const _ as i64);
-                let shadowed = self.b.ins().load(types::I8, flags(), flag, 0);
+                let ExprKind::Call { callee, .. } = &e.kind else { unreachable!() };
+                let ExprKind::Name(n) = &callee.kind else { unreachable!() };
                 let ok = self.b.create_block();
-                self.b.ins().brif(shadowed, fail, &[], ok, &[]);
+                self.shadow_check(n, ok, fail);
                 self.b.switch_to_block(ok);
                 let x = self.fexpr(&args[0].value, fail)?;
                 self.b.ins().sqrt(x)

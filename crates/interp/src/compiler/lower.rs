@@ -2014,9 +2014,7 @@ impl<'a> Lower<'a> {
                     Some(h) => {
                         let t = self.alloc_temp();
                         let (try_b, generic, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
-                        let flag = self.iconst(crate::value::builtin_shadowed() as *const _ as i64);
-                        let shadowed = self.b.ins().load(types::I8, flags(), flag, 0);
-                        self.b.ins().brif(shadowed, generic, &[], try_b, &[]);
+                        self.shadow_check(n, try_b, generic);
                         self.b.switch_to_block(try_b);
                         let ta = self.temp_addr(t);
                         let st = self.call(h, &[aa, n_, ta]).unwrap();
@@ -2707,13 +2705,59 @@ impl<'a> Lower<'a> {
 
     /// Built-in inlined into generated code (guarded: a namespaced user
     /// function with the same name disables it at run time).
+    /// Branch to `builtin` when a call by `name` means the built-in, else
+    /// to `other`: decided by the site's first run in each request (see
+    /// `shadow_flag`, `crate::value::site_mark`).
+    pub(super) fn shadow_check(&mut self, name: &str, builtin: Block, other: Block) {
+        let Some(flag) = self.shadow_flag(name) else {
+            self.b.ins().jump(builtin, &[]);
+            return;
+        };
+        let mark = crate::value::site_mark();
+        let ma = self.iconst(mark as *const _ as i64);
+        let marked = self.b.ins().load(types::I8, flags(), ma, 0);
+        let decide = self.b.create_block();
+        self.b.ins().brif(marked, builtin, &[], decide, &[]);
+        self.b.set_cold_block(decide);
+        self.b.switch_to_block(decide);
+        let fa = self.iconst(flag as *const _ as i64);
+        let shadowed = self.b.ins().load(types::I8, flags(), fa, 0);
+        let set = self.b.create_block();
+        self.b.ins().brif(shadowed, other, &[], set, &[]);
+        self.b.set_cold_block(set);
+        self.b.switch_to_block(set);
+        let one = self.b.ins().iconst(types::I8, 1);
+        self.b.ins().store(flags(), one, ma, 0);
+        self.b.ins().jump(builtin, &[]);
+    }
+
+    /// The flag compiled code checks before taking a built-in's inline
+    /// path for a call by `name` (as written): set while a function of
+    /// that name in this code's namespace is declared, which the call
+    /// would mean instead. None: no check (a fully qualified name, or
+    /// global code, where no function can share a built-in's name).
+    pub(super) fn shadow_flag(&self, name: &str) -> Option<&'static std::sync::atomic::AtomicBool> {
+        if name.starts_with('\\') {
+            return None;
+        }
+        let lname = name.to_ascii_lowercase();
+        let Some(ctx) = &self.ctx else { return Some(crate::value::builtin_shadowed()) };
+        if ctx.use_fns.contains_key(&lname) {
+            // `use function`: never the built-in.
+            static ALWAYS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+            return Some(&ALWAYS);
+        }
+        if ctx.ns.is_empty() {
+            return None;
+        }
+        Some(crate::value::shadow_flag(&format!("{}\\{lname}", ctx.ns.to_ascii_lowercase())))
+    }
+
     fn intrinsic(&mut self, kind: Intrinsic, name: &'static str, args: &'static [ast::Arg]) -> L<Op> {
         let t = self.alloc_temp();
         let (fast, slow, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
         self.b.set_cold_block(slow);
-        let flag = self.iconst(crate::value::builtin_shadowed() as *const _ as i64);
-        let shadowed = self.b.ins().load(types::I8, flags(), flag, 0);
-        self.b.ins().brif(shadowed, slow, &[], fast, &[]);
+        self.shadow_check(name, fast, slow);
         // Generic call: also the fallback for the cases the fast code skips.
         let generic = |l: &mut Self| -> L<()> {
             let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name, cached: Default::default(), builtin: Default::default(), bspec: Default::default(), builtin_ref: Default::default(), jit: Default::default() });

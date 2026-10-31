@@ -770,9 +770,62 @@ pub fn destruct_pending() -> &'static std::sync::atomic::AtomicBool {
     thread_flags().0
 }
 
+thread_local! {
+    /// Per-name shadowing flags (see `shadow_flag`), and those now set.
+    static SHADOWS: RefCell<(rustc_hash::FxHashMap<Box<str>, &'static std::sync::atomic::AtomicBool>, Vec<&'static std::sync::atomic::AtomicBool>)> = Default::default();
+    /// Call sites' "resolved to the built-in" marks (see `site_mark`).
+    static MARKS: RefCell<Vec<&'static std::sync::atomic::AtomicBool>> = Default::default();
+}
+
+/// A call site's mark: set once the site resolved to the built-in in this
+/// request, which it then keeps (PHP's run-time cache), even if a function
+/// declared later would shadow it. Cleared for each request.
+pub fn site_mark() -> &'static std::sync::atomic::AtomicBool {
+    let m: &'static std::sync::atomic::AtomicBool = Box::leak(Box::new(std::sync::atomic::AtomicBool::new(false)));
+    MARKS.with(|v| v.borrow_mut().push(m));
+    m
+}
+
+/// Whether namespaced function `name` (lowercase, qualified, no leading
+/// backslash) is declared in this request while sharing its last segment
+/// with a built-in: compiled code reads it before inlining that built-in
+/// for an unqualified call in that namespace. Thread-local (compiled code
+/// belongs to one thread) and lives as long as the thread.
+pub fn shadow_flag(name: &str) -> &'static std::sync::atomic::AtomicBool {
+    SHADOWS.with(|s| {
+        let mut s = s.borrow_mut();
+        if let Some(f) = s.0.get(name) {
+            return *f;
+        }
+        let f: &'static std::sync::atomic::AtomicBool = Box::leak(Box::new(std::sync::atomic::AtomicBool::new(false)));
+        s.0.insert(name.into(), f);
+        f
+    })
+}
+
+/// A namespaced function named like a built-in was declared (`name` as in
+/// `shadow_flag`).
+pub fn note_shadow(name: &str) {
+    let f = shadow_flag(name);
+    f.store(true, std::sync::atomic::Ordering::Relaxed);
+    SHADOWS.with(|s| s.borrow_mut().1.push(f));
+    builtin_shadowed().store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A new request: no function is declared yet.
+pub fn clear_shadows() {
+    MARKS.with(|v| v.borrow().iter().for_each(|m| m.store(false, std::sync::atomic::Ordering::Relaxed)));
+    SHADOWS.with(|s| {
+        for f in s.borrow_mut().1.drain(..) {
+            f.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
+    builtin_shadowed().store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Set once a namespaced user function of this request has a built-in's
-/// name; compiled code then stops inlining built-ins (`ns\strlen` could
-/// take precedence).
+/// name (any: see `shadow_flag` for the per-name check compiled code
+/// makes).
 #[inline]
 pub fn builtin_shadowed() -> &'static std::sync::atomic::AtomicBool {
     if phpx_runtime::fastlocal::is_main() {

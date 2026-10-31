@@ -637,7 +637,7 @@ impl Interp {
         crate::call::reset_classes();
         crate::gc::new_request();
         crate::reset_request_state();
-        crate::value::builtin_shadowed().store(false, std::sync::atomic::Ordering::Relaxed);
+        crate::value::clear_shadows();
         let it = Rc::new(Interp {
             files: RefCell::new(FILE_REG.with(|r| r.borrow().0.clone())),
             functions: RefCell::new(FxHashMap::default()),
@@ -718,7 +718,13 @@ impl Interp {
                 consts.insert(k.clone(), v.clone());
             }
             if st.shadows_builtin {
-                crate::value::builtin_shadowed().store(true, std::sync::atomic::Ordering::Relaxed);
+                for k in st.functions.keys() {
+                    if let Some((_, short)) = k.rsplit_once('\\') {
+                        if self.builtins.contains_key(short) {
+                            crate::value::note_shadow(k);
+                        }
+                    }
+                }
             }
             crate::call::use_classes(st.classes.values().cloned());
             Some(())
@@ -1163,8 +1169,8 @@ impl Interp {
         self.decl_ctx.borrow_mut().insert(at, ctx.clone());
         if shadows {
             // A namespaced function shadows a built-in for unqualified calls
-            // in that namespace: compiled code stops inlining built-ins.
-            crate::value::builtin_shadowed().store(true, std::sync::atomic::Ordering::Relaxed);
+            // in that namespace: compiled code there stops inlining it.
+            crate::value::note_shadow(&key);
         }
         self.functions.borrow_mut().insert(key, func);
     }
