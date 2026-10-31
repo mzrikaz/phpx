@@ -54,6 +54,8 @@ pub struct Target {
 
 /// Calls before a function is compiled.
 const DEFAULT_THRESHOLD: u32 = 1000;
+/// The same for server workers.
+const SERVER_THRESHOLD: u32 = 30;
 /// Iterations of an interpreted loop (in one run) before it moves to
 /// native code.
 pub const OSR_ITERATIONS: u32 = 500;
@@ -441,7 +443,14 @@ impl Native {
             // Hot functions only: compiling costs about a millisecond, so
             // cold code (most of a framework's boot) stays interpreted.
             // Long loops switch over mid-call (on-stack replacement).
-            _ => std::env::var("PHPX_NATIVE_THRESHOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_THRESHOLD),
+            _ => std::env::var("PHPX_NATIVE_THRESHOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(if crate::server::sapi() == "cli-server" {
+                // A server worker runs the same code request after request:
+                // compiling sooner pays back (code run a few times per
+                // request would otherwise wait hundreds of requests).
+                SERVER_THRESHOLD
+            } else {
+                DEFAULT_THRESHOLD
+            }),
         };
         Native::new(threshold)
     }
