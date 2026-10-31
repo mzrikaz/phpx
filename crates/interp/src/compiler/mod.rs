@@ -966,16 +966,13 @@ impl Native {
                 l.b.switch_to_block(inline_b);
                 let flags = cranelift_codegen::ir::MemFlagsData::trusted();
                 if let (Some(ts), Some(lay)) = (this_slot, lay) {
-                    // `$this` from the frame (decline without one), with its
-                    // reference count bumped inline.
+                    // `$this` from the frame (decline without one), lent: the
+                    // frame holds it for the call (see `rt::lend_this`).
                     let frame = l.b.ins().load(types::I64, flags, cxv, lay.cx_frame);
                     let raw = l.b.ins().load(types::I64, flags, frame, lay.frame_this);
                     let have = l.b.create_block();
                     l.b.ins().brif(raw, have, &[], decline, &[]);
                     l.b.switch_to_block(have);
-                    let rc = l.b.ins().load(types::I64, flags, raw, 0);
-                    let rc = l.b.ins().iadd_imm_s(rc, 1);
-                    l.b.ins().store(flags, rc, raw, 0);
                     let dst = l.b.ins().stack_addr(types::I64, locals_slot, (ts * 16) as i32);
                     let t = l.b.ins().iconst(types::I64, tag::OBJECT as i64);
                     l.b.ins().store(flags, t, dst, 0);
@@ -1284,7 +1281,9 @@ impl lower::Lower<'_> {
     fn cleanup(&mut self, nlocals: usize) {
         // Top level: the locals belong to the frame.
         let nlocals = if self.top_ptrs.is_some() { 0 } else { nlocals };
-        for i in 0..nlocals {
+        // (`$this` is lent, not owned.)
+        let this = self.locals.index.get("this").map(|&i| i as usize);
+        for i in (0..nlocals).filter(|&i| Some(i) != this) {
             let a = self.b.ins().stack_addr(types::I64, self.locals_slot, (i * 16) as i32);
             self.clear_slot(a);
         }

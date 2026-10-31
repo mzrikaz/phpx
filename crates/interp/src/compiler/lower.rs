@@ -853,7 +853,8 @@ impl<'a> Lower<'a> {
                         match op {
                             // Locals are dropped on exit anyway: move, don't
                             // copy (unless a finally may still read them).
-                            Op::Local(i) if !finally && self.top_ptrs.is_none() => {
+                            // (Not `$this`: lent, see `rt::lend_this`.)
+                            Op::Local(i) if !finally && self.top_ptrs.is_none() && self.locals.names[i as usize] != "this" => {
                                 let la = self.local_addr(i);
                                 self.copy16(out, la);
                                 self.store_tag(la, tag::NULL);

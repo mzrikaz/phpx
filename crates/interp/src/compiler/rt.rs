@@ -343,8 +343,7 @@ pub unsafe extern "C" fn rt_load_locals(c: *mut Cx, locals: *mut Value, spec: *c
         }
     }
     if let (Some(i), Some(o)) = (spec.this_slot, &f.this) {
-        ptr::drop_in_place(locals.add(i));
-        put(locals.add(i), Value::Object(o.clone()));
+        lend_this(locals.add(i), o);
     }
     0
 }
@@ -371,7 +370,7 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
             drop(take(args.add(i)));
         }
         if let (Some(i), Some(o)) = (spec.this_slot, &f.this) {
-            put(locals.add(i), Value::Object(o.clone()));
+            lend_this(locals.add(i), o);
         }
         return 0;
     }
@@ -491,10 +490,15 @@ pub unsafe extern "C" fn rt_bind_args(c: *mut Cx, locals: *mut Value, spec: *con
         }
     }
     if let (Some(i), Some(o)) = (spec.this_slot, &f.this) {
-        ptr::drop_in_place(locals.add(i));
-        put(locals.add(i), Value::Object(o.clone()));
+        lend_this(locals.add(i), o);
     }
     0
+}
+
+/// Compiled code's `$this` slot: the frame's object, not counted (the
+/// frame holds it for the whole call; the slot is never dropped).
+unsafe fn lend_this(slot: *mut Value, o: &Rc<crate::value::Obj>) {
+    ptr::write(slot, Value::Object(Rc::from_raw(Rc::as_ptr(o))));
 }
 
 /// Top-level code: move locals back into the frame's variables (later
