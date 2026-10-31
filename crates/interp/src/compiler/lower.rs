@@ -3248,7 +3248,13 @@ impl<'a> Lower<'a> {
                 (Some(l), _) => {
                     // (Passing by reference defines the variable.)
                     self.mark_defined(l);
-                    self.local_addr(l)
+                    let a = self.local_addr(l);
+                    if self.top_ptrs.is_some() {
+                        // (A frame cell: marked, see `rt::arg_local`.)
+                        self.b.ins().bor_imm_u(a, 1)
+                    } else {
+                        a
+                    }
                 }
                 (None, Some(t)) => self.temp_addr(t),
                 (None, None) => self.iconst(0),

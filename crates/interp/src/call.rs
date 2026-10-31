@@ -171,27 +171,27 @@ pub(crate) fn by_ref_params(name: &str) -> &'static [usize] {
 const STACK_RESERVE: usize = 256 * 1024;
 
 #[derive(Clone, Copy)]
-enum Body {
+pub(crate) enum Body {
     Block(&'static [Stmt]),
     Expr(&'static ast::Expr),
 }
 
-struct Invoke<'a> {
-    params: &'static [ast::Param],
-    body: Body,
-    ret: Option<&'static Type>,
+pub(crate) struct Invoke<'a> {
+    pub(crate) params: &'static [ast::Param],
+    pub(crate) body: Body,
+    pub(crate) ret: Option<&'static Type>,
     /// For errors: `foo`, `Foo::bar`, `{closure}`.
-    display: Rc<str>,
-    func: Rc<str>,
-    this: Option<Rc<Obj>>,
-    class: Option<Rc<Class>>,
-    static_class: Option<Rc<Class>>,
-    ctx: Rc<NsCtx>,
-    fn_id: usize,
-    captured: &'a [(&'static str, Value, bool)],
-    is_generator: bool,
+    pub(crate) display: Rc<str>,
+    pub(crate) func: Rc<str>,
+    pub(crate) this: Option<Rc<Obj>>,
+    pub(crate) class: Option<Rc<Class>>,
+    pub(crate) static_class: Option<Rc<Class>>,
+    pub(crate) ctx: Rc<NsCtx>,
+    pub(crate) fn_id: usize,
+    pub(crate) captured: &'a [(&'static str, Value, bool)],
+    pub(crate) is_generator: bool,
     /// `function &f()`: may hand back a reference (see `Interp::want_ref`).
-    by_ref: bool,
+    pub(crate) by_ref: bool,
 }
 
 /// Parameters of user code, so arguments for `&$x` params can be passed by
@@ -1429,7 +1429,15 @@ impl Interp {
             return r;
         }
         let _call = crate::trace::enter(self, &f, inv.params, saved_pos);
+        let flow = match entry {
+            None => self.native_frame_fn(&mut f, &inv),
+            Some(_) => None,
+        };
         let result = match inv.body {
+            Body::Block(_) if flow.is_some() => match flow.unwrap()? {
+                Flow::Return(v) => v,
+                _ => Value::Null,
+            },
             Body::Block(stmts) => match self.exec_block(&mut f, stmts)? {
                 Flow::Return(v) => v,
                 _ => Value::Null,

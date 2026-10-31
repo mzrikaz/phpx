@@ -87,6 +87,8 @@ pub struct Native {
     /// Leaf versions of method bodies (see `leaf`), by body.
     leaves: rustc_hash::FxHashMap<usize, Option<leaf::LeafFn>>,
     log: bool,
+    /// Compiling a function body in frame mode (see `native_frame_fn`).
+    frame_fn: bool,
     /// Debugging aids for bisecting miscompiles: compile at most this many
     /// functions (PHPX_NATIVE_MAX), and never ones whose name contains any
     /// of these (PHPX_NATIVE_SKIP, comma-separated).
@@ -483,6 +485,7 @@ impl Native {
             specs: vec![],
             leaves: Default::default(),
             log: std::env::var("PHPX_NATIVE_LOG").is_ok(),
+            frame_fn: false,
             max: std::env::var("PHPX_NATIVE_MAX").ok().and_then(|v| v.parse().ok()),
             skip: std::env::var("PHPX_NATIVE_SKIP").map(|v| v.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect()).unwrap_or_default(),
             count: 0,
@@ -580,7 +583,7 @@ impl Native {
     /// come from the interpreter frame).
     fn compile_mode(&mut self, it: &Interp, t: &Target, top_level: bool, osr: Option<usize>) -> Result<Entry, &'static str> {
         // Compiling is the engine's work, not the script's (memory_limit).
-        let quick = top_level && osr.is_none() && self.quick.is_some();
+        let quick = top_level && !self.frame_fn && osr.is_none() && self.quick.is_some();
         if quick {
             self.swap_quick();
         }
@@ -602,7 +605,7 @@ impl Native {
         if self.skip.iter().any(|s| t.display.contains(s.as_str())) || self.max.is_some_and(|m| self.count >= m) {
             return Err("excluded (PHPX_NATIVE_MAX / PHPX_NATIVE_SKIP)");
         }
-        let mut a = analyze::analyze_mode(t.params, &t.captured, t.body, top_level)?;
+        let mut a = analyze::analyze_mode(t.params, &t.captured, t.body, top_level, self.frame_fn)?;
         // Promoted constructor parameters: `$this->p = $p` statements ahead
         // of the body (as PHP compiles them), run when the arguments were
         // bound here (the interpreter has promoted them otherwise).
@@ -611,7 +614,7 @@ impl Native {
             a.extra_stmts(stmts)?;
         }
         let escapes = std::mem::take(&mut a.escapes);
-        if top_level && a.uses_this {
+        if top_level && a.uses_this && !self.frame_fn {
             // A file included from a method sees its `$this`; file code
             // binds frame variables, which `$this` is not.
             return Err("$this in included file code");
@@ -1305,6 +1308,61 @@ impl Interp {
                         match &r {
                             Ok(_) => eprintln!("[native] top-level of {} compiled", self.file_path(f.ctx.file)),
                             Err(why) => eprintln!("[native] top-level of {}: not compiled: {why}", self.file_path(f.ctx.file)),
+                        }
+                    }
+                    let e = r.ok();
+                    n.compiled.insert(key, e);
+                    e?
+                }
+            }
+        };
+        let mut cx = Cx { it: self as *const Interp, frame: f as *mut _ };
+        let mut out = Value::Null;
+        // SAFETY: entry follows the Entry ABI.
+        let st = unsafe { entry(&mut cx, std::ptr::null_mut(), 0, &mut out) };
+        match st {
+            0 => Some(Ok(crate::interp::Flow::Normal)),
+            3 => Some(Ok(crate::interp::Flow::Return(out))),
+            1 => Some(Err(self.pending.borrow_mut().take().expect("native error without pending exception"))),
+            _ => None,
+        }
+    }
+
+    /// A function the compiler can't take as a whole (references, include,
+    /// static variables, ...), once hot: its body compiled like file code,
+    /// on the frame the interpreter bound its arguments in, handing what
+    /// it can't do to the interpreter statement by statement. None =
+    /// interpret it.
+    pub(crate) fn native_frame_fn(&self, f: &mut crate::interp::Frame, inv: &crate::call::Invoke) -> Option<R<crate::interp::Flow>> {
+        let crate::call::Body::Block(body) = inv.body else { return None };
+        let key = body.as_ptr() as usize;
+        let entry = {
+            let mut guard = self.native.try_borrow_mut().ok()?;
+            let n = guard.as_mut()?;
+            match n.compiled.get(&key) {
+                Some(e) => (*e)?,
+                None => {
+                    // Only once the function itself failed to compile.
+                    if !matches!(n.compiled.get(&inv.fn_id), Some(None)) {
+                        return None;
+                    }
+                    let t = Target {
+                        fn_id: key,
+                        display: inv.display.clone(),
+                        params: inv.params,
+                        captured: inv.captured.iter().map(|c| c.0).collect(),
+                        body: Body::Block(body),
+                        ctx: inv.ctx.clone(),
+                        class: inv.class.clone(),
+                        ret: None,
+                    };
+                    n.frame_fn = true;
+                    let r = n.timed(|n| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| n.compile_mode(self, &t, true, None))).unwrap_or(Err("internal compiler error")));
+                    n.frame_fn = false;
+                    if n.log {
+                        match &r {
+                            Ok(_) => eprintln!("[native] {} compiled on its frame", t.display),
+                            Err(why) => eprintln!("[native] {}: not compiled on its frame: {why}", t.display),
                         }
                     }
                     let e = r.ok();

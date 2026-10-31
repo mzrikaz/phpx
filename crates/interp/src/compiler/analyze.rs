@@ -41,6 +41,9 @@ pub struct Analysis {
     pub escapes: std::collections::HashSet<usize>,
     /// Calls func_get_args() / func_num_args() (the call keeps its arguments).
     pub func_args: bool,
+    /// A function body compiled like file code (`top_level`): on its
+    /// interpreter frame, with escapes; `$this` is its own.
+    pub frame_fn: bool,
 }
 
 /// Rejections the top level can hand to the interpreter instead.
@@ -75,8 +78,22 @@ fn flow_contained(s: &[Stmt], depth: usize) -> bool {
 /// Scope-reading built-ins: they need named variables.
 const SCOPE_FNS: &[&str] = &["compact", "eval", "get_defined_vars", "func_get_args", "func_num_args", "extract"];
 
-pub fn analyze_mode(params: &'static [ast::Param], captured: &[&'static str], body: Body, top_level: bool) -> Result<Analysis, Reject> {
-    let mut a = Analysis { locals: Locals::default(), uses_this: false, top_level, escapes: Default::default(), func_args: false };
+pub fn analyze_mode(params: &'static [ast::Param], captured: &[&'static str], body: Body, top_level: bool, frame_fn: bool) -> Result<Analysis, Reject> {
+    let mut a = Analysis { locals: Locals::default(), uses_this: false, top_level, escapes: Default::default(), func_args: false, frame_fn };
+    if frame_fn {
+        // (Parameters and captures are frame variables already bound.)
+        for p in params {
+            a.locals.slot(&p.name.name);
+        }
+        for c in captured {
+            a.locals.slot(c);
+        }
+        match body {
+            Body::Block(stmts) => a.stmts(stmts)?,
+            Body::Expr(e) => a.expr(e)?,
+        }
+        return Ok(a);
+    }
     if let (true, Body::Block(stmts)) = (top_level, body) {
         // Only declarations directly in the segment are hoisted/declared
         // in order; conditional ones (inside if/loops) must stay interpreted.
@@ -252,9 +269,9 @@ impl Analysis {
             StaticVar(_) => Err("static variable"),
             // At file top level: functions are hoisted (no-op), classes and
             // constants are declared through helpers.
-            Function(_) | Class(_) if self.top_level => Ok(()),
-            Const(items) if self.top_level => items.iter().try_for_each(|(_, e)| self.expr(e)),
-            Use { .. } | Declare { body: None, .. } if self.top_level => Ok(()),
+            Function(_) | Class(_) if self.top_level && !self.frame_fn => Ok(()),
+            Const(items) if self.top_level && !self.frame_fn => items.iter().try_for_each(|(_, e)| self.expr(e)),
+            Use { .. } | Declare { body: None, .. } if self.top_level && !self.frame_fn => Ok(()),
             Function(_) | Class(_) | Const(_) => Err("nested declaration"),
             Namespace { .. } | Use { .. } | Declare { .. } => Err("top-level statement"),
             Label(_) | Goto(_) => Err("goto"),
@@ -334,7 +351,7 @@ impl Analysis {
         match &e.kind {
             Int(_) | Float(_) | Str(_) | Bytes(_) | Bool(_) | Null | Name(_) | MagicConst(_) => Ok(()),
             // (File code reads `$this` through the interpreter.)
-            Var(n) if n == "this" && self.top_level => Err("$this in included file code"),
+            Var(n) if n == "this" && self.top_level && !self.frame_fn => Err("$this in included file code"),
             Var(n) if n == "this" => {
                 self.uses_this = true;
                 Ok(())
@@ -519,7 +536,7 @@ impl Analysis {
     /// Operand of isset()/??: locals, index/prop chains.
     fn quiet(&mut self, e: &'static Expr) -> Result<(), Reject> {
         match &e.kind {
-            ExprKind::Var(n) if n == "this" && self.top_level => Err("$this in included file code"),
+            ExprKind::Var(n) if n == "this" && self.top_level && !self.frame_fn => Err("$this in included file code"),
             ExprKind::Var(n) if n == "this" => {
                 self.uses_this = true;
                 Ok(())

@@ -2245,6 +2245,28 @@ unsafe fn take_args(args: *mut Value, n: u64) -> Vec<Value> {
     (0..n as usize).map(|i| take(args.add(i))).collect()
 }
 
+/// Argument `i`'s variable in a `locals` array: its Value, and the cell
+/// it lives in when the generated code marked it as one (low bit set: code
+/// whose variables are the frame's cells, see `Lower::top_ptrs`), so a
+/// by-reference parameter shares the cell itself.
+unsafe fn arg_local(locals: *const *mut Value, i: usize) -> (*mut Value, Option<Rc<RefCell<Value>>>) {
+    let p = *locals.add(i);
+    if p as usize & 1 == 0 {
+        return (p, None);
+    }
+    let p = (p as usize & !1) as *mut Value;
+    thread_local! {
+        /// Offset of the Value in a `RefCell<Value>`.
+        static OFF: usize = {
+            let c = RefCell::new(Value::Null);
+            c.as_ptr() as usize - &c as *const RefCell<Value> as usize
+        };
+    }
+    let cell = (p as usize - OFF.with(|o| *o)) as *const RefCell<Value>;
+    Rc::increment_strong_count(cell);
+    (p, Some(Rc::from_raw(cell)))
+}
+
 /// Generated code puts one more word after the `locals` pointers: a bit
 /// per argument the runtime bound by reference, so it can store
 /// property/element arguments back.
@@ -2281,7 +2303,13 @@ unsafe fn with_refs_masked(
                 Some(p) => p.by_ref,
                 None => ps.last().is_some_and(|p| p.variadic && p.by_ref),
             };
-            let local = *locals.add(i);
+            let (local, own) = arg_local(locals, i);
+            if let (true, Some(cell)) = (by_ref, own) {
+                // (The variable's own cell: nothing to copy back.)
+                pos[i] = Value::Ref(cell);
+                mark_by_ref(locals, n, i);
+                continue;
+            }
             if by_ref && !local.is_null() {
                 let cell = slot(take(local));
                 pos[i] = Value::Ref(cell.clone());
@@ -2924,7 +2952,7 @@ pub unsafe extern "C" fn rt_call(
         let vals = std::slice::from_raw_parts_mut(args, n as usize);
         for (i, v) in vals.iter_mut().enumerate() {
             if refs.contains(&i) && !locals.is_null() {
-                let local = *locals.add(i);
+                let local = arg_local(locals, i).0;
                 if !local.is_null() {
                     *v = take(local);
                     mark_by_ref(locals, n as usize, i);
@@ -2938,7 +2966,7 @@ pub unsafe extern "C" fn rt_call(
         let r = crate::builtins::invoke(it, (*site).name, (*site).bspec.get(), fun, f, vals);
         for (i, v) in vals.iter_mut().enumerate() {
             if refs.contains(&i) && !locals.is_null() {
-                let local = *locals.add(i);
+                let local = arg_local(locals, i).0;
                 if !local.is_null() {
                     put(local, std::mem::take(v));
                     continue;
@@ -2986,7 +3014,7 @@ pub unsafe extern "C" fn rt_call(
                 let n = vals.len();
                 let idxs: Vec<usize> = refs.iter().copied().filter(|i| *i < vals.len()).collect();
                 for &idx in &idxs {
-                    let local = *locals.add(idx);
+                    let local = arg_local(locals, idx).0;
                     if !local.is_null() {
                         vals[idx] = take(local);
                         mark_by_ref(locals, n, idx);
@@ -2994,7 +3022,7 @@ pub unsafe extern "C" fn rt_call(
                 }
                 let r = crate::builtins::invoke(it, bname, crate::arginfo::spec(bname), *fun, f, &mut vals);
                 for &idx in &idxs {
-                    let local = *locals.add(idx);
+                    let local = arg_local(locals, idx).0;
                     if !local.is_null() {
                         put(local, std::mem::take(&mut vals[idx]));
                     }
