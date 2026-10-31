@@ -1298,6 +1298,12 @@ impl<'a> Lower<'a> {
             ExprKind::IncDec { expr, inc, .. } if matches!(expr.kind, ExprKind::Var(_)) => {
                 self.incdec_local(expr, *inc, false, false)?;
             }
+            // `$o->p = v;`: the value isn't needed after the store.
+            ExprKind::Assign { target, value } if matches!(&target.kind, ExprKind::Prop { name: MemberName::Ident(_), nullsafe: false, .. }) => {
+                let ExprKind::Prop { object, name: MemberName::Ident(name), .. } = &target.kind else { unreachable!() };
+                let op = self.prop_write(object, &name.name, value, false)?;
+                self.release(op);
+            }
             _ => {
                 let op = self.expr(e)?;
                 self.release(op);
@@ -2917,27 +2923,33 @@ impl<'a> Lower<'a> {
     }
 
     /// `$obj->name = value` with an inline cache (plain properties only).
-    fn prop_write(&mut self, object: &'static Expr, name: &'static str, value: &'static Expr) -> L<Op> {
+    /// `want`: the assigned value is used (else it is only stored).
+    fn prop_write(&mut self, object: &'static Expr, name: &'static str, value: &'static Expr, want: bool) -> L<Op> {
         let o = self.expr(object)?;
         // (`$this` never changes: read in place.)
         let o = if matches!(&object.kind, ExprKind::Var(n) if n == "this") { o } else { self.own(o) };
         let o = self.materialize(o);
         let oa = self.addr(o).unwrap();
         let v = self.expr(value)?;
-        let r = self.prop_store(oa, name, v);
+        let r = self.prop_store(oa, name, v, want);
         self.release(o);
         r
     }
 
     /// The store of `prop_write`, for an object at `oa` and a computed value.
-    fn prop_store(&mut self, oa: CValue, name: &'static str, v: Op) -> L<Op> {
-        let v = self.own(v);
+    /// The stores copy the value in, so a value only stored (`want`
+    /// false) needn't be a copy of its own; the general path, which
+    /// consumes it, gets one.
+    fn prop_store(&mut self, oa: CValue, name: &'static str, v: Op, want: bool) -> L<Op> {
+        let v = if want { self.own(v) } else { v };
         let v = self.materialize(v);
         let va = self.addr(v).unwrap();
         let site = Box::new(super::rt::PropSite::new(name));
         let sp = &*site as *const super::rt::PropSite as i64;
         self.psites.push(site);
         let Some(lay) = super::layout() else {
+            let v = self.own(v);
+            let va = self.addr(v).unwrap();
             let s = self.iconst(sp);
             self.call_checked("rt_prop_write", &[self.cx, oa, s, va, va]);
             return Ok(v);
@@ -3039,7 +3051,18 @@ impl<'a> Lower<'a> {
         self.b.ins().jump(merge, &[]);
         self.b.switch_to_block(slow);
         let s = self.iconst(sp);
-        self.call_checked("rt_prop_write", &[self.cx, oa, s, va, va]);
+        if matches!(v, Op::Ptr(_, Some(_))) {
+            self.call_checked("rt_prop_write", &[self.cx, oa, s, va, va]);
+        } else {
+            // (A borrowed value: the helper gets its own copy.)
+            let t2 = self.alloc_temp();
+            let ta = self.temp_addr(t2);
+            self.store_into(ta, Op::Ptr(va, None));
+            let s = self.iconst(sp);
+            self.call_checked("rt_prop_write", &[self.cx, oa, s, ta, ta]);
+            let ta = self.temp_addr(t2);
+            self.release(Op::Ptr(ta, Some(t2)));
+        }
         self.b.ins().jump(merge, &[]);
         self.b.switch_to_block(merge);
         let olda = self.temp_addr(old_t);
@@ -3475,7 +3498,7 @@ impl<'a> Lower<'a> {
                 self.assign_local(i, v);
                 Ok(Op::Local(i))
             }
-            ExprKind::Prop { object, name: MemberName::Ident(name), nullsafe: false } => self.prop_write(object, &name.name, value),
+            ExprKind::Prop { object, name: MemberName::Ident(name), nullsafe: false } => self.prop_write(object, &name.name, value, true),
             ExprKind::GlobalVar(n) => {
                 let (np, nl) = self.global_name(n)?;
                 let v = self.expr(value)?;
@@ -3786,7 +3809,7 @@ impl<'a> Lower<'a> {
                 let va = self.addr(v).unwrap();
                 let r = self.binary(op, cur, Op::Ptr(va, None))?;
                 let oa = self.addr(o).unwrap();
-                let r = self.prop_store(oa, &name.name, r)?;
+                let r = self.prop_store(oa, &name.name, r, true)?;
                 let ta = self.temp_addr(t);
                 self.store_into(ta, r);
                 self.b.ins().jump(merge, &[]);
