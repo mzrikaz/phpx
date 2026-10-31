@@ -245,7 +245,7 @@ impl Analysis {
                 }
                 ExprKind::Prop { object, name, .. } => {
                     self.expr(object)?;
-                    self.member(name)
+                    self.literal_member(name)
                 }
                 ExprKind::GlobalVar(n) if matches!(n.kind, ExprKind::Str(_)) => Ok(()),
                 _ => Err("unset target"),
@@ -303,11 +303,11 @@ impl Analysis {
             ExprKind::GlobalVar(n) if matches!(n.kind, ExprKind::Str(_)) => Ok(()),
             ExprKind::Prop { object, name, nullsafe: false } => {
                 self.expr(object)?;
-                self.member(name)
+                self.literal_member(name)
             }
             ExprKind::StaticProp { class, name } => {
                 self.class_ref(class)?;
-                self.member(name)
+                self.literal_member(name)
             }
             _ => Err("write target"),
         }
@@ -317,6 +317,16 @@ impl Analysis {
         match m {
             MemberName::Ident(_) => Ok(()),
             MemberName::Dynamic(e) => self.expr(e),
+        }
+    }
+
+    /// A member name only the generic paths take dynamically
+    /// (`$o->$p` reads and `$o->$m()` calls); elsewhere a name the code
+    /// generator needs as written.
+    fn literal_member(&mut self, m: &'static MemberName) -> Result<(), Reject> {
+        match m {
+            MemberName::Ident(_) => Ok(()),
+            MemberName::Dynamic(_) => Err("dynamic member name"),
         }
     }
 
@@ -465,7 +475,7 @@ impl Analysis {
                 }
                 self.args(args)
             }
-            MethodCall { object, name, args, .. } => {
+            MethodCall { object, name, args, nullsafe } => {
                 // Binders that keep a reference to the variable after the
                 // call returns: compiled code passes locals by reference as
                 // copy-in/copy-out, so later writes wouldn't reach them.
@@ -475,17 +485,25 @@ impl Analysis {
                     }
                 }
                 self.expr(object)?;
-                self.member(name)?;
+                if *nullsafe {
+                    self.literal_member(name)?;
+                } else {
+                    self.member(name)?;
+                }
                 self.args(args)
             }
             StaticCall { class, name, args } => {
                 self.class_ref(class)?;
-                self.member(name)?;
+                self.literal_member(name)?;
                 self.args(args)
             }
-            Prop { object, name, .. } => {
+            Prop { object, name, nullsafe } => {
                 self.expr(object)?;
-                self.member(name)
+                if *nullsafe {
+                    self.literal_member(name)
+                } else {
+                    self.member(name)
+                }
             }
             Index { base, index } => {
                 self.expr(base)?;
@@ -494,7 +512,7 @@ impl Analysis {
             ClassConst { class, .. } => self.class_ref(class),
             StaticProp { class, name } => {
                 self.class_ref(class)?;
-                self.member(name)
+                self.literal_member(name)
             }
             New { class, args } => {
                 self.class_ref(class)?;
@@ -551,7 +569,7 @@ impl Analysis {
             }
             ExprKind::Prop { object, name, .. } => {
                 self.quiet(object)?;
-                self.member(name)
+                self.literal_member(name)
             }
             // (Not escaped by itself: the interpreter would read it loudly.)
             _ => self.expr_inner(e),
