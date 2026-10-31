@@ -287,3 +287,30 @@ Suite (this machine ran about half as fast as in the morning; ratios):
 
 Known difference left: PHP sets a typed property to 0 when `op=` on it
 throws (`$o->f /= 0`); phpx leaves the old value.
+
+### 2026-10-31: Laravel API and general runtime costs
+
+iDriver `GET /api/sms/status` (Laravel), steady state, instructions per
+request (callgrind): PHP 8.4 162M (server) / 192M (in-process); phpx
+460M -> 379M (server, release build). Server CPU per request: phpx/PHP
+about 3.2x -> 2.75x (CPU timings on this machine are noisy).
+
+- A namespaced function named like a built-in (GuzzleHttp\json_decode,
+  Illuminate\Log\log) turned off every inlined built-in in all compiled
+  code; the check is now per namespace and name, and a site keeps what
+  it first resolved to (PHP's run-time cache). ~80k fewer built-in calls
+  per request.
+- Server workers compile after 30 calls (CLI keeps 1000).
+- Allocations and per-thread state (gc registry, stack limit) are read
+  inline: `LocalKey::with` with work inside stayed an out-of-line call
+  plus an indirect accessor call per allocation.
+- Includes: no stat within two seconds of the last check in server
+  workers (opcache.revalidate_freq), and paths hashed as bytes.
+- Constant reads cached per source name; lowercase names shared across
+  requests; `__callStatic` (facades) cached at static call sites.
+- `new` with a constructor that only stores promoted parameters stores
+  them itself; `$o->p = $v;` stores without a temporary copy.
+
+Suite after this (phpx/PHP, phpx/Node): assoc 1.19/0.9, bintrees
+0.98/8.4, closures 1.12/3.4, fannkuch 0.73/4.1, json 0.89/1.1, nbody
+0.29/7.0, oop 1.00/4.6, spectral 0.19/2.7, strings 1.04/1.3.
