@@ -394,7 +394,18 @@ impl Interp {
         if let Some(r) = self.dyn_class_refs.borrow().get(&key) {
             return r;
         }
-        let r: &'static ast::ClassRef = Box::leak(Box::new(ast::ClassRef::Name(format!("\x01{}", cls.name))));
+        // (One per class name and thread: requests share them.)
+        thread_local! {
+            static INTERNED: std::cell::RefCell<rustc_hash::FxHashMap<Box<str>, &'static ast::ClassRef>> = Default::default();
+        }
+        let r = INTERNED.with(|m| {
+            if let Some(r) = m.borrow().get(&*cls.name) {
+                return *r;
+            }
+            let r: &'static ast::ClassRef = Box::leak(Box::new(ast::ClassRef::Name(format!("\x01{}", cls.name))));
+            m.borrow_mut().insert(Box::from(&*cls.name), r);
+            r
+        });
         let ast::ClassRef::Name(n) = r else { unreachable!() };
         self.class_cache.borrow_mut().insert(n.as_ptr() as usize, cls.clone());
         self.dyn_class_refs.borrow_mut().insert(key, r);
