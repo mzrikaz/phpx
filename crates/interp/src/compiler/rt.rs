@@ -2512,6 +2512,9 @@ pub struct MethodSite {
     /// The same for generated code: two classes' accessors (code that
     /// sees two classes, like an interface's).
     pub acc: [Accessor; 2],
+    /// Static call sites: the cached entry is the class's `__callStatic`
+    /// (the method itself doesn't exist).
+    pub magic: std::cell::Cell<bool>,
     /// The callable name last called through this site (`$f(...)`,
     /// `call_user_func('name', ...)`) and what it names.
     pub dynamic: DynCache,
@@ -2826,6 +2829,7 @@ impl MethodSite {
             poly: Default::default(),
             getter: Default::default(),
             acc: Default::default(),
+            magic: Default::default(),
             dynamic: Default::default(),
         }
     }
@@ -3864,10 +3868,30 @@ pub unsafe extern "C" fn rt_static_call(
             frame
         };
         let this = if m.is_static { None } else { f.this.clone() };
-        let r = site.frame.with(make, |frame| {
-            frame.this = this;
-            enter(it, mc.entry, frame, args, n, dst)
-        });
+        let r = if site.magic.get() {
+            // `__callStatic($name, $arguments)`.
+            let mut pair = [Value::str(site.name), Value::array(PhpArray::from_list(take_args(args, n)))];
+            let r = site.frame.with(make, |frame| {
+                frame.this = None;
+                enter(it, mc.entry, frame, pair.as_mut_ptr(), 2, dst)
+            });
+            if r.is_none() {
+                // Declined: the general path, arguments as they were.
+                let Value::Array(a) = std::mem::take(&mut pair[1]) else { unreachable!() };
+                let cls = match it.class_ref(f, cref) {
+                    Ok(c) => c,
+                    Err(e) => return status(it, Err::<(), _>(e), |_| ()),
+                };
+                let mut vals: Vec<Value> = a.values().collect();
+                return static_call_general(it, f, cref, cls, site.name, vals.as_mut_ptr(), vals.len() as u64, ptr::null(), ptr::null(), dst);
+            }
+            r
+        } else {
+            site.frame.with(make, |frame| {
+                frame.this = this;
+                enter(it, mc.entry, frame, args, n, dst)
+            })
+        };
         if let Some(st) = r {
             return st;
         }
@@ -3895,7 +3919,21 @@ unsafe fn static_lookup(
     stc: *const crate::class::Class,
     thc: *const crate::class::Class,
 ) -> Option<MethodCache> {
-    let m = cls.find_method(site.lname)?.clone();
+    // No such method: `__callStatic` (unless an instance of the class calls
+    // it, which PHP sends to `__call`).
+    let (m, magic) = match cls.find_method(site.lname) {
+        Some(m) => (m.clone(), false),
+        None => {
+            if f.this.as_ref().is_some_and(|o| o.class.is_subclass_of(cls)) && cls.find_method("__call").is_some() {
+                return None;
+            }
+            let m = cls.find_method("__callstatic")?.clone();
+            if !m.is_static {
+                return None;
+            }
+            (m, true)
+        }
+    };
     if !it.member_visible(f.class.as_deref(), m.vis, &m.declaring) {
         return None;
     }
@@ -3924,8 +3962,9 @@ unsafe fn static_lookup(
     // Direct calls from compiled code, keyed by the caller's raw scope and
     // `static` class words, and for an instance method the class of the
     // `$this` it gets lent.
-    let direct = crate::call::method_params(&m).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
+    let direct = !magic && crate::call::method_params(&m).is_some_and(|ps| ps.iter().all(|p| !p.by_ref && !p.variadic));
     site.direct.set(if direct { entry as usize } else { 0 });
+    site.magic.set(magic);
     site.direct_this.set(match (&f.this, m.is_static) {
         (Some(o), false) => *(std::ptr::addr_of!(o.class) as *const usize),
         _ => 0,
@@ -4601,6 +4640,7 @@ impl MethodSite {
         self.poly.borrow_mut().clear();
         *self.getter.borrow_mut() = Default::default();
         self.acc.iter().for_each(Accessor::clear);
+        self.magic.set(false);
     }
 }
 
