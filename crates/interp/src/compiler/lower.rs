@@ -138,6 +138,9 @@ struct WriteBack {
     pos: usize,
     target: &'static Expr,
     temp: usize,
+    /// The argument's slot, when the temp is only filled on the paths that
+    /// may bind it by reference (`fill_write_backs`).
+    lazy: Option<(StackSlot, i32)>,
 }
 
 /// What's known at compile time about which arguments a call may take by
@@ -2007,7 +2010,7 @@ impl<'a> Lower<'a> {
                 let site = Box::new(CallSite { direct: Default::default(), frame: Default::default(), name: n, cached: Default::default(), builtin: Default::default(), bspec: Default::default(), builtin_ref: Default::default(), jit: Default::default() });
                 let sp = &*site as *const CallSite as i64;
                 self.sites.push(site);
-                let (aa, la, n_) = self.args(args, ByRef::for_function(n))?;
+                let (aa, la, n_) = self.args_wb(args, ByRef::for_function(n), true)?;
                 self.mark_call(callee.span.start, args);
                 let sp = self.iconst(sp);
                 let meta = self.arg_meta(args);
@@ -2033,7 +2036,10 @@ impl<'a> Lower<'a> {
                 };
                 let r = match super::layout().filter(|_| plain) {
                     Some(lay) => self.direct_call(lay, sp, aa, n_, la, meta),
-                    None => self.helper_value("rt_call", |l| vec![l.cx, sp, aa, n_, la, meta])?,
+                    None => {
+                        self.fill_write_backs();
+                        self.helper_value("rt_call", |l| vec![l.cx, sp, aa, n_, la, meta])?
+                    }
                 };
                 let r = match (t, merge) {
                     (Some(t), Some(merge)) => {
@@ -2099,13 +2105,16 @@ impl<'a> Lower<'a> {
                         Ok(r)
                     })?
                 } else {
-                    let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
+                    let (aa, la, n_) = self.args_wb(args, ByRef::Unknown, true)?;
                     self.mark_call(name_off, args);
                     let sp = self.iconst(sp);
                     let meta = self.arg_meta(args);
                     let r = match super::layout().filter(|_| super::inline_rc() && args.iter().all(|a| !a.spread && a.name.is_none())) {
                         Some(lay) => self.direct_method_call(lay, oa, sp, aa, n_, la, meta, args.len()),
-                        None => self.helper_value("rt_method_call", |l| vec![l.cx, oa, sp, aa, n_, la, meta])?,
+                        None => {
+                            self.fill_write_backs();
+                            self.helper_value("rt_method_call", |l| vec![l.cx, oa, sp, aa, n_, la, meta])?
+                        }
                     };
                     self.write_back(la, args.len())?;
                     r
@@ -2130,12 +2139,15 @@ impl<'a> Lower<'a> {
                 let site = Box::new(super::rt::MethodSite::new(name, lname));
                 let sp = self.iconst(&*site as *const super::rt::MethodSite as i64);
                 self.msites.push(site);
-                let (aa, la, n_) = self.args(args, ByRef::Unknown)?;
+                let (aa, la, n_) = self.args_wb(args, ByRef::Unknown, true)?;
                 self.mark_call(name_off, args);
                 let meta = self.arg_meta(args);
                 let r = match super::layout().filter(|_| args.iter().all(|a| !a.spread && a.name.is_none()) && matches!(class, ClassRef::Name(_))) {
                     Some(lay) => self.direct_static_call(lay, cr, sp, aa, n_, la, meta),
-                    None => self.helper_value("rt_static_call", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?,
+                    None => {
+                        self.fill_write_backs();
+                        self.helper_value("rt_static_call", |l| vec![l.cx, cr, sp, aa, n_, la, meta])?
+                    }
                 };
                 self.write_back(la, args.len())?;
                 r
@@ -2469,7 +2481,7 @@ impl<'a> Lower<'a> {
         let cont = self.b.create_block();
         self.b.ins().brif(failed, self.unwind, &[], cont, &[]);
         self.b.switch_to_block(cont);
-        let (aa, la, n) = self.args(args, ByRef::Unknown)?;
+        let (aa, la, n) = self.args_wb(args, ByRef::Unknown, true)?;
         let (ctor_b, chk3, noctor_b, slow_b, done) =
             (self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block());
         let (chk4, init_b) = (self.b.create_block(), self.b.create_block());
@@ -2522,6 +2534,7 @@ impl<'a> Lower<'a> {
             self.set_pos(off);
         }
         let meta = self.iconst(0);
+        self.fill_write_backs();
         self.call_checked("rt_new", &[self.cx, cr, sp, aa, n, la, meta, ta]);
         self.b.ins().jump(done, &[]);
 
@@ -2658,6 +2671,7 @@ impl<'a> Lower<'a> {
         self.b.ins().brif(declined, slow, &[], self.unwind, &[]);
 
         self.b.switch_to_block(slow);
+        self.fill_write_backs();
         let ta = self.temp_addr(t);
         slow_call(self, ta);
         self.b.ins().jump(done, &[]);
@@ -3145,6 +3159,13 @@ impl<'a> Lower<'a> {
     /// final word where the runtime reports which ones it bound. Call
     /// `write_back` after the call.
     fn args(&mut self, args: &'static [ast::Arg], by_ref: ByRef) -> L<(CValue, CValue, CValue)> {
+        self.args_wb(args, by_ref, false)
+    }
+
+    /// `args`, with the write-back temps of place arguments left empty
+    /// (`lazy`) until `fill_write_backs`: a compiled callee called
+    /// directly binds no parameter by reference, so they stay unused there.
+    fn args_wb(&mut self, args: &'static [ast::Arg], by_ref: ByRef, lazy: bool) -> L<(CValue, CValue, CValue)> {
         let n = args.len();
         let (slot, ids) = self.alloc_array(n);
         let lslot = self.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, ((n + 1) * 8) as u32, 3));
@@ -3182,10 +3203,12 @@ impl<'a> Lower<'a> {
             self.store_into(dst, v);
             if let Some(t) = wb {
                 // The temp starts as a copy of the argument.
-                let ta = self.temp_addr(t);
-                let dst = self.b.ins().stack_addr(types::I64, slot, (i * 16) as i32);
-                self.store_into(ta, Op::Ptr(dst, None));
-                wbs.push(WriteBack { pos: i, target: &a.value, temp: t });
+                if !lazy {
+                    let ta = self.temp_addr(t);
+                    let dst = self.b.ins().stack_addr(types::I64, slot, (i * 16) as i32);
+                    self.store_into(ta, Op::Ptr(dst, None));
+                }
+                wbs.push(WriteBack { pos: i, target: &a.value, temp: t, lazy: lazy.then_some((slot, (i * 16) as i32)) });
             }
         }
         let zero = self.iconst(0);
@@ -3195,6 +3218,17 @@ impl<'a> Lower<'a> {
         let aa = self.b.ins().stack_addr(types::I64, slot, 0);
         let la = self.b.ins().stack_addr(types::I64, lslot, 0);
         Ok((aa, la, self.iconst(n as i64)))
+    }
+
+    /// Before a call of the latest `args_wb(.., true)` that may bind by
+    /// reference: its write-back temps become copies of their arguments.
+    fn fill_write_backs(&mut self) {
+        let fills: Vec<(usize, StackSlot, i32)> = self.write_backs.last().into_iter().flatten().filter_map(|w| w.lazy.map(|(s, o)| (w.temp, s, o))).collect();
+        for (t, slot, off) in fills {
+            let ta = self.temp_addr(t);
+            let src = self.b.ins().stack_addr(types::I64, slot, off);
+            self.store_into(ta, Op::Ptr(src, None));
+        }
     }
 
     /// After a call: store arguments the callee bound by reference back to
