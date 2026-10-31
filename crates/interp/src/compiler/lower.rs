@@ -2472,12 +2472,22 @@ impl<'a> Lower<'a> {
         let (aa, la, n) = self.args(args, ByRef::Unknown)?;
         let (ctor_b, chk3, noctor_b, slow_b, done) =
             (self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block(), self.b.create_block());
+        let (chk4, init_b) = (self.b.create_block(), self.b.create_block());
         self.b.set_cold_block(slow_b);
         let is0 = self.b.ins().icmp_imm_s(IntCC::Equal, st, 0);
         self.b.ins().brif(is0, ctor_b, &[], chk3, &[]);
         self.b.switch_to_block(chk3);
         let is3 = self.b.ins().icmp_imm_s(IntCC::Equal, st, 3);
-        self.b.ins().brif(is3, noctor_b, &[], slow_b, &[]);
+        self.b.ins().brif(is3, noctor_b, &[], chk4, &[]);
+        self.b.switch_to_block(chk4);
+        let is4 = self.b.ins().icmp_imm_s(IntCC::Equal, st, 4);
+        self.b.ins().brif(is4, init_b, &[], slow_b, &[]);
+
+        // A constructor that only stores its parameters: stored without
+        // calling it, unless an argument needs more (then the call).
+        self.b.switch_to_block(init_b);
+        let r = self.call("rt_new_init", &[ta, sp, aa, n]).unwrap();
+        self.b.ins().brif(r, ctor_b, &[], done, &[]);
 
         self.b.switch_to_block(ctor_b);
         let meta = self.iconst(0);

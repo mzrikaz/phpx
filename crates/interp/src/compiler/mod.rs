@@ -229,6 +229,7 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_array_lit: 4 => true,
     rt_unhandled_match: 2 => true,
     rt_arith_fill: 3 => true,
+    rt_new_init: 4 => true,
 ];
 
 thread_local! {

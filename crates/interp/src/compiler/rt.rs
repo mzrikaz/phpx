@@ -2515,6 +2515,9 @@ pub struct MethodSite {
     /// Static call sites: the cached entry is the class's `__callStatic`
     /// (the method itself doesn't exist).
     pub magic: std::cell::Cell<bool>,
+    /// `new` sites: the constructor only stores its (promoted) parameters
+    /// into properties, done here without calling it (see `InitPlan`).
+    pub init: RefCell<Option<Rc<InitPlan>>>,
     /// The callable name last called through this site (`$f(...)`,
     /// `call_user_func('name', ...)`) and what it names.
     pub dynamic: DynCache,
@@ -2830,6 +2833,7 @@ impl MethodSite {
             getter: Default::default(),
             acc: Default::default(),
             magic: Default::default(),
+            init: Default::default(),
             dynamic: Default::default(),
         }
     }
@@ -4129,12 +4133,119 @@ unsafe fn new_cache(it: &Interp, f: &Frame, cref: &'static ast::ClassRef, site: 
     };
     site.cached.set(Some(mc));
     site.frame.invalidate();
+    *site.init.borrow_mut() = cls.ctor.as_ref().and_then(|ctor| init_plan(it, &cls, ctor)).map(Rc::new);
     // Compiled code may call the constructor directly.
     site.direct.set(match entry {
         Some(e) if direct => e as usize,
         _ => 0,
     });
     Ok(Some(mc))
+}
+
+/// A constructor that only stores its parameters into properties
+/// (`function __construct(public ?Node $l = null, public ?Node $r = null) {}`),
+/// for one class: per parameter, the property's slot, the types it takes
+/// without coercion and its default. `new` stores the arguments itself;
+/// anything else (a value needing coercion or rejected, a missing
+/// argument without a literal default) makes the real call.
+pub struct InitPlan {
+    params: Vec<InitParam>,
+}
+
+struct InitParam {
+    slot: usize,
+    quick: (Quick, bool),
+    /// A class type: objects of it (or a subclass) pass as they are.
+    class: Option<Rc<crate::class::Class>>,
+    default: Option<Value>,
+}
+
+unsafe fn init_plan(it: &Interp, cls: &Rc<crate::class::Class>, ctor: &Rc<crate::class::Method>) -> Option<InitPlan> {
+    let crate::class::MethodBody::User(func) = &ctor.body else { return None };
+    if !func.body.as_ref()?.is_empty() || func.by_ref || func.params.is_empty() || !cls.plain_new || !cls.shadowed.is_empty() {
+        return None;
+    }
+    let mut params = vec![];
+    for p in &func.params {
+        if p.by_ref || p.variadic || p.promote.is_none() {
+            return None;
+        }
+        let slot = cls.shape.slot(&p.name.name)?;
+        let quick = Quick::of(p.ty.as_ref());
+        let named = match p.ty.as_ref() {
+            Some(ast::Type::Named(n)) => Some(n),
+            Some(ast::Type::Nullable(t)) => match &**t {
+                ast::Type::Named(n) => Some(n),
+                _ => None,
+            },
+            _ => None,
+        };
+        let class = match (quick.0, named) {
+            (Quick::Other, Some(n)) => {
+                let full = it.resolve_class_name(&ctor.ctx, n);
+                if matches!(full.to_ascii_lowercase().as_str(), "self" | "static" | "parent" | "iterable" | "callable" | "object" | "false" | "true" | "null" | "void" | "never") {
+                    return None;
+                }
+                Some(it.classes.borrow().get(&*it.lower.get(full.trim_start_matches('\\'))).cloned()?)
+            }
+            (Quick::Other, _) => return None,
+            _ => None,
+        };
+        let default = match p.default.as_ref().map(|e| &e.kind) {
+            None => None,
+            Some(ast::ExprKind::Null) => Some(Value::Null),
+            Some(ast::ExprKind::Int(n)) => Some(Value::Int(*n)),
+            Some(ast::ExprKind::Float(x)) => Some(Value::Float(*x)),
+            Some(ast::ExprKind::Bool(b)) => Some(Value::Bool(*b)),
+            Some(ast::ExprKind::Str(t)) => Some(Value::str(t)),
+            Some(_) => return None,
+        };
+        params.push(InitParam { slot, quick, class, default });
+    }
+    Some(InitPlan { params })
+}
+
+/// `new` with a constructor that only stores its parameters: store the
+/// `n` arguments at `args` into the new object at `obj` (0), consuming
+/// them, or leave everything as it is (2: make the call).
+pub unsafe extern "C" fn rt_new_init(obj: *const Value, site: *const MethodSite, args: *mut Value, n: u64) -> u64 {
+    let site = &*site;
+    let Some(plan) = site.init.borrow().clone() else { return 2 };
+    let Value::Object(o) = &*obj else { return 2 };
+    let n = n as usize;
+    if n > plan.params.len() {
+        return 2;
+    }
+    let args = std::slice::from_raw_parts_mut(args, n);
+    for (i, p) in plan.params.iter().enumerate() {
+        let ok = match args.get(i) {
+            None => p.default.is_some(),
+            Some(v @ Value::Object(x)) => match &p.class {
+                Some(c) => Rc::ptr_eq(&x.class, c) || x.class.is_subclass_of(c),
+                None => Quick::accepts(p.quick, v),
+            },
+            Some(Value::Int(_)) if p.quick.0 == Quick::Float => true,
+            Some(Value::Null) if p.quick.1 => true,
+            Some(v) => p.class.is_none() && Quick::accepts(p.quick, v),
+        };
+        if !ok {
+            return 2;
+        }
+    }
+    let mut props = o.props.borrow_mut();
+    for (i, p) in plan.params.iter().enumerate() {
+        let v = match args.get_mut(i) {
+            Some(a) => match take(a) {
+                Value::Int(k) if p.quick.0 == Quick::Float => Value::Float(k as f64),
+                v => v,
+            },
+            None => p.default.clone().unwrap(),
+        };
+        let Some(slot) = props.slot_mut(p.slot) else { return 2 };
+        let old = slot.replace(v);
+        drop(old);
+    }
+    0
 }
 
 /// A new instance of the cached class (no constructor run).
@@ -4220,7 +4331,14 @@ pub unsafe extern "C" fn rt_new_object(c: *mut Cx, cref: *const ast::ClassRef, s
     match new_object(it, &mc) {
         Ok(o) => {
             put(dst, Value::Object(o));
-            if mc.method.is_null() { 3 } else { 0 }
+            // 3: no constructor; 4: one that only stores its parameters.
+            if mc.method.is_null() {
+                3
+            } else if (*site).init.borrow().is_some() {
+                4
+            } else {
+                0
+            }
         }
         Err(e) => {
             *it.pending.borrow_mut() = Some(e);
@@ -4641,6 +4759,7 @@ impl MethodSite {
         *self.getter.borrow_mut() = Default::default();
         self.acc.iter().for_each(Accessor::clear);
         self.magic.set(false);
+        *self.init.borrow_mut() = None;
     }
 }
 
