@@ -1891,17 +1891,29 @@ pub fn join_display(parts: &[String], sep: &str) -> String {
 }
 
 /// Interned lowercase names, to avoid re-lowercasing on every lookup.
+/// Shared by the thread's requests (names repeat request after request);
+/// emptied if names from data ever make it large.
 #[derive(Default)]
-pub struct Lower(RefCell<rustc_hash::FxHashMap<String, Rc<str>>>);
+pub struct Lower;
+
+thread_local! {
+    static LOWER: RefCell<rustc_hash::FxHashMap<Box<str>, Rc<str>>> = RefCell::new(Default::default());
+}
 
 impl Lower {
     pub fn get(&self, s: &str) -> Rc<str> {
-        if let Some(v) = self.0.borrow().get(s) {
-            return v.clone();
-        }
-        let l: Rc<str> = Rc::from(s.to_ascii_lowercase());
-        self.0.borrow_mut().insert(s.to_string(), l.clone());
-        l
+        LOWER.with(|m| {
+            if let Some(v) = m.borrow().get(s) {
+                return v.clone();
+            }
+            let l: Rc<str> = Rc::from(s.to_ascii_lowercase());
+            let mut m = m.borrow_mut();
+            if m.len() >= 100_000 {
+                m.clear();
+            }
+            m.insert(s.into(), l.clone());
+            l
+        })
     }
 }
 
