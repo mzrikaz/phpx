@@ -589,6 +589,60 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// The truth of `e`, its value used only for the test.
+    fn cond(&mut self, e: &'static Expr) -> L<CValue> {
+        let (op, pt) = self.peek(e)?;
+        let t = self.truthy(op);
+        self.release_peek(pt);
+        Ok(t)
+    }
+
+    /// `e` for a consumer that only looks at it before anything else runs:
+    /// a property of a variable read in place (no copy); else the value.
+    /// The temp returned goes back with `release_peek` after the use.
+    fn peek(&mut self, e: &'static Expr) -> L<(Op, Option<usize>)> {
+        let ExprKind::Prop { object, name: MemberName::Ident(name), nullsafe: false } = &e.kind else { return Ok((self.expr(e)?, None)) };
+        let (Some(lay), ExprKind::Var(v)) = (super::layout(), &object.kind) else { return Ok((self.expr(e)?, None)) };
+        if v != "this" && !self.locals.index.contains_key(v.as_str()) {
+            return Ok((self.expr(e)?, None));
+        }
+        let o = self.expr(object)?;
+        if matches!(o, Op::Ptr(_, Some(_))) {
+            // (An object of its own: the place would die with it.)
+            self.release(o);
+            return Ok((self.expr(e)?, None));
+        }
+        let o = self.materialize(o);
+        let oa = self.addr(o).unwrap();
+        let site = Box::new(super::rt::PropSite::new(&name.name));
+        let sp = &*site as *const super::rt::PropSite as i64;
+        self.psites.push(site);
+        let t = self.alloc_temp();
+        let site = self.iconst(sp);
+        let (slow, merge) = (self.b.create_block(), self.b.create_block());
+        self.b.append_block_param(merge, types::I64);
+        self.b.set_cold_block(slow);
+        let props = self.prop_guard(lay, oa, site, super::rt::PROPSITE_SHAPE, super::rt::PROPSITE_SCOPE, slow);
+        let p = self.prop_slot(lay, props, site, super::rt::PROPSITE_SLOT, slow);
+        self.b.ins().jump(merge, &[p.into()]);
+        self.b.switch_to_block(slow);
+        let site = self.iconst(sp);
+        let ta = self.temp_addr(t);
+        self.call_checked("rt_prop_read", &[self.cx, oa, site, ta]);
+        let ta = self.temp_addr(t);
+        self.b.ins().jump(merge, &[ta.into()]);
+        self.b.switch_to_block(merge);
+        let a = self.b.block_params(merge)[0];
+        Ok((Op::Ptr(a, None), Some(t)))
+    }
+
+    fn release_peek(&mut self, t: Option<usize>) {
+        if let Some(t) = t {
+            let ta = self.temp_addr(t);
+            self.release(Op::Ptr(ta, Some(t)));
+        }
+    }
+
     /// (is_int i8, payload loader) for the int fast path.
     fn int_check(&mut self, op: Op) -> (CValue, Option<CValue>) {
         match op {
@@ -837,8 +891,7 @@ impl<'a> Lower<'a> {
                 let mut arms: Vec<(&'static Expr, &'static [Stmt])> = vec![(cond, then)];
                 arms.extend(elseifs.iter().map(|(c, b)| (c, &b[..])));
                 for (c, body) in arms {
-                    let op = self.expr(c)?;
-                    let t = self.truthy(op);
+                    let t = self.cond(c)?;
                     let (yes, no) = (self.b.create_block(), self.b.create_block());
                     self.b.ins().brif(t, yes, &[], no, &[]);
                     self.b.switch_to_block(yes);
@@ -869,8 +922,7 @@ impl<'a> Lower<'a> {
                 self.osr_mark(s, head);
                 self.b.ins().jump(head, &[]);
                 self.b.switch_to_block(head);
-                let op = self.expr(cond)?;
-                let t = self.truthy(op);
+                let t = self.cond(cond)?;
                 self.b.ins().brif(t, bodyb, &[], exit, &[]);
                 self.b.switch_to_block(bodyb);
                 self.loop_body(body, head, exit)?;
@@ -883,8 +935,7 @@ impl<'a> Lower<'a> {
                 self.b.switch_to_block(bodyb);
                 self.loop_body(body, test, exit)?;
                 self.b.switch_to_block(test);
-                let op = self.expr(cond)?;
-                let t = self.truthy(op);
+                let t = self.cond(cond)?;
                 self.b.ins().brif(t, bodyb, &[], exit, &[]);
                 self.b.switch_to_block(exit);
             }
@@ -902,8 +953,7 @@ impl<'a> Lower<'a> {
                     for e in &cond[..cond.len() - 1] {
                         self.discard(e)?;
                     }
-                    let op = self.expr(cond.last().unwrap())?;
-                    let t = self.truthy(op);
+                    let t = self.cond(cond.last().unwrap())?;
                     self.b.ins().brif(t, bodyb, &[], exit, &[]);
                 }
                 self.b.switch_to_block(bodyb);
@@ -1506,8 +1556,7 @@ impl<'a> Lower<'a> {
             },
             Binary { op: BinOp::And | BinOp::Or, left, right } => {
                 let is_and = matches!(e.kind, Binary { op: BinOp::And, .. });
-                let l = self.expr(left)?;
-                let a = self.truthy(l);
+                let a = self.cond(left)?;
                 let (rhs, merge) = (self.b.create_block(), self.b.create_block());
                 self.b.append_block_param(merge, types::I8);
                 let short = self.b.ins().iconst(types::I8, if is_and { 0 } else { 1 });
@@ -1517,8 +1566,7 @@ impl<'a> Lower<'a> {
                     self.b.ins().brif(a, merge, &[short.into()], rhs, &[]);
                 }
                 self.b.switch_to_block(rhs);
-                let r = self.expr(right)?;
-                let c = self.truthy(r);
+                let c = self.cond(right)?;
                 self.b.ins().jump(merge, &[c.into()]);
                 self.b.switch_to_block(merge);
                 Op::Bool(self.b.block_params(merge)[0])
@@ -1574,7 +1622,7 @@ impl<'a> Lower<'a> {
                 if matches!(left.kind, Null) || matches!(right.kind, Null) =>
             {
                 let other = if matches!(left.kind, Null) { right } else { left };
-                let v = self.expr(other)?;
+                let (v, pt) = self.peek(other)?;
                 let Some(a) = self.addr(v) else {
                     // An int, float or bool is never null.
                     self.release(v);
@@ -1598,6 +1646,7 @@ impl<'a> Lower<'a> {
                 self.b.ins().jump(merge, &[r.into()]);
                 self.b.switch_to_block(merge);
                 self.release(v);
+                self.release_peek(pt);
                 Op::Bool(self.b.block_params(merge)[0])
             }
             Binary { op, left, right } => {
@@ -1631,6 +1680,10 @@ impl<'a> Lower<'a> {
                 let Float(x) = expr.kind else { unreachable!() };
                 Op::Float(self.b.ins().f64const(-x))
             }
+            Unary { op: UnOp::Not, expr } => {
+                let t = self.cond(expr)?;
+                Op::Bool(self.b.ins().bxor_imm_u(t, 1))
+            }
             Unary { op, expr } => {
                 let v = self.expr(expr)?;
                 if let (UnOp::Neg, Op::Float(x)) = (op, &v) {
@@ -1658,7 +1711,10 @@ impl<'a> Lower<'a> {
                 }
             }
             Ternary { cond, then, else_ } => {
-                let c = self.expr(cond)?;
+                let c = match then {
+                    Some(_) => Op::Bool(self.cond(cond)?),
+                    None => self.expr(cond)?,
+                };
                 let t = self.alloc_temp();
                 let (yes, no, merge) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
                 match then {
