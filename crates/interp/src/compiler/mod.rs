@@ -614,6 +614,21 @@ impl Native {
             a.extra_stmts(stmts)?;
         }
         let escapes = std::mem::take(&mut a.escapes);
+        if self.frame_fn {
+            // A body the interpreter would run all of anyway (Composer's
+            // `include $file` closure): binding the frame's cells would only
+            // add to it.
+            let escaped = |s: &ast::Stmt| {
+                escapes.contains(&(s as *const ast::Stmt as usize))
+                    || match &s.kind {
+                        ast::StmtKind::Expr(e) | ast::StmtKind::Return(Some(e)) => escapes.contains(&(e as *const ast::Expr as usize)),
+                        _ => false,
+                    }
+            };
+            if matches!(t.body, Body::Block(b) if b.iter().all(escaped)) {
+                return Err("nothing to compile on the frame");
+            }
+        }
         if top_level && a.uses_this && !self.frame_fn {
             // A file included from a method sees its `$this`; file code
             // binds frame variables, which `$this` is not.
