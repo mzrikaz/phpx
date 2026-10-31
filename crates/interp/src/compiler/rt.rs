@@ -2473,6 +2473,53 @@ pub struct SiteFrame {
 /// Deeper calls through one site use a temporary frame each.
 const MAX_SITE_FRAMES: usize = 256;
 
+/// A direct call from a site whose compiled target is cached (what
+/// `Lower::emit_direct` does inline, shared): the site's frame for this
+/// call depth, `$this` lent to it, the call, then the frame readied for
+/// the next call. 2: not taken here (no free frame, stack running low, or
+/// the callee declined): the caller's general path makes the call.
+/// `this`: the object's Rc pointer as values hold it (0: none).
+pub unsafe extern "C" fn rt_enter_site(c: *mut Cx, sf: *const SiteFrame, entry: usize, this: *mut usize, args: *mut Value, n: u64, out: *mut Value) -> u64 {
+    let sf = &*sf;
+    let d = sf.depth.get();
+    if d >= sf.len.get() {
+        return 2;
+    }
+    // Room on the native stack (the general path raises PHP's error for
+    // runaway recursion): at least 256 KiB above the task's limit.
+    let here = &d as *const u32 as usize;
+    if here.wrapping_sub(*(phpx_runtime::stack_limit_addr() as *const usize)) < 256 * 1024 {
+        return 2;
+    }
+    let frame = *(sf.buf.get() as *const *mut Frame).add(d as usize);
+    if (*frame).lent {
+        return 2;
+    }
+    (*frame).lent = true;
+    sf.depth.set(d + 1);
+    if !this.is_null() {
+        // (The strong count leads the Rc's allocation.)
+        *this += 1;
+        ptr::write(&mut (*frame).this, Some(std::mem::transmute::<*mut usize, Rc<crate::value::Obj>>(this)));
+    }
+    let it = (*c).it;
+    let mut cx2 = Cx { it, frame };
+    let saved = (*it).pos.get();
+    // SAFETY: cached entries are compiled functions (Entry ABI).
+    let entry: crate::compiler::Entry = std::mem::transmute(entry);
+    let st = entry(&mut cx2, args, n, out);
+    (*it).pos.set(saved);
+    (*frame).lent = false;
+    sf.depth.set(d);
+    if !this.is_null() {
+        drop((*frame).this.take());
+    }
+    if (*frame).vars.len() != 0 || !(*frame).args.is_empty() {
+        (*frame).reset_after_call();
+    }
+    st
+}
+
 /// After a direct call from generated code: ready the site frame for the
 /// next call.
 pub unsafe extern "C" fn rt_site_reset(frame: *mut Frame) {
@@ -2685,6 +2732,74 @@ pub const ACC_SET: u64 = 3;
 pub const ACC_SET_THIS: u64 = 4;
 /// A leaf method (`compiler::leaf`).
 pub const ACC_LEAF: u64 = 5;
+
+/// A call site's cached accessor answered out of line (the inline form,
+/// `Lower::accessor`, made every method call site ~450 bytes larger):
+/// 0 = answered (result in `out`), 1 = not this time (call the method).
+/// `rc`: the object's Rc pointer as values hold it.
+pub unsafe extern "C" fn rt_accessor(site: *const MethodSite, rc: *mut usize, cls: usize, scope: usize, args: *mut Value, nargs: u64, out: *mut Value) -> u64 {
+    let Some(acc) = (*site).acc.iter().find(|a| a.class.get() == cls && a.scope.get() == scope) else { return 1 };
+    let kind = acc.kind.get();
+    if kind == ACC_LEAF {
+        // SAFETY: set with a compiled leaf function (see `compiler::leaf`).
+        let f: crate::compiler::leaf::LeafFn = std::mem::transmute(acc.leaf.get());
+        return f(rc as *const u8, args, out, acc.slots.as_ptr() as *const usize);
+    }
+    if nargs > 1 {
+        return 1;
+    }
+    let Some(lay) = crate::compiler::layout() else { return 1 };
+    // The slot of objects of the cached shape.
+    let slot_of = || {
+        let props = (rc as *const u8).add(lay.obj_props as usize);
+        if *(props as *const usize) != acc.shape.get() {
+            return None;
+        }
+        Some((*(props.add(8) as *const *mut Value)).add(acc.slot.get()))
+    };
+    let tag_of = |v: *const Value| *(v as *const u8);
+    // (The empty slot's tag is above every value's: no bit of the mask.)
+    let accepts = |t: u8| acc.mask.get().checked_shr(t as u32).unwrap_or(0) & 1 != 0;
+    if nargs == 0 {
+        match kind {
+            ACC_CONST => {
+                ptr::write(out, (*acc.value.get()).clone());
+                0
+            }
+            ACC_SLOT => match slot_of() {
+                Some(p) if accepts(tag_of(p)) => {
+                    ptr::write(out, (*p).clone());
+                    0
+                }
+                _ => 1,
+            },
+            _ => 1,
+        }
+    } else {
+        if kind < ACC_SET {
+            return 1;
+        }
+        let Some(p) = slot_of() else { return 1 };
+        let vt = tag_of(p);
+        if vt == crate::value::tag::REF || !accepts(tag_of(args)) {
+            return 1;
+        }
+        // The old value out (none if never initialized), the argument
+        // moved in; the old one is released last (its destructor may run).
+        let old = if vt == lay.none_tag { Value::Null } else { ptr::read(p) };
+        ptr::copy_nonoverlapping(args, p, 1);
+        ptr::write(args, Value::Null);
+        let r = if kind == ACC_SET_THIS {
+            *rc += 1;
+            Value::Object(std::mem::transmute::<*mut usize, Rc<crate::value::Obj>>(rc))
+        } else {
+            Value::Null
+        };
+        ptr::write(out, r);
+        drop(old);
+        0
+    }
+}
 
 impl Accessor {
     fn clear(&self) {

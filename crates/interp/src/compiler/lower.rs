@@ -2315,7 +2315,25 @@ impl<'a> Lower<'a> {
                     l.b.switch_to_block(go);
                     l.b.ins().jump(out, &[entry.into(), frames.into()]);
                 };
-                if nargs <= 3 {
+                if nargs <= 3 && super::shared_calls() {
+                    // Either cached accessor's class: answered out of line.
+                    use super::rt::{Accessor, MethodSite};
+                    let acc = std::mem::offset_of!(MethodSite, acc) as i32;
+                    let class = std::mem::offset_of!(Accessor, class) as i32;
+                    let c0 = l.b.ins().load(types::I64, flags(), sp, acc + class);
+                    let c1 = l.b.ins().load(types::I64, flags(), sp, acc + std::mem::size_of::<Accessor>() as i32 + class);
+                    let e0 = l.b.ins().icmp(IntCC::Equal, cls, c0);
+                    let e1 = l.b.ins().icmp(IntCC::Equal, cls, c1);
+                    let hit = l.b.ins().bor(e0, e1);
+                    let try_b = l.b.create_block();
+                    l.b.ins().brif(hit, try_b, &[], first, &[]);
+                    l.b.switch_to_block(try_b);
+                    let (t, done) = out_t;
+                    let ta = l.temp_addr(t);
+                    let na = l.iconst(nargs as i64);
+                    let r = l.call("rt_accessor", &[sp, rc, cls, scope, aa, na, ta]).unwrap();
+                    l.b.ins().brif(r, first, &[], done, &[]);
+                } else if nargs <= 3 {
                     l.accessor(lay, sp, rc, cls, scope, aa, nargs, out_t, first);
                 } else {
                     l.b.ins().jump(first, &[]);
@@ -2628,6 +2646,31 @@ impl<'a> Lower<'a> {
             Some(a) => (a, 0),
             None => (sp, sf_off),
         };
+        if super::shared_calls() {
+            // The call sequence shared out of line (`rt::rt_enter_site`):
+            // a call site's code stays small.
+            let fp = self.b.ins().iadd_imm_s(sp, sf_off as i64);
+            let th = match this {
+                Some(rc) => rc,
+                None => self.iconst(0),
+            };
+            let ta = self.temp_addr(t);
+            let st = self.call("rt_enter_site", &[self.cx, fp, entry, th, aa, n, ta]).unwrap();
+            let chk = self.b.create_block();
+            self.b.ins().brif(st, chk, &[], done, &[]);
+            self.b.set_cold_block(chk);
+            self.b.switch_to_block(chk);
+            let declined = self.b.ins().icmp_imm_s(IntCC::Equal, st, 2);
+            self.b.ins().brif(declined, slow, &[], self.unwind, &[]);
+            self.b.switch_to_block(slow);
+            self.fill_write_backs();
+            let ta = self.temp_addr(t);
+            slow_call(self, ta);
+            self.b.ins().jump(done, &[]);
+            self.b.switch_to_block(done);
+            let ta = self.temp_addr(t);
+            return Op::Ptr(ta, Some(t));
+        }
         let (c2, fast, chk) = (self.b.create_block(), self.b.create_block(), self.b.create_block());
         let depth_off = sf_off + SiteFrame::DEPTH as i32;
         let d = self.b.ins().load(types::I32, flags(), sp, depth_off);

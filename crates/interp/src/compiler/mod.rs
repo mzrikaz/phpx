@@ -62,6 +62,13 @@ const SERVER_THRESHOLD: u32 = 30;
 /// native code.
 pub const OSR_ITERATIONS: u32 = 500;
 
+/// Direct calls through `rt::rt_enter_site` instead of inline sequences
+/// (PHPX_SHARED_CALLS=0 for the inline ones).
+pub fn shared_calls() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PHPX_SHARED_CALLS").map_or(true, |v| v != "0"))
+}
+
 pub struct Native {
     module: JITModule,
     helpers: HashMap<&'static str, FuncId>,
@@ -111,6 +118,8 @@ const HELPERS: &[(&str, *const u8, usize, bool)] = helpers![
     rt_bind_args: 5 => true,
     rt_check_ret: 3 => true,
     rt_site_reset: 1 => false,
+    rt_enter_site: 7 => true,
+    rt_accessor: 7 => true,
     rt_destruct_now: 1 => true,
     rt_fast_ord: 3 => true,
     rt_fast_chr: 3 => true,
@@ -1151,6 +1160,22 @@ impl Native {
         }
         // Register allocation grows faster than linearly: huge bodies (a
         // whole page template) stay interpreted.
+        // Blocks that call a helper are off the hot path (a slow path, or
+        // a call that costs more than the jump): Cranelift places them
+        // after the rest, so the code that runs most is dense.
+        if std::env::var("PHPX_COLD_CALLS").map_or(true, |v| v != "0") {
+            let blocks: Vec<_> = ctx.func.layout.blocks().collect();
+            let entry = ctx.func.layout.entry_block();
+            for blk in blocks {
+                if Some(blk) == entry {
+                    continue;
+                }
+                let has_call = ctx.func.layout.block_insts(blk).any(|i| matches!(ctx.func.dfg.insts[i].opcode(), cranelift_codegen::ir::Opcode::Call));
+                if has_call {
+                    ctx.func.layout.set_cold(blk);
+                }
+            }
+        }
         let insts = ctx.func.dfg.num_insts();
         if self.log {
             eprintln!("[native] {}: {insts} instructions", t.display);
