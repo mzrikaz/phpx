@@ -54,7 +54,8 @@ pub struct Lower<'a> {
     /// scope to the interpreter (`escapes`).
     pub top_rcs: Option<StackSlot>,
     /// Top level: one byte per local, set once it is assigned (a variable
-    /// bound to no frame variable joins the frame only then).
+    /// bound to no frame variable joins the frame only then); then the
+    /// runtime's attach state (`rt::attached`).
     pub top_def: Option<StackSlot>,
     /// Top level: the scope epoch the cells were last checked against.
     pub top_epoch: Option<StackSlot>,

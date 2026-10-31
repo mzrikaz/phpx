@@ -523,7 +523,23 @@ pub unsafe extern "C" fn rt_bind_slots(c: *mut Cx, ptrs: *mut *mut Value, rcs: *
         *ptrs.add(i) = s.as_ptr();
         *rcs.add(i) = Rc::into_raw(s);
     }
+    let n = (*spec).names.len();
+    let (att, _) = attached(def, n);
+    std::ptr::write_bytes(att, 0, n);
     0
+}
+
+/// After file code's `def` bytes (one per local): one byte per local
+/// set once `scope_attach` saw it bound in the frame, and the scope epoch
+/// those were seen at (8-aligned); see `Lower::top_def` (and `var_hint`).
+unsafe fn attached(def: *const u8, n: usize) -> (*mut u8, *mut u64) {
+    (def.add(n) as *mut u8, def.add((2 * n + 7) & !7) as *mut u64)
+}
+
+/// After those: each local's position in the frame's variables when last
+/// looked up (a hint, checked by name).
+unsafe fn var_hint<'a>(def: *const u8, n: usize, i: usize) -> &'a std::cell::Cell<u32> {
+    &*(def.add(((2 * n + 7) & !7) + 8 + 4 * i) as *const std::cell::Cell<u32>)
 }
 
 /// Before the interpreter looks at the scope: assigned locals not in the
@@ -531,7 +547,18 @@ pub unsafe extern "C" fn rt_bind_slots(c: *mut Cx, ptrs: *mut *mut Value, rcs: *
 /// never-assigned ones nothing else shares leave it meanwhile.
 unsafe fn scope_attach(it: &Interp, f: &mut Frame, rcs: *mut *const RefCell<Value>, def: *const u8, spec: &LocalsSpec) {
     let global = std::ptr::eq(it.globals.get(), f);
+    // Locals seen bound stay so until the scope epoch moves (an unset or a
+    // rebinding).
+    let (att, seen) = attached(def, spec.names.len());
+    let now = *crate::interp::scope_epoch_addr();
+    if seen.read_unaligned() != now {
+        std::ptr::write_bytes(att, 0, spec.names.len());
+        seen.write_unaligned(now);
+    }
     for (i, name) in spec.names.iter().enumerate() {
+        if !global && *att.add(i) != 0 {
+            continue;
+        }
         let p = *rcs.add(i);
         if p.is_null() || *name == "this" {
             continue;
@@ -545,7 +572,11 @@ unsafe fn scope_attach(it: &Interp, f: &mut Frame, rcs: *mut *const RefCell<Valu
             }
             continue;
         }
-        if !defined || f.vars.contains_key(name) {
+        if !defined {
+            continue;
+        }
+        *att.add(i) = 1;
+        if f.vars.get_hinted(name, var_hint(def, spec.names.len(), i)).is_some() {
             continue;
         }
         Rc::increment_strong_count(p);
@@ -558,13 +589,16 @@ unsafe fn scope_attach(it: &Interp, f: &mut Frame, rcs: *mut *const RefCell<Valu
 /// again).
 unsafe fn scope_reattach(it: &Interp, f: &mut Frame, ptrs: *mut *mut Value, rcs: *mut *const RefCell<Value>, def: *mut u8, spec: &LocalsSpec) {
     let global = std::ptr::eq(it.globals.get(), f);
+    // (Everything is looked at again by the next attach.)
+    std::ptr::write_bytes(attached(def, spec.names.len()).0, 0, spec.names.len());
     for (i, name) in spec.names.iter().enumerate() {
         let p = *rcs.add(i);
         if *name == "this" {
             continue;
         }
-        let same = matches!(f.vars.raw(name), Some(Value::Ref(s)) if Rc::as_ptr(s) == p);
-        let (new, defined) = match f.vars.contains_key(name) {
+        let found = f.vars.get_hinted(name, var_hint(def, spec.names.len(), i));
+        let same = matches!(found, Some(Value::Ref(s)) if Rc::as_ptr(s) == p);
+        let (new, defined) = match found.is_some() {
             true if same => {
                 *def.add(i) = 1;
                 continue;
@@ -643,6 +677,7 @@ pub unsafe extern "C" fn rt_unset_local(c: *mut Cx, ptrs: *mut *mut Value, rcs: 
         drop(Rc::from_raw(p));
     }
     *def.add(i) = 0;
+    *attached(def, (*spec).names.len()).0.add(i) = 0;
     *ptrs.add(i) = fresh.as_ptr();
     *rcs.add(i) = Rc::into_raw(fresh);
 }

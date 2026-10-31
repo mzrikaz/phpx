@@ -750,7 +750,9 @@ impl Native {
             };
             l.spec_addr = spec_addr;
             l.top_rcs = top_rcs;
-            l.top_def = top_level.then(|| l.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, nlocals.max(1) as u32, 0)));
+            // (Defined bytes, attached bytes, an epoch and position hints: see
+            // `rt::attached`.)
+            l.top_def = top_level.then(|| l.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, (((2 * nlocals + 7) & !7) + 8 + 4 * nlocals) as u32, 3)));
             let top_def = l.top_def;
             l.top_epoch = top_level.then(|| l.b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3)));
             let top_epoch = l.top_epoch;
