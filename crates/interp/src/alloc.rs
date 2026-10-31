@@ -94,7 +94,14 @@ fn with_heap<T>(f: impl FnOnce(&Heap) -> T) -> T {
         tls_heap(f)
     }
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-    HEAP.with(f)
+    {
+        // (Only the address is taken inside `with`: with the allocator's
+        // work in the closure LLVM kept `with` out of line, an indirect
+        // call to the thread-local's accessor on every allocation.)
+        let h: *const Heap = HEAP.with(|h| h as *const Heap);
+        // SAFETY: the thread's heap lives as long as the thread.
+        f(unsafe { &*h })
+    }
 }
 
 /// Other threads' heaps. Out of line: inlined, the compiler hoists the
