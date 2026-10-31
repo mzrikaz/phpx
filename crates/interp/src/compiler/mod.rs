@@ -795,6 +795,10 @@ impl Native {
             }
             // Exits: drop every local, temp and iterator (top level: hand
             // locals back to the frame first).
+            // (One cleanup for all of them: it is the bulk of a small
+            // function's code.)
+            let finish = l.b.create_block();
+            l.b.append_block_param(finish, types::I64);
             for (blk, status) in [(exit_ok, 0i64), (unwind, 1), (exit_ret, 3)] {
                 l.b.switch_to_block(blk);
                 if status == 0 && t.ret.is_some() && !matches!(spec.ret_quick.0, rt::Quick::Mixed) {
@@ -871,19 +875,22 @@ impl Native {
                     l.b.ins().brif(bad, unwind, &[], ok, &[]);
                     l.b.switch_to_block(ok);
                 }
-                if let Some(slot) = call_rec {
-                    rec_pop(&mut l, slot);
-                }
-                l.cleanup(nlocals);
-                if let (Some(rcs), Some(def)) = (top_rcs, top_def) {
-                    let ra = l.b.ins().stack_addr(types::I64, rcs, 0);
-                    let da = l.b.ins().stack_addr(types::I64, def, 0);
-                    let sp = l.b.ins().iconst(types::I64, spec_addr);
-                    l.call("rt_unbind_slots", &[cxv, ra, da, sp]);
-                }
                 let s = l.b.ins().iconst(types::I64, status);
-                l.b.ins().return_(&[s]);
+                l.b.ins().jump(finish, &[s.into()]);
             }
+            l.b.switch_to_block(finish);
+            let status = l.b.block_params(finish)[0];
+            if let Some(slot) = call_rec {
+                rec_pop(&mut l, slot);
+            }
+            l.cleanup(nlocals);
+            if let (Some(rcs), Some(def)) = (top_rcs, top_def) {
+                let ra = l.b.ins().stack_addr(types::I64, rcs, 0);
+                let da = l.b.ins().stack_addr(types::I64, def, 0);
+                let sp = l.b.ins().iconst(types::I64, spec_addr);
+                l.call("rt_unbind_slots", &[cxv, ra, da, sp]);
+            }
+            l.b.ins().return_(&[status]);
             l.b.switch_to_block(decline);
             if let Some(slot) = call_rec {
                 rec_pop(&mut l, slot);
